@@ -884,6 +884,15 @@ function broadcastState() {
 }
 
 io.on('connection', (socket) => {
+  // "게임 재시작"은 방이 꽉 차서 거부된 상태(예: 예전 접속자들이 유령으로 자리를 차지한 경우)에서도
+  // 눌러야 하는 경우가 많으므로, 방 정원 체크보다 먼저 등록해 항상 동작하게 한다.
+  // 누가 눌렀는지와 무관하게 서버 상태를 완전히 새로 만들고, 접속해 있는 모든 클라이언트를
+  // 새로고침시켜 깨끗한 상태로 재접속하게 한다 — 그래야 정체된(full) 화면도 확실히 풀린다.
+  socket.on('admin:reset', () => {
+    match = freshMatch();
+    io.emit('reload');
+  });
+
   if (match.order.length >= 2 && !match.order.includes(socket.id)) {
     socket.emit('full');
     return;
@@ -932,9 +941,6 @@ io.on('connection', (socket) => {
   socket.on('action:item_use', (p) => doAction(socket.id, 'ITEM_USE', p || {}));
   socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(socket.id));
-
-  socket.on('admin:end', () => { if (match.phase !== 'END') endMatch('관리자가 조기 종료함'); });
-  socket.on('admin:reset', () => { match = freshMatch(); broadcastState(); });
 });
 
 const PORT = process.env.PORT || 3000;

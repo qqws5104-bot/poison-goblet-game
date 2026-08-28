@@ -43,6 +43,17 @@ function cellIconSVG(type) {
     ${inner}
   </svg>`;
 }
+// 셋업 화면에서 "이 칸에 독을 심겠다"고 표시만 하는 노란색 마커 — 실제 독 술잔(P) 아이콘과는
+// 색을 분리해 상대에게 아직 확정되지 않은 임시 선택임을 구분한다.
+function selectionMarkSVG() {
+  return `<svg viewBox="0 0 32 32" class="cellIcon cellIcon-SEL" aria-hidden="true">
+    <ellipse class="rim" cx="16" cy="8" rx="11.6" ry="2.2"/>
+    <path class="bowl" d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/>
+    <path class="stem" d="M16,22 L16,26.8"/>
+    <ellipse class="base" cx="16" cy="27.6" rx="6.2" ry="1.6"/>
+    <path class="glyph" d="M16,10.2 L17.1,13.4 L20.4,14 L17.1,14.6 L16,17.8 L14.9,14.6 L11.6,14 L14.9,13.4 Z"/>
+  </svg>`;
+}
 
 function addLog(msg) {
   const div = document.createElement('div');
@@ -54,6 +65,9 @@ function addLog(msg) {
 socket.on('log', ({ msg }) => addLog(msg));
 socket.on('error', ({ message }) => addLog('⚠ ' + message));
 socket.on('full', () => { app.innerHTML = '<div class="panel center"><p>이미 두 명이 접속해 있습니다. 이 프로토타입은 2인 전용입니다.</p></div>'; });
+// 누군가 "게임 재시작"을 누르면 서버가 완전히 새 상태로 초기화하고 모든 접속자에게 새로고침을 지시한다.
+// (방이 꽉 차서 막혀 있던 화면도 이걸로 확실히 풀린다.)
+socket.on('reload', () => { location.reload(); });
 socket.on('clueResult', ({ text, cells }) => { lastClueResult = { text, cells: cells || [] }; addLog('🔎 ' + text); render(lastState); });
 
 socket.on('rewardResult', (payload) => {
@@ -158,7 +172,7 @@ function renderSetup(state) {
           render(lastState);
         };
       }
-      cell.textContent = isSel ? '☠' : '';
+      cell.innerHTML = isSel ? selectionMarkSVG() : '';
       grid.appendChild(cell);
     }
   }
