@@ -24,6 +24,7 @@ let rewardUsed = { A: false, B: false };
 let bankGuessed = { A: new Set(), B: new Set() };
 let bankSecretSent = { A: false, B: false };
 let bankCandidates = { A: null, B: null };
+let bankRoundSeen = { A: null, B: null };
 
 function allPermutations(n) {
   const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -99,16 +100,22 @@ function useReward(label, socket, s) {
 function playMinigame(label, socket, s) {
   const mg = s.minigame.public;
   const type = s.minigame.type;
+  // BANK은 (필러 규칙상) 한 매치에서 두 번 나올 수도 있으므로, 라운드가 바뀌면 이전 라운드의
+  // 추적 상태(이미 번호를 냈는지, 후보 목록 등)를 반드시 리셋해야 한다 — 안 그러면 두 번째
+  // BANK 라운드에서 "이미 냈다"고 착각해 봇이 아무 것도 하지 않아 테스트가 멈춘다.
+  if (type === 'BANK' && bankRoundSeen[label] !== s.round) {
+    bankRoundSeen[label] = s.round;
+    bankSecretSent[label] = false;
+    bankGuessed[label] = new Set();
+    bankCandidates[label] = null;
+  }
   setTimeout(() => {
     if (type === 'NIM' && mg.myTurn) socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 3) });
     if (type === 'HAND') {
       if (mg.role === 'hider' && mg.waitingForMe) socket.emit('minigame:move', { hand: Math.random() < 0.5 ? 'L' : 'R' });
       if (mg.role === 'guesser' && mg.waitingForMe) socket.emit('minigame:move', { hand: Math.random() < 0.5 ? 'L' : 'R' });
     }
-    if (type === 'CARD') {
-      if (mg.role === 'presenter' && mg.waitingForMe) socket.emit('minigame:move', { declared: 1 + Math.floor(Math.random() * 5) });
-      if (mg.role === 'guesser' && mg.waitingForMe) socket.emit('minigame:move', { guess: Math.random() < 0.5 ? 'TRUE' : 'LIE' });
-    }
+    if (type === 'REFLEX' && !mg.myClicked && mg.goFired) socket.emit('minigame:move', { action: 'CLICK' });
     if (type === 'BOMB' && mg.myTurn) socket.emit('minigame:move', { action: 'PASS' });
     if (type === 'PIN' && mg.myTurn) socket.emit('minigame:move', { action: 'PULL' });
     if (type === 'SIGIL' && mg.waitingForMe) {
@@ -120,10 +127,7 @@ function playMinigame(label, socket, s) {
       socket.emit('minigame:move', { guess: Math.max(0, mg.trueCount + offset) });
     }
     if (type === 'PARITY' && mg.waitingForMe) {
-      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 3) });
-    }
-    if (type === 'SHOWDOWN' && mg.waitingForMe) {
-      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 10) });
+      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 4) });
     }
     if (type === 'BANK' && !mg.mySecretSet && !bankSecretSent[label]) {
       bankSecretSent[label] = true;
@@ -164,32 +168,9 @@ function randomUniqueDigits(n, avoidSet) {
 }
 
 function doRandomAction(label, socket, s) {
-  const r = Math.random();
-  if (r < 0.08 && s.me.items.length < s.config.INVENTORY_CAP) {
-    const keys = Object.keys(s.itemNames);
-    const k = keys[Math.floor(Math.random() * keys.length)];
-    return socket.emit('action:item_get', { itemType: k });
-  }
-  if (r < 0.08 + 0.17) {
-    const cats = Object.keys(s.clueCatNames);
-    const cat = cats[Math.floor(Math.random() * cats.length)];
-    return socket.emit('action:clue', { category: cat });
-  }
-  if (s.me.items.length > 0 && r < 0.08 + 0.17 + 0.05) {
-    const item = s.me.items[0];
-    if (item === 'SPOON') {
-      const target = findUnopened(s.me.room);
-      if (target) return socket.emit('action:item_use', { itemType: 'SPOON', target });
-    } else if (item === 'NOSE') {
-      return socket.emit('action:item_use', { itemType: 'NOSE', target: { axis: 'row', index: Math.floor(Math.random() * 6) } });
-    } else {
-      return socket.emit('action:item_use', { itemType: item });
-    }
-  }
+  // 본행동은 이제 단순히 "내 처소에서 칸 열기"뿐 — 아이템/단서 시스템은 제거되었다.
   const target = findUnopened(s.me.room);
-  if (target) return socket.emit('action:open', target);
-  // fallback: everything opened, just get an item
-  socket.emit('action:item_get', { itemType: 'WARD' });
+  if (target) socket.emit('action:open', target);
 }
 
 function findUnopened(room) {

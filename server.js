@@ -15,35 +15,46 @@ const CONFIG = {
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
   ROUNDS: 10,             // 총 라운드 수 (고정)
-  INVENTORY_CAP: 3,
+  OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
   NIM_LIMIT: 15,          // 독배 채우기: 이 숫자에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MIN: 3, BOMB_FUSE_MAX: 7,
   PIN_POP_MIN: 3, PIN_POP_MAX: 8,
-  CARD_MAX: 5,
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_MS: 60000, // 섬광 정찰 보상의 사용 제한 시간(ms)
+  REWARD_FLASH_MS: 30000, // 섬광 정찰 보상: 이 시간(ms) 안의 무작위 순간에 자동으로 0.1초간 발동
 };
 
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'CARD', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'SHOWDOWN', 'BANK'];
+// 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
+// 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 9종을 섞은 뒤 하나를 무작위로 한 번 더 채운다(buildMinigameOrder).
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'BANK'];
 const MINIGAME_NAMES = {
-  NIM: '독배 채우기', HAND: '독 든 손 맞히기', CARD: '거짓 카드 건네기',
+  NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
-  SIGIL: '표식 대결', GUESS_COUNT: '촛불 개수 맞히기', PARITY: '숫자 합 홀짝', SHOWDOWN: '배짱 대결',
+  SIGIL: '표식 대결', GUESS_COUNT: '촛불 개수 맞히기', PARITY: '숫자 합 홀짝',
   BANK: '금고 번호 맞추기',
 };
+function buildMinigameOrder() {
+  const order = shuffle(MINIGAME_SEQUENCE);
+  while (order.length < CONFIG.ROUNDS) {
+    let pick = MINIGAME_SEQUENCE[randInt(0, MINIGAME_SEQUENCE.length - 1)];
+    if (pick === order[order.length - 1]) {
+      pick = MINIGAME_SEQUENCE.find((t) => t !== pick) || pick;
+    }
+    order.push(pick);
+  }
+  return order;
+}
 const SIGIL_BEATS = { SWORD: 'POISON', POISON: 'SHIELD', SHIELD: 'SWORD' };
 const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
-const ITEM_NAMES = { SPOON: '은수저', NOSE: '소믈리에의 코', WARD: '해독의 부적', SWAP: '잔 바꿔치기' };
 const CLUE_CATS = ['P', 'G', 'S', 'A'];
 const CLUE_CAT_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제' };
 const CELL_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제', E: '빈 칸' };
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
-  FLASH_ALL: '섬광 정찰 — 1분 내 원할 때, 상대 처소 전체를 0.1초간 공개',
-  PEEK_CELL: '한 칸 정찰 — 상대 처소 원하는 1칸의 정체 확인',
-  ROW_COUNT: '행 정찰 — 상대 처소 원하는 행에서 지정한 술잔 개수 확인',
-  COL_COUNT: '열 정찰 — 상대 처소 원하는 열에서 지정한 술잔 개수 확인',
+  FLASH_ALL: '섬광 정찰 — 30초 안의 무작위 순간, 내 처소 전체가 저절로 0.1초간 드러남',
+  PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
+  ROW_COUNT: '행 정찰 — 내 처소 원하는 행에서 지정한 술잔 개수 확인',
+  COL_COUNT: '열 정찰 — 내 처소 원하는 열에서 지정한 술잔 개수 확인',
 };
 
 // 밸런스 테스트 편의를 위해 환경변수로 숫자 설정값을 덮어쓸 수 있게 함
@@ -74,7 +85,7 @@ function newPlayer(id, name) {
   return {
     id, name, room: makeRoom(),
     poison: 0, antidote: 0, score: 0, finalScore: null,
-    items: [], shield: false, decoyNextClue: false, connected: true,
+    connected: true,
   };
 }
 let matchSeq = 0;
@@ -85,9 +96,9 @@ function freshMatch() {
     phase: 'LOBBY', // LOBBY, SETUP, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
-    round: 0, minigameOrder: shuffle(MINIGAME_SEQUENCE), minigame: null,
+    round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
     roundRewardType: null, pendingReward: null,
-    actionOrder: [], turnIndex: 0,
+    actionOrder: [], turnIndex: 0, opensThisTurn: 0,
     rematchReady: {},
     log: [], winner: null, endReason: null,
   };
@@ -166,9 +177,18 @@ function initMinigame(type, roundNo) {
   if (type === 'HAND') {
     return { ...base, hider: firstIsA ? a : b, guesser: firstIsA ? b : a, hiderPick: null, guesserPick: null };
   }
-  if (type === 'CARD') {
-    const trueVal = randInt(1, CONFIG.CARD_MAX);
-    return { ...base, presenter: firstIsA ? a : b, guesser: firstIsA ? b : a, trueVal, declared: null, declaredIsTruth: null, guess: null };
+  if (type === 'REFLEX') {
+    // 서버가 무작위 시점에 "신호"를 알려주고, 신호 후 가장 먼저 누른 사람이 승리.
+    // 신호 전에 누르면 성급하게 움직인 것으로 간주해 그 자리에서 즉시 패배한다.
+    const mgReflex = { ...base, goAt: null, clicks: {} };
+    const delay = randInt(2000, 5000);
+    setTimeout(() => {
+      if (match.minigame === mgReflex && match.phase === 'ROUND_MINIGAME') {
+        mgReflex.goAt = Date.now();
+        broadcastState();
+      }
+    }, delay);
+    return mgReflex;
   }
   if (type === 'BOMB') {
     return { ...base, holder: firstIsA ? a : b, fuse: randInt(CONFIG.BOMB_FUSE_MIN, CONFIG.BOMB_FUSE_MAX), passes: 0 };
@@ -180,13 +200,11 @@ function initMinigame(type, roundNo) {
     return { ...base, picks: {} };
   }
   if (type === 'GUESS_COUNT') {
-    return { ...base, trueCount: randInt(3, 9), guesses: {}, guessOrder: [] };
+    // 너무 쉽다는 피드백 반영: 촛불 개수 범위를 넓히고(눈으로 정확히 세기 어렵게) 노출 시간도 짧게 준다.
+    return { ...base, trueCount: randInt(9, 20), guesses: {}, guessOrder: [] };
   }
   if (type === 'PARITY') {
     return { ...base, oddPlayer: firstIsA ? a : b, evenPlayer: firstIsA ? b : a, picks: {} };
-  }
-  if (type === 'SHOWDOWN') {
-    return { ...base, picks: {} };
   }
   if (type === 'BANK') {
     // 각자 자신만의 금고 번호(서로 다른 숫자 N개)를 직접 정한다. 둘 다 정하고 나면
@@ -213,18 +231,25 @@ function endMinigame(winnerId) {
   const firstId = match.round % 2 === 1 ? a : b;
   match.actionOrder = [firstId, otherId(firstId)];
   match.turnIndex = 0;
+  match.opensThisTurn = 0;
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 보상 [${REWARD_NAMES[match.roundRewardType]}] 획득`);
 
+  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 정해진 시간(REWARD_FLASH_MS) 안의
+  // 무작위 순간에 자동으로 0.1초간 내 처소 전체가 드러나는 방식이다.
   if (match.pendingReward.expiresAt) {
     const roundAtGrant = match.round;
+    const fireDelay = randInt(0, CONFIG.REWARD_FLASH_MS);
     setTimeout(() => {
       if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === winnerId && !match.pendingReward.used) {
         match.pendingReward.used = true;
-        log(`${match.players[winnerId].name}의 섬광 정찰 보상 시간이 만료되었습니다.`);
+        const winner = match.players[winnerId];
+        const room = winner.room.map((r) => r.map((cell) => cell.type));
+        actionLog(winner, '보상 발동 — 섬광 정찰로 내 처소 전체가 0.1초간 드러났습니다.');
+        io.to(winnerId).emit('rewardResult', { kind: 'FLASH_ALL', room });
         broadcastState();
       }
-    }, CONFIG.REWARD_FLASH_MS);
+    }, fireDelay);
   }
 
   broadcastState();
@@ -236,13 +261,12 @@ function handleMinigameMove(id, payload) {
   if (!mg) return;
   if (mg.type === 'NIM') return handleNim(id, payload, mg);
   if (mg.type === 'HAND') return handleHand(id, payload, mg);
-  if (mg.type === 'CARD') return handleCard(id, payload, mg);
+  if (mg.type === 'REFLEX') return handleReflex(id, payload, mg);
   if (mg.type === 'BOMB') return handleBomb(id, payload, mg);
   if (mg.type === 'PIN') return handlePin(id, payload, mg);
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'PARITY') return handleParity(id, payload, mg);
-  if (mg.type === 'SHOWDOWN') return handleShowdown(id, payload, mg);
   if (mg.type === 'BANK') {
     if (payload && Array.isArray(payload.secret)) return handleBankSecret(id, payload, mg);
     return handleBank(id, payload, mg);
@@ -280,26 +304,26 @@ function handleHand(id, payload, mg) {
   }
 }
 
-// 3) 거짓 카드 건네기 — 진실/거짓 판별형
-function handleCard(id, payload, mg) {
-  if (id === mg.presenter && mg.declared == null) {
-    const declared = Number(payload.declared);
-    if (!Number.isInteger(declared) || declared < 1 || declared > CONFIG.CARD_MAX) return;
-    mg.declared = declared;
-    mg.declaredIsTruth = declared === mg.trueVal;
-    log(`${match.players[mg.presenter].name}이 카드 값 "${declared}"을 제시했습니다.`);
-  } else if (id === mg.guesser && mg.guess == null && mg.declared != null) {
-    if (!['TRUE', 'LIE'].includes(payload.guess)) return;
-    mg.guess = payload.guess;
-    log(`${match.players[mg.guesser].name}이 "${payload.guess === 'TRUE' ? '진실' : '거짓'}"이라고 판단했습니다.`);
+// 3) 잔 낚아채기 — 서버가 알려주는 신호 후 가장 먼저 반응하는 사람이 승리(반응속도형).
+// 신호 전에 누르면 성급하게 움직인 것으로 간주해 즉시 패배한다.
+function handleReflex(id, payload, mg) {
+  if (mg.clicks[id]) return; // 이미 눌렀음
+  if (!mg.goAt) {
+    mg.clicks[id] = { early: true, reactMs: null };
+    log(`${match.players[id].name}이 신호가 오기 전에 성급하게 잔을 낚아챘습니다!`);
+    broadcastState();
+    return endMinigame(otherId(id));
+  }
+  const reactMs = Date.now() - mg.goAt;
+  mg.clicks[id] = { early: false, reactMs };
+  log(`${match.players[id].name}의 반응 시간: ${reactMs}ms`);
+  const [a, b] = match.order;
+  if (mg.clicks[a] && mg.clicks[b]) {
+    broadcastState();
+    const winner = mg.clicks[a].reactMs <= mg.clicks[b].reactMs ? a : b;
+    return endMinigame(winner);
   }
   broadcastState();
-  if (mg.declared != null && mg.guess != null) {
-    const guessedTruth = mg.guess === 'TRUE';
-    const correct = guessedTruth === mg.declaredIsTruth;
-    log(`정답 공개: 실제 카드는 "${mg.trueVal}" (제시값은 ${mg.declaredIsTruth ? '진실' : '거짓'}이었습니다). (${correct ? '맞힘' : '틀림'})`);
-    endMinigame(correct ? mg.guesser : mg.presenter);
-  }
 }
 
 // 4) 폭탄 눈치 넘기기 — 숨겨진 퓨즈 길이(확률/눈치형)
@@ -377,7 +401,7 @@ function handleGuessCount(id, payload, mg) {
 function handleParity(id, payload, mg) {
   if (mg.picks[id]) return;
   const n = Number(payload.n);
-  if (![1, 2, 3].includes(n)) return;
+  if (![1, 2, 3, 4].includes(n)) return;
   mg.picks[id] = n;
   const [a, b] = match.order;
   if (mg.picks[a] && mg.picks[b]) {
@@ -386,27 +410,6 @@ function handleParity(id, payload, mg) {
     log(`숫자 공개: ${match.players[a].name}=${mg.picks[a]}, ${match.players[b].name}=${mg.picks[b]} → 합 ${sum} (${isEven ? '짝' : '홀'})`);
     broadcastState();
     return endMinigame(isEven ? mg.evenPlayer : mg.oddPlayer);
-  }
-  broadcastState();
-}
-
-// 9) 배짱 대결 — 동시에 1~10 중 배짱 수치를 제시, 더 높은 쪽 승리(동률이면 재시도, 순수 배짱형)
-function handleShowdown(id, payload, mg) {
-  if (mg.picks[id] != null) return;
-  const n = Number(payload.n);
-  if (!Number.isInteger(n) || n < 1 || n > 10) return;
-  mg.picks[id] = n;
-  const [a, b] = match.order;
-  if (mg.picks[a] != null && mg.picks[b] != null) {
-    log(`배짱 공개: ${match.players[a].name}=${mg.picks[a]}, ${match.players[b].name}=${mg.picks[b]}`);
-    if (mg.picks[a] === mg.picks[b]) {
-      log('무승부 — 같은 숫자를 냈습니다. 다시 냅니다.');
-      mg.picks = {};
-      broadcastState();
-      return;
-    }
-    broadcastState();
-    return endMinigame(mg.picks[a] > mg.picks[b] ? a : b);
   }
   broadcastState();
 }
@@ -456,146 +459,25 @@ function handleBank(id, payload, mg) {
 }
 
 // ------------------------------ 본행동(액션) ---------------------------------
+// 본행동: 내 턴이 되면 내 처소에서 술잔 CONFIG.OPENS_PER_TURN(기본 2)개를 직접 골라 연다.
+// (아이템/단서 획득 같은 별도 행동 선택 없이, 정찰은 미니게임 보상으로만 얻는다.)
 function doAction(id, kind, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
   const activeId = match.actionOrder[match.turnIndex];
   if (activeId !== id) return;
+  if (kind !== 'OPEN') return;
   const player = match.players[id];
-
-  if (kind === 'ITEM_GET') {
-    const itemType = payload.itemType;
-    if (!ITEM_NAMES[itemType]) return;
-    if (player.items.length >= CONFIG.INVENTORY_CAP) {
-      io.to(id).emit('error', { message: '아이템 보관함이 가득 찼습니다 (최대 ' + CONFIG.INVENTORY_CAP + '개).' });
-      return;
-    }
-    player.items.push(itemType);
-    actionLog(player, `아이템 획득 — ${ITEM_NAMES[itemType]}`);
+  const { row, col } = payload;
+  if (row == null || col == null || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
+  const cell = player.room[row][col];
+  if (cell.opened) return;
+  resolveOpen(player, row, col, cell);
+  match.opensThisTurn = (match.opensThisTurn || 0) + 1;
+  if (match.opensThisTurn >= CONFIG.OPENS_PER_TURN) {
     afterAction();
-    return;
-  }
-
-  if (kind === 'CLUE') {
-    const cat = payload.category;
-    if (!CLUE_CATS.includes(cat)) return;
-    resolveClue(player, cat);
-    afterAction();
-    return;
-  }
-
-  if (kind === 'OPEN') {
-    const { row, col } = payload;
-    if (row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
-    const cell = player.room[row][col];
-    if (cell.opened) return;
-    resolveOpen(player, row, col, cell);
-    afterAction();
-    return;
-  }
-
-  if (kind === 'ITEM_USE') {
-    const { itemType, target } = payload;
-    const idx = player.items.indexOf(itemType);
-    if (idx === -1) return;
-    if (!applyItem(player, itemType, target)) return; // 실패 시(잘못된 타겟 등) 턴 소모 안 함
-    player.items.splice(idx, 1);
-    afterAction();
-    return;
-  }
-}
-
-function resolveClue(player, cat) {
-  const room = player.room;
-  const unknownCells = [];
-  for (let r = 0; r < CONFIG.GRID; r++)
-    for (let c = 0; c < CONFIG.GRID; c++) {
-      const cell = room[r][c];
-      if (cell.type === cat && !cell.opened && !cell.cluedType) unknownCells.push({ r, c });
-    }
-  if (unknownCells.length === 0) {
-    actionLog(player, `[${CLUE_CAT_NAMES[cat]}] 단서 뽑기 — 더 이상 알아낼 정보가 없습니다.`);
-    return;
-  }
-  // 잔 바꿔치기로 오염된 경우: 실제로는 다른(엉뚱한) 좌표/거짓 정보를 알려준다
-  const poisoned = player.decoyNextClue;
-  if (poisoned) player.decoyNextClue = false;
-
-  // 같은 칸끼리 붙어 있는(인접한) 쌍이 있으면 "인접" 단서도 후보에 넣는다
-  const adjPair = poisoned ? null : findAdjacentPair(unknownCells);
-  const pool = adjPair ? ['exact', 'row', 'col', 'block', 'adjacent'] : ['exact', 'row', 'col', 'block'];
-
-  if (!player.lastClueByCat) player.lastClueByCat = {};
-  const prevSig = player.lastClueByCat[cat];
-
-  let clueType, source, signature;
-  for (let attempt = 0; attempt < 8; attempt++) {
-    clueType = pool[randInt(0, pool.length - 1)];
-    const pick = unknownCells[randInt(0, unknownCells.length - 1)];
-    source = poisoned ? { r: randInt(0, CONFIG.GRID - 1), c: randInt(0, CONFIG.GRID - 1) } : { r: pick.r, c: pick.c };
-    if (clueType === 'exact') signature = `exact:${source.r},${source.c}`;
-    else if (clueType === 'row') signature = `row:${source.r}`;
-    else if (clueType === 'col') signature = `col:${source.c}`;
-    else if (clueType === 'adjacent') signature = `adjacent:${adjPair.a.r},${adjPair.a.c}-${adjPair.b.r},${adjPair.b.c}`;
-    else { const { br, bc } = blockOf(source.r, source.c); signature = `block:${br},${bc}`; }
-    // 같은 신호(직전과 완전히 동일한 단서)면 다시 뽑는다 — 매번 새로운 정보를 주기 위함
-    if (signature !== prevSig) break;
-  }
-  player.lastClueByCat[cat] = signature;
-  const suffix = poisoned ? ' (※ 정보가 오염되었을 수 있습니다)' : '';
-
-  let text, cells;
-  if (clueType === 'exact') {
-    cells = [{ row: source.r, col: source.c }];
-    if (!poisoned) room[source.r][source.c].cluedType = cat;
-    else room[source.r][source.c].cluedNote = `(교란) ${CLUE_CAT_NAMES[cat]} 위치로 안내됨`;
-    text = `[${CLUE_CAT_NAMES[cat]}] 정확한 위치: ${source.r + 1}행 ${source.c + 1}열${suffix}`;
-  } else if (clueType === 'row') {
-    cells = rowCells(source.r);
-    text = `[${CLUE_CAT_NAMES[cat]}]가 ${source.r + 1}행${source.r === CONFIG.GRID - 1 ? '(맨 마지막 행)' : ''} 어딘가에 있습니다.${suffix}`;
-  } else if (clueType === 'col') {
-    cells = colCells(source.c);
-    text = `[${CLUE_CAT_NAMES[cat]}]가 ${source.c + 1}열${source.c === CONFIG.GRID - 1 ? '(맨 마지막 열)' : ''} 어딘가에 있습니다.${suffix}`;
-  } else if (clueType === 'adjacent') {
-    cells = [{ row: adjPair.a.r, col: adjPair.a.c }, { row: adjPair.b.r, col: adjPair.b.c }];
-    if (!poisoned) { room[adjPair.a.r][adjPair.a.c].cluedType = cat; room[adjPair.b.r][adjPair.b.c].cluedType = cat; }
-    text = `[${CLUE_CAT_NAMES[cat]}] 두 개가 서로 붙어 있는 칸을 찾았습니다: ${adjPair.a.r + 1}행 ${adjPair.a.c + 1}열 / ${adjPair.b.r + 1}행 ${adjPair.b.c + 1}열${suffix}`;
   } else {
-    const { br, bc } = blockOf(source.r, source.c);
-    cells = blockCells(br, bc);
-    text = `[${CLUE_CAT_NAMES[cat]}]가 ${br + 1}~${br + 2}행 × ${bc + 1}~${bc + 2}열 사각형(4칸) 중 하나에 있습니다.${suffix}`;
+    broadcastState();
   }
-
-  io.to(player.id).emit('clueResult', { text, cells, cat });
-  actionLog(player, `[${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → ${text}`);
-}
-
-// 같은 카테고리의 칸 중, 상하좌우로 서로 맞닿은(인접한) 쌍이 있는지 찾는다
-function findAdjacentPair(cellsOfCat) {
-  const set = new Set(cellsOfCat.map((c) => `${c.r},${c.c}`));
-  for (const cell of cellsOfCat) {
-    const neighbors = [{ r: cell.r + 1, c: cell.c }, { r: cell.r, c: cell.c + 1 }];
-    for (const n of neighbors) {
-      if (set.has(`${n.r},${n.c}`)) return { a: { r: cell.r, c: cell.c }, b: { r: n.r, c: n.c } };
-    }
-  }
-  return null;
-}
-
-function rowCells(r) {
-  const out = [];
-  for (let c = 0; c < CONFIG.GRID; c++) out.push({ row: r, col: c });
-  return out;
-}
-function colCells(c) {
-  const out = [];
-  for (let r = 0; r < CONFIG.GRID; r++) out.push({ row: r, col: c });
-  return out;
-}
-function blockOf(r, c) {
-  return { br: Math.floor(r / 2) * 2, bc: Math.floor(c / 2) * 2 };
-}
-function blockCells(br, bc) {
-  return [{ row: br, col: bc }, { row: br, col: bc + 1 }, { row: br + 1, col: bc }, { row: br + 1, col: bc + 1 }];
 }
 
 function resolveOpen(player, row, col, cell) {
@@ -603,14 +485,9 @@ function resolveOpen(player, row, col, cell) {
   const t = cell.type;
   actionLog(player, `술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
   if (t === 'P') {
-    if (player.shield) {
-      player.shield = false;
-      actionLog(player, `해독의 부적이 독을 대신 막았습니다!`);
-    } else {
-      player.poison += 1;
-      actionLog(player, `독배를 마셨습니다... (해독하지 못하면 게임 종료 시 -${CONFIG.POISON_PENALTY}점)`);
-      checkNeutralize(player);
-    }
+    player.poison += 1;
+    actionLog(player, `독배를 마셨습니다... (해독하지 못하면 게임 종료 시 -${CONFIG.POISON_PENALTY}점)`);
+    checkNeutralize(player);
   } else if (t === 'G') {
     player.score += CONFIG.GOLD_PTS;
   } else if (t === 'S') {
@@ -629,47 +506,6 @@ function checkNeutralize(player) {
   }
 }
 
-function applyItem(player, itemType, target) {
-  if (itemType === 'SPOON') {
-    if (!target) return false;
-    const { row, col } = target;
-    if (row == null || col == null) return false;
-    const cell = player.room[row][col];
-    if (cell.opened) return false;
-    const isPoison = cell.type === 'P';
-    cell.cluedNote = isPoison ? '독!' : '안전';
-    io.to(player.id).emit('clueResult', { text: `은수저: (${row + 1},${col + 1})은 ${isPoison ? '독 술잔입니다!' : '독이 아닙니다.'}` });
-    actionLog(player, `은수저 사용 → (${row + 1},${col + 1}) 확인`);
-    return true;
-  }
-  if (itemType === 'NOSE') {
-    if (!target || !['row', 'col'].includes(target.axis)) return false;
-    const idx = Number(target.index);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= CONFIG.GRID) return false;
-    let count = 0;
-    for (let i = 0; i < CONFIG.GRID; i++) {
-      const cell = target.axis === 'row' ? player.room[idx][i] : player.room[i][idx];
-      if (cell.type === 'P') count += 1;
-    }
-    const label = target.axis === 'row' ? `${idx + 1}행` : `${idx + 1}열`;
-    io.to(player.id).emit('clueResult', { text: `소믈리에의 코: ${label}에 독 술잔이 ${count}개 있습니다.` });
-    actionLog(player, `소믈리에의 코 사용 → ${label} 독 개수 확인`);
-    return true;
-  }
-  if (itemType === 'WARD') {
-    player.shield = true;
-    actionLog(player, `해독의 부적 장착 — 다음 독을 자동으로 막아줍니다.`);
-    return true;
-  }
-  if (itemType === 'SWAP') {
-    const opp = match.players[otherId(player.id)];
-    opp.decoyNextClue = true;
-    actionLog(player, `잔 바꿔치기 사용 — 상대의 다음 단서를 조작했습니다.`);
-    return true;
-  }
-  return false;
-}
-
 // ------------------------------ 보상(정찰) 사용 -------------------------------
 function handleRewardUse(id, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
@@ -679,20 +515,16 @@ function handleRewardUse(id, payload) {
   const opp = match.players[otherId(id)];
   if (!opp) return;
 
-  if (pr.type === 'FLASH_ALL') {
-    pr.used = true;
-    const room = opp.room.map((row) => row.map((cell) => cell.type));
-    actionLog(player, `보상 사용 — 섬광 정찰로 상대 처소 전체를 0.1초간 확인했습니다.`);
-    io.to(id).emit('rewardResult', { kind: 'FLASH_ALL', room });
-    broadcastState();
-    return;
-  }
+  // 보상 4종은 모두 "내 처소"(내가 실제로 술잔을 여는 곳)를 정찰하는 도구다.
+  // 상대 처소는 내가 어떤 행동도 할 수 없는 곳이라 정찰해도 쓸 데가 없으므로,
+  // 기존 아이템(은수저/소믈리에의 코)과 동일하게 자신의 방을 대상으로 한다.
+  // (섬광 정찰은 직접 사용하는 게 아니라 endMinigame()에서 무작위 시점에 자동 발동된다.)
   if (pr.type === 'PEEK_CELL') {
     const row = Number(payload.row), col = Number(payload.col);
     if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
     pr.used = true;
-    const type = opp.room[row][col].type;
-    actionLog(player, `보상 사용 — 상대 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
+    const type = player.room[row][col].type;
+    actionLog(player, `보상 사용 — 내 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
     io.to(id).emit('rewardResult', { kind: 'PEEK_CELL', row, col, type });
     broadcastState();
     return;
@@ -706,11 +538,11 @@ function handleRewardUse(id, payload) {
     pr.used = true;
     let count = 0;
     for (let i = 0; i < CONFIG.GRID; i++) {
-      const cell = axis === 'row' ? opp.room[idx][i] : opp.room[i][idx];
+      const cell = axis === 'row' ? player.room[idx][i] : player.room[i][idx];
       if (cell.type === targetType) count += 1;
     }
     const label = axis === 'row' ? `${idx + 1}행` : `${idx + 1}열`;
-    actionLog(player, `보상 사용 — 상대 처소 ${label}의 ${CLUE_CAT_NAMES[targetType]} 개수 확인 → ${count}개`);
+    actionLog(player, `보상 사용 — 내 처소 ${label}의 ${CLUE_CAT_NAMES[targetType]} 개수 확인 → ${count}개`);
     io.to(id).emit('rewardResult', { kind: pr.type, index: idx, targetType, count });
     broadcastState();
     return;
@@ -723,6 +555,7 @@ function afterAction() {
   if (match.phase !== 'ROUND_ACTION') return;
   if (match.turnIndex === 0) {
     match.turnIndex = 1;
+    match.opensThisTurn = 0;
     broadcastState();
   } else {
     if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
@@ -813,15 +646,15 @@ function buildClientState(forId) {
     actionOrder: match.actionOrder.map((id) => (id === forId ? 'me' : 'opp')),
     turnIndex: match.turnIndex,
     isMyTurn: match.phase === 'ROUND_ACTION' && match.actionOrder[match.turnIndex] === forId,
+    opensRemaining: CONFIG.OPENS_PER_TURN - (match.opensThisTurn || 0),
     me: me && {
       name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
-      items: me.items, shield: me.shield,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
     opp: opp && {
       name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore,
-      itemCount: opp.items.length, shield: opp.shield, connected: opp.connected,
+      connected: opp.connected,
       room: match.phase === 'END' ? sanitizeRoom(opp.room, true) : null,
     },
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
@@ -829,7 +662,6 @@ function buildClientState(forId) {
     endReason: match.endReason,
     rematchReady: { me: !!match.rematchReady[forId], opp: !!match.rematchReady[otherId(forId)] },
     config: CONFIG,
-    itemNames: ITEM_NAMES,
     clueCatNames: CLUE_CAT_NAMES,
     playersConnected: match.order.length,
   };
@@ -842,12 +674,8 @@ function publicMinigameView(mg, forId) {
     const role = mine(mg.hider) ? 'hider' : mine(mg.guesser) ? 'guesser' : null;
     return { role, waitingForMe: (role === 'hider' && mg.hiderPick == null) || (role === 'guesser' && mg.hiderPick != null && mg.guesserPick == null), hiderDone: mg.hiderPick != null };
   }
-  if (mg.type === 'CARD') {
-    const role = mine(mg.presenter) ? 'presenter' : mine(mg.guesser) ? 'guesser' : null;
-    return {
-      role, trueVal: role === 'presenter' ? mg.trueVal : null,
-      declared: mg.declared, waitingForMe: (role === 'presenter' && mg.declared == null) || (role === 'guesser' && mg.declared != null && mg.guess == null),
-    };
+  if (mg.type === 'REFLEX') {
+    return { goFired: !!mg.goAt, myClicked: !!mg.clicks[forId], oppClicked: !!mg.clicks[otherId(forId)] };
   }
   if (mg.type === 'BOMB') return { passes: mg.passes, myTurn: mg.holder === forId };
   if (mg.type === 'PIN') return { pulls: mg.pulls, myTurn: mg.turn === forId };
@@ -859,9 +687,6 @@ function publicMinigameView(mg, forId) {
   }
   if (mg.type === 'PARITY') {
     return { role: mg.oddPlayer === forId ? 'ODD' : 'EVEN', myPick: mg.picks[forId] || null, waitingForMe: !mg.picks[forId] };
-  }
-  if (mg.type === 'SHOWDOWN') {
-    return { myPick: mg.picks[forId] ?? null, oppPicked: mg.picks[otherId(forId)] != null, waitingForMe: mg.picks[forId] == null };
   }
   if (mg.type === 'BANK') {
     const oppId = otherId(forId);
@@ -935,10 +760,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('minigame:move', (payload) => handleMinigameMove(socket.id, payload || {}));
-  socket.on('action:item_get', (p) => doAction(socket.id, 'ITEM_GET', p || {}));
-  socket.on('action:clue', (p) => doAction(socket.id, 'CLUE', p || {}));
   socket.on('action:open', (p) => doAction(socket.id, 'OPEN', p || {}));
-  socket.on('action:item_use', (p) => doAction(socket.id, 'ITEM_USE', p || {}));
   socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(socket.id));
 });
