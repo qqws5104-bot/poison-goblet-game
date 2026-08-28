@@ -13,27 +13,41 @@ const CONFIG = {
   GOLD_PTS: 2,
   SILVER_PTS: 1,
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
-  POISON_LIMIT: 3,        // 독 3개 = 즉시 패배
-  TIME_LIMIT_SEC: 600,    // 본게임 제한시간(테스트 편의상 10분, 필요시 조정)
+  POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
+  ROUNDS: 10,             // 총 라운드 수 (고정)
   INVENTORY_CAP: 3,
   NIM_LIMIT: 15,          // 독배 채우기: 이 숫자에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MIN: 3, BOMB_FUSE_MAX: 7,
   PIN_POP_MIN: 3, PIN_POP_MAX: 8,
   CARD_MAX: 5,
+  BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
+  REWARD_FLASH_MS: 60000, // 섬광 정찰 보상의 사용 제한 시간(ms)
 };
 
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'CARD', 'BOMB', 'PIN'];
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'CARD', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'SHOWDOWN', 'BANK'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', CARD: '거짓 카드 건네기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
+  SIGIL: '표식 대결', GUESS_COUNT: '촛불 개수 맞히기', PARITY: '숫자 합 홀짝', SHOWDOWN: '배짱 대결',
+  BANK: '금고 번호 맞추기',
 };
+const SIGIL_BEATS = { SWORD: 'POISON', POISON: 'SHIELD', SHIELD: 'SWORD' };
+const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
 const ITEM_NAMES = { SPOON: '은수저', NOSE: '소믈리에의 코', WARD: '해독의 부적', SWAP: '잔 바꿔치기' };
 const CLUE_CATS = ['P', 'G', 'S', 'A'];
 const CLUE_CAT_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제' };
 const CELL_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제', E: '빈 칸' };
 
+const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
+const REWARD_NAMES = {
+  FLASH_ALL: '섬광 정찰 — 1분 내 원할 때, 상대 처소 전체를 0.1초간 공개',
+  PEEK_CELL: '한 칸 정찰 — 상대 처소 원하는 1칸의 정체 확인',
+  ROW_COUNT: '행 정찰 — 상대 처소 원하는 행에서 지정한 술잔 개수 확인',
+  COL_COUNT: '열 정찰 — 상대 처소 원하는 열에서 지정한 술잔 개수 확인',
+};
+
 // 밸런스 테스트 편의를 위해 환경변수로 숫자 설정값을 덮어쓸 수 있게 함
-// 예: TIME_LIMIT_SEC=120 NIM_LIMIT=21 node server.js
+// 예: NIM_LIMIT=21 POISON_PENALTY=2 node server.js
 for (const key of Object.keys(CONFIG)) {
   if (typeof CONFIG[key] === 'number' && process.env[key] !== undefined) {
     const v = Number(process.env[key]);
@@ -59,7 +73,7 @@ function makeRoom() {
 function newPlayer(id, name) {
   return {
     id, name, room: makeRoom(),
-    poison: 0, antidote: 0, score: 0,
+    poison: 0, antidote: 0, score: 0, finalScore: null,
     items: [], shield: false, decoyNextClue: false, connected: true,
   };
 }
@@ -68,9 +82,9 @@ function freshMatch() {
     phase: 'LOBBY', // LOBBY, SETUP, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
-    round: 0, minigameIndex: 0, minigame: null,
-    priorityOrder: [], turnIndex: 0,
-    startTime: null, timeLimit: CONFIG.TIME_LIMIT_SEC,
+    round: 0, minigameOrder: shuffle(MINIGAME_SEQUENCE), minigame: null,
+    roundRewardType: null, pendingReward: null,
+    actionOrder: [], turnIndex: 0,
     log: [], winner: null, endReason: null,
   };
 }
@@ -78,6 +92,14 @@ let match = freshMatch();
 
 function otherId(id) { return match.order.find((x) => x !== id); }
 function log(msg) { match.log.push({ t: Date.now(), msg }); if (match.log.length > 300) match.log.shift(); io.emit('log', { msg }); }
+// 본인 처소의 구체적인 정보(어느 칸에 뭐가 나왔는지 등)는 상대에게 새면 안 되므로,
+// 이런 개인 행동 기록은 방송하지 않고 그 플레이어의 state.me.history로만 내려준다.
+function actionLog(player, msg) {
+  if (!player.history) player.history = [];
+  player.history.push({ t: Date.now(), msg });
+  if (player.history.length > 40) player.history.shift();
+  match.log.push({ t: Date.now(), msg: `(개인) ${player.name}: ${msg}` });
+}
 function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
 
@@ -113,8 +135,7 @@ function finalizeSetup() {
       }
     }
   }
-  log('양쪽 처소 구성 완료. 본게임을 시작합니다.');
-  match.startTime = Date.now();
+  log(`양쪽 처소 구성 완료. 총 ${CONFIG.ROUNDS}라운드의 본게임을 시작합니다.`);
   match.round = 0;
   startRound();
 }
@@ -122,11 +143,12 @@ function finalizeSetup() {
 // ------------------------------ 라운드 / 미니게임 ----------------------------
 function startRound() {
   match.round += 1;
-  const type = MINIGAME_SEQUENCE[match.minigameIndex % MINIGAME_SEQUENCE.length];
-  match.minigameIndex += 1;
+  const type = match.minigameOrder[match.round - 1];
   match.phase = 'ROUND_MINIGAME';
   match.minigame = initMinigame(type, match.round);
-  log(`--- ${match.round}라운드 : 우선권 미니게임 [${MINIGAME_NAMES[type]}] ---`);
+  match.pendingReward = null;
+  match.roundRewardType = REWARD_TYPES[randInt(0, REWARD_TYPES.length - 1)];
+  log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 : 미니게임 [${MINIGAME_NAMES[type]}] · 이번 라운드 보상: ${REWARD_NAMES[match.roundRewardType]} ---`);
   broadcastState();
 }
 
@@ -150,16 +172,56 @@ function initMinigame(type, roundNo) {
   if (type === 'PIN') {
     return { ...base, turn: firstIsA ? a : b, pulls: 0, popAt: randInt(CONFIG.PIN_POP_MIN, CONFIG.PIN_POP_MAX) };
   }
+  if (type === 'SIGIL') {
+    return { ...base, picks: {} };
+  }
+  if (type === 'GUESS_COUNT') {
+    return { ...base, trueCount: randInt(3, 9), guesses: {}, guessOrder: [] };
+  }
+  if (type === 'PARITY') {
+    return { ...base, oddPlayer: firstIsA ? a : b, evenPlayer: firstIsA ? b : a, picks: {} };
+  }
+  if (type === 'SHOWDOWN') {
+    return { ...base, picks: {} };
+  }
+  if (type === 'BANK') {
+    const secret = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).slice(0, CONFIG.BANK_DIGITS);
+    return { ...base, secret, turn: firstIsA ? a : b, history: [] };
+  }
   return base;
 }
 
 function endMinigame(winnerId) {
   const loserId = otherId(winnerId);
   match.minigame.result = winnerId;
-  match.priorityOrder = [winnerId, loserId];
+
+  // 보상은 라운드 시작 전에 이미 공개되어 있었고, 이번 라운드 미니게임 승자가 그 보상을 받는다.
+  match.pendingReward = {
+    type: match.roundRewardType,
+    winnerId,
+    used: false,
+    expiresAt: match.roundRewardType === 'FLASH_ALL' ? Date.now() + CONFIG.REWARD_FLASH_MS : null,
+  };
+
+  // 행동 순서는 더 이상 미니게임 승패가 아니라 라운드 홀/짝으로 고정 교대한다 (보상이 우선권을 대체).
+  const [a, b] = match.order;
+  const firstId = match.round % 2 === 1 ? a : b;
+  match.actionOrder = [firstId, otherId(firstId)];
   match.turnIndex = 0;
   match.phase = 'ROUND_ACTION';
-  log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 우선권 획득`);
+  log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 보상 [${REWARD_NAMES[match.roundRewardType]}] 획득`);
+
+  if (match.pendingReward.expiresAt) {
+    const roundAtGrant = match.round;
+    setTimeout(() => {
+      if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === winnerId && !match.pendingReward.used) {
+        match.pendingReward.used = true;
+        log(`${match.players[winnerId].name}의 섬광 정찰 보상 시간이 만료되었습니다.`);
+        broadcastState();
+      }
+    }, CONFIG.REWARD_FLASH_MS);
+  }
+
   broadcastState();
 }
 
@@ -172,6 +234,11 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'CARD') return handleCard(id, payload, mg);
   if (mg.type === 'BOMB') return handleBomb(id, payload, mg);
   if (mg.type === 'PIN') return handlePin(id, payload, mg);
+  if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
+  if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
+  if (mg.type === 'PARITY') return handleParity(id, payload, mg);
+  if (mg.type === 'SHOWDOWN') return handleShowdown(id, payload, mg);
+  if (mg.type === 'BANK') return handleBank(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -258,10 +325,111 @@ function handlePin(id, payload, mg) {
   broadcastState();
 }
 
+// 6) 표식 대결 — 검>독배>방패>검, 동시에 몰래 선택 후 공개(가위바위보류, 순수 심리전)
+function handleSigil(id, payload, mg) {
+  if (mg.picks[id]) return;
+  if (!['SWORD', 'POISON', 'SHIELD'].includes(payload.pick)) return;
+  mg.picks[id] = payload.pick;
+  const [a, b] = match.order;
+  if (mg.picks[a] && mg.picks[b]) {
+    log(`표식 공개: ${match.players[a].name}=${SIGIL_NAMES_KR[mg.picks[a]]} vs ${match.players[b].name}=${SIGIL_NAMES_KR[mg.picks[b]]}`);
+    if (mg.picks[a] === mg.picks[b]) {
+      log('무승부 — 같은 표식을 냈습니다. 다시 냅니다.');
+      mg.picks = {};
+      broadcastState();
+      return;
+    }
+    broadcastState();
+    return endMinigame(SIGIL_BEATS[mg.picks[a]] === mg.picks[b] ? a : b);
+  }
+  broadcastState();
+}
+
+// 7) 촛불 개수 맞히기 — 잠깐 보여준 촛불 개수를 추측, 더 근접한 쪽 승리(관찰/집중형)
+function handleGuessCount(id, payload, mg) {
+  if (mg.guesses[id] != null) return;
+  const g = Number(payload.guess);
+  if (!Number.isInteger(g) || g < 0 || g > 20) return;
+  mg.guesses[id] = g;
+  mg.guessOrder.push(id);
+  log(`${match.players[id].name}이 촛불 개수를 ${g}개로 추측했습니다.`);
+  const [a, b] = match.order;
+  if (mg.guesses[a] != null && mg.guesses[b] != null) {
+    log(`정답 공개: 실제 촛불은 ${mg.trueCount}개였습니다.`);
+    const da = Math.abs(mg.guesses[a] - mg.trueCount);
+    const db = Math.abs(mg.guesses[b] - mg.trueCount);
+    broadcastState();
+    const winner = da < db ? a : db < da ? b : mg.guessOrder[0];
+    return endMinigame(winner);
+  }
+  broadcastState();
+}
+
+// 8) 숫자 합 홀짝 — 동시에 1~3을 선택, 합의 홀/짝으로 승부(계산+확률 혼합형)
+function handleParity(id, payload, mg) {
+  if (mg.picks[id]) return;
+  const n = Number(payload.n);
+  if (![1, 2, 3].includes(n)) return;
+  mg.picks[id] = n;
+  const [a, b] = match.order;
+  if (mg.picks[a] && mg.picks[b]) {
+    const sum = mg.picks[a] + mg.picks[b];
+    const isEven = sum % 2 === 0;
+    log(`숫자 공개: ${match.players[a].name}=${mg.picks[a]}, ${match.players[b].name}=${mg.picks[b]} → 합 ${sum} (${isEven ? '짝' : '홀'})`);
+    broadcastState();
+    return endMinigame(isEven ? mg.evenPlayer : mg.oddPlayer);
+  }
+  broadcastState();
+}
+
+// 9) 배짱 대결 — 동시에 1~10 중 배짱 수치를 제시, 더 높은 쪽 승리(동률이면 재시도, 순수 배짱형)
+function handleShowdown(id, payload, mg) {
+  if (mg.picks[id] != null) return;
+  const n = Number(payload.n);
+  if (!Number.isInteger(n) || n < 1 || n > 10) return;
+  mg.picks[id] = n;
+  const [a, b] = match.order;
+  if (mg.picks[a] != null && mg.picks[b] != null) {
+    log(`배짱 공개: ${match.players[a].name}=${mg.picks[a]}, ${match.players[b].name}=${mg.picks[b]}`);
+    if (mg.picks[a] === mg.picks[b]) {
+      log('무승부 — 같은 숫자를 냈습니다. 다시 냅니다.');
+      mg.picks = {};
+      broadcastState();
+      return;
+    }
+    broadcastState();
+    return endMinigame(mg.picks[a] > mg.picks[b] ? a : b);
+  }
+  broadcastState();
+}
+
+// 10) 금고 번호 맞추기 — 둘이 함께 같은 비밀번호(서로 다른 숫자 N개)를 번갈아 추리(숫자야구형)
+function handleBank(id, payload, mg) {
+  if (mg.turn !== id) return;
+  const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
+  if (!guess || guess.length !== CONFIG.BANK_DIGITS) return;
+  if (guess.some((d) => !Number.isInteger(d) || d < 0 || d > 9)) return;
+  if (new Set(guess).size !== guess.length) return; // 중복 숫자 불가
+  let strikes = 0, balls = 0;
+  guess.forEach((d, i) => {
+    if (mg.secret[i] === d) strikes += 1;
+    else if (mg.secret.includes(d)) balls += 1;
+  });
+  mg.history.push({ by: id, guess: guess.slice(), strikes, balls });
+  log(`${match.players[id].name}: 금고 번호 ${guess.join('')} 시도 → ${strikes}스트라이크 ${balls}볼`);
+  if (strikes === CONFIG.BANK_DIGITS) {
+    log(`금고가 열렸습니다! 정답은 ${mg.secret.join('')}였습니다.`);
+    broadcastState();
+    return endMinigame(id);
+  }
+  mg.turn = otherId(id);
+  broadcastState();
+}
+
 // ------------------------------ 본행동(액션) ---------------------------------
 function doAction(id, kind, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
-  const activeId = match.priorityOrder[match.turnIndex];
+  const activeId = match.actionOrder[match.turnIndex];
   if (activeId !== id) return;
   const player = match.players[id];
 
@@ -273,7 +441,7 @@ function doAction(id, kind, payload) {
       return;
     }
     player.items.push(itemType);
-    log(`${player.name}: 아이템 획득 — ${ITEM_NAMES[itemType]}`);
+    actionLog(player, `아이템 획득 — ${ITEM_NAMES[itemType]}`);
     afterAction();
     return;
   }
@@ -316,69 +484,102 @@ function resolveClue(player, cat) {
       if (cell.type === cat && !cell.opened && !cell.cluedType) unknownCells.push({ r, c });
     }
   if (unknownCells.length === 0) {
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 — 더 이상 알아낼 정보가 없습니다.`);
+    actionLog(player, `[${CLUE_CAT_NAMES[cat]}] 단서 뽑기 — 더 이상 알아낼 정보가 없습니다.`);
     return;
   }
   // 잔 바꿔치기로 오염된 경우: 실제로는 다른(엉뚱한) 좌표/거짓 정보를 알려준다
   const poisoned = player.decoyNextClue;
   if (poisoned) player.decoyNextClue = false;
 
-  const roll = Math.random();
-  let clueType = roll < 0.25 ? 'exact' : roll < 0.5 ? 'row' : roll < 0.75 ? 'col' : 'quad';
-  const pick = unknownCells[randInt(0, unknownCells.length - 1)];
+  // 같은 칸끼리 붙어 있는(인접한) 쌍이 있으면 "인접" 단서도 후보에 넣는다
+  const adjPair = poisoned ? null : findAdjacentPair(unknownCells);
+  const pool = adjPair ? ['exact', 'row', 'col', 'block', 'adjacent'] : ['exact', 'row', 'col', 'block'];
 
-  if (poisoned) {
-    // 거짓 좌표: 실제 pick과 무관한, 그 타입이 아닐 가능성이 높은 랜덤 칸 정보를 진짜인 것처럼 알려준다
-    const fr = randInt(0, CONFIG.GRID - 1), fc = randInt(0, CONFIG.GRID - 1);
-    if (clueType === 'exact') {
-      room[fr][fc].cluedNote = `(교란) ${CLUE_CAT_NAMES[cat]} 위치로 안내됨`;
-      io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}] 정확한 위치: ${fr + 1}행 ${fc + 1}열 (※ 정보가 오염되었을 수 있습니다)` });
-    } else if (clueType === 'row') {
-      io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${fr + 1}행에 있습니다. (※ 정보가 오염되었을 수 있습니다)` });
-    } else if (clueType === 'col') {
-      io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${fc + 1}열에 있습니다. (※ 정보가 오염되었을 수 있습니다)` });
-    } else {
-      const quad = quadrantOf(fr, fc);
-      io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${quad} 구역에 있습니다. (※ 정보가 오염되었을 수 있습니다)` });
-    }
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 (누군가 정보를 조작했을 수도?)`);
-    return;
+  if (!player.lastClueByCat) player.lastClueByCat = {};
+  const prevSig = player.lastClueByCat[cat];
+
+  let clueType, source, signature;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    clueType = pool[randInt(0, pool.length - 1)];
+    const pick = unknownCells[randInt(0, unknownCells.length - 1)];
+    source = poisoned ? { r: randInt(0, CONFIG.GRID - 1), c: randInt(0, CONFIG.GRID - 1) } : { r: pick.r, c: pick.c };
+    if (clueType === 'exact') signature = `exact:${source.r},${source.c}`;
+    else if (clueType === 'row') signature = `row:${source.r}`;
+    else if (clueType === 'col') signature = `col:${source.c}`;
+    else if (clueType === 'adjacent') signature = `adjacent:${adjPair.a.r},${adjPair.a.c}-${adjPair.b.r},${adjPair.b.c}`;
+    else { const { br, bc } = blockOf(source.r, source.c); signature = `block:${br},${bc}`; }
+    // 같은 신호(직전과 완전히 동일한 단서)면 다시 뽑는다 — 매번 새로운 정보를 주기 위함
+    if (signature !== prevSig) break;
   }
+  player.lastClueByCat[cat] = signature;
+  const suffix = poisoned ? ' (※ 정보가 오염되었을 수 있습니다)' : '';
 
+  let text, cells;
   if (clueType === 'exact') {
-    room[pick.r][pick.c].cluedType = cat;
-    io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}] 정확한 위치: ${pick.r + 1}행 ${pick.c + 1}열` });
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → 정확한 좌표 확인`);
+    cells = [{ row: source.r, col: source.c }];
+    if (!poisoned) room[source.r][source.c].cluedType = cat;
+    else room[source.r][source.c].cluedNote = `(교란) ${CLUE_CAT_NAMES[cat]} 위치로 안내됨`;
+    text = `[${CLUE_CAT_NAMES[cat]}] 정확한 위치: ${source.r + 1}행 ${source.c + 1}열${suffix}`;
   } else if (clueType === 'row') {
-    io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${pick.r + 1}행 어딘가에 있습니다.` });
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → 행 정보 확인`);
+    cells = rowCells(source.r);
+    text = `[${CLUE_CAT_NAMES[cat]}]가 ${source.r + 1}행${source.r === CONFIG.GRID - 1 ? '(맨 마지막 행)' : ''} 어딘가에 있습니다.${suffix}`;
   } else if (clueType === 'col') {
-    io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${pick.c + 1}열 어딘가에 있습니다.` });
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → 열 정보 확인`);
+    cells = colCells(source.c);
+    text = `[${CLUE_CAT_NAMES[cat]}]가 ${source.c + 1}열${source.c === CONFIG.GRID - 1 ? '(맨 마지막 열)' : ''} 어딘가에 있습니다.${suffix}`;
+  } else if (clueType === 'adjacent') {
+    cells = [{ row: adjPair.a.r, col: adjPair.a.c }, { row: adjPair.b.r, col: adjPair.b.c }];
+    if (!poisoned) { room[adjPair.a.r][adjPair.a.c].cluedType = cat; room[adjPair.b.r][adjPair.b.c].cluedType = cat; }
+    text = `[${CLUE_CAT_NAMES[cat]}] 두 개가 서로 붙어 있는 칸을 찾았습니다: ${adjPair.a.r + 1}행 ${adjPair.a.c + 1}열 / ${adjPair.b.r + 1}행 ${adjPair.b.c + 1}열${suffix}`;
   } else {
-    const quad = quadrantOf(pick.r, pick.c);
-    io.to(player.id).emit('clueResult', { text: `[${CLUE_CAT_NAMES[cat]}]가 ${quad} 구역 어딘가에 있습니다.` });
-    log(`${player.name}: [${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → 구역 정보 확인`);
+    const { br, bc } = blockOf(source.r, source.c);
+    cells = blockCells(br, bc);
+    text = `[${CLUE_CAT_NAMES[cat]}]가 ${br + 1}~${br + 2}행 × ${bc + 1}~${bc + 2}열 사각형(4칸) 중 하나에 있습니다.${suffix}`;
   }
+
+  io.to(player.id).emit('clueResult', { text, cells, cat });
+  actionLog(player, `[${CLUE_CAT_NAMES[cat]}] 단서 뽑기 → ${text}`);
 }
 
-function quadrantOf(r, c) {
-  const half = CONFIG.GRID / 2;
-  const v = r < half ? '상단' : '하단';
-  const h = c < half ? '좌측' : '우측';
-  return v + h;
+// 같은 카테고리의 칸 중, 상하좌우로 서로 맞닿은(인접한) 쌍이 있는지 찾는다
+function findAdjacentPair(cellsOfCat) {
+  const set = new Set(cellsOfCat.map((c) => `${c.r},${c.c}`));
+  for (const cell of cellsOfCat) {
+    const neighbors = [{ r: cell.r + 1, c: cell.c }, { r: cell.r, c: cell.c + 1 }];
+    for (const n of neighbors) {
+      if (set.has(`${n.r},${n.c}`)) return { a: { r: cell.r, c: cell.c }, b: { r: n.r, c: n.c } };
+    }
+  }
+  return null;
+}
+
+function rowCells(r) {
+  const out = [];
+  for (let c = 0; c < CONFIG.GRID; c++) out.push({ row: r, col: c });
+  return out;
+}
+function colCells(c) {
+  const out = [];
+  for (let r = 0; r < CONFIG.GRID; r++) out.push({ row: r, col: c });
+  return out;
+}
+function blockOf(r, c) {
+  return { br: Math.floor(r / 2) * 2, bc: Math.floor(c / 2) * 2 };
+}
+function blockCells(br, bc) {
+  return [{ row: br, col: bc }, { row: br, col: bc + 1 }, { row: br + 1, col: bc }, { row: br + 1, col: bc + 1 }];
 }
 
 function resolveOpen(player, row, col, cell) {
   cell.opened = true;
   const t = cell.type;
-  log(`${player.name}: 술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
+  actionLog(player, `술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
   if (t === 'P') {
     if (player.shield) {
       player.shield = false;
-      log(`${player.name}: 해독의 부적이 독을 대신 막았습니다!`);
+      actionLog(player, `해독의 부적이 독을 대신 막았습니다!`);
     } else {
       player.poison += 1;
+      actionLog(player, `독배를 마셨습니다... (해독하지 못하면 게임 종료 시 -${CONFIG.POISON_PENALTY}점)`);
       checkNeutralize(player);
     }
   } else if (t === 'G') {
@@ -389,21 +590,13 @@ function resolveOpen(player, row, col, cell) {
     player.antidote += 1;
     checkNeutralize(player);
   }
-  checkInstantLoss(player);
 }
 
 function checkNeutralize(player) {
   while (player.poison > 0 && player.antidote >= CONFIG.ANTIDOTE_NEED) {
     player.poison -= 1;
     player.antidote -= CONFIG.ANTIDOTE_NEED;
-    log(`${player.name}: 해독제 ${CONFIG.ANTIDOTE_NEED}개로 독 1개 무효화!`);
-  }
-}
-
-function checkInstantLoss(player) {
-  if (player.poison >= CONFIG.POISON_LIMIT) {
-    const winner = otherId(player.id);
-    endMatch(`${player.name}이 독 술잔 ${CONFIG.POISON_LIMIT}개를 마셔 즉시 패배`, winner);
+    actionLog(player, `해독제 ${CONFIG.ANTIDOTE_NEED}개로 독 1개 무효화!`);
   }
 }
 
@@ -417,7 +610,7 @@ function applyItem(player, itemType, target) {
     const isPoison = cell.type === 'P';
     cell.cluedNote = isPoison ? '독!' : '안전';
     io.to(player.id).emit('clueResult', { text: `은수저: (${row + 1},${col + 1})은 ${isPoison ? '독 술잔입니다!' : '독이 아닙니다.'}` });
-    log(`${player.name}: 은수저 사용 → (${row + 1},${col + 1}) 확인`);
+    actionLog(player, `은수저 사용 → (${row + 1},${col + 1}) 확인`);
     return true;
   }
   if (itemType === 'NOSE') {
@@ -431,57 +624,97 @@ function applyItem(player, itemType, target) {
     }
     const label = target.axis === 'row' ? `${idx + 1}행` : `${idx + 1}열`;
     io.to(player.id).emit('clueResult', { text: `소믈리에의 코: ${label}에 독 술잔이 ${count}개 있습니다.` });
-    log(`${player.name}: 소믈리에의 코 사용 → ${label} 독 개수 확인`);
+    actionLog(player, `소믈리에의 코 사용 → ${label} 독 개수 확인`);
     return true;
   }
   if (itemType === 'WARD') {
     player.shield = true;
-    log(`${player.name}: 해독의 부적 장착 — 다음 독을 자동으로 막아줍니다.`);
+    actionLog(player, `해독의 부적 장착 — 다음 독을 자동으로 막아줍니다.`);
     return true;
   }
   if (itemType === 'SWAP') {
     const opp = match.players[otherId(player.id)];
     opp.decoyNextClue = true;
-    log(`${player.name}: 잔 바꿔치기 사용 — 상대의 다음 단서를 조작했습니다.`);
+    actionLog(player, `잔 바꿔치기 사용 — 상대의 다음 단서를 조작했습니다.`);
     return true;
   }
   return false;
+}
+
+// ------------------------------ 보상(정찰) 사용 -------------------------------
+function handleRewardUse(id, payload) {
+  if (match.phase !== 'ROUND_ACTION') return;
+  const pr = match.pendingReward;
+  if (!pr || pr.winnerId !== id || pr.used) return;
+  const player = match.players[id];
+  const opp = match.players[otherId(id)];
+  if (!opp) return;
+
+  if (pr.type === 'FLASH_ALL') {
+    pr.used = true;
+    const room = opp.room.map((row) => row.map((cell) => cell.type));
+    actionLog(player, `보상 사용 — 섬광 정찰로 상대 처소 전체를 0.1초간 확인했습니다.`);
+    io.to(id).emit('rewardResult', { kind: 'FLASH_ALL', room });
+    broadcastState();
+    return;
+  }
+  if (pr.type === 'PEEK_CELL') {
+    const row = Number(payload.row), col = Number(payload.col);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
+    pr.used = true;
+    const type = opp.room[row][col].type;
+    actionLog(player, `보상 사용 — 상대 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
+    io.to(id).emit('rewardResult', { kind: 'PEEK_CELL', row, col, type });
+    broadcastState();
+    return;
+  }
+  if (pr.type === 'ROW_COUNT' || pr.type === 'COL_COUNT') {
+    const axis = pr.type === 'ROW_COUNT' ? 'row' : 'col';
+    const idx = Number(payload.index);
+    const targetType = payload.targetType;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= CONFIG.GRID) return;
+    if (!CLUE_CATS.includes(targetType)) return;
+    pr.used = true;
+    let count = 0;
+    for (let i = 0; i < CONFIG.GRID; i++) {
+      const cell = axis === 'row' ? opp.room[idx][i] : opp.room[i][idx];
+      if (cell.type === targetType) count += 1;
+    }
+    const label = axis === 'row' ? `${idx + 1}행` : `${idx + 1}열`;
+    actionLog(player, `보상 사용 — 상대 처소 ${label}의 ${CLUE_CAT_NAMES[targetType]} 개수 확인 → ${count}개`);
+    io.to(id).emit('rewardResult', { kind: pr.type, index: idx, targetType, count });
+    broadcastState();
+    return;
+  }
 }
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
 function afterAction() {
   broadcastState();
-  if (match.phase !== 'ROUND_ACTION') return; // 즉시패배 등으로 이미 종료됨
+  if (match.phase !== 'ROUND_ACTION') return;
   if (match.turnIndex === 0) {
     match.turnIndex = 1;
     broadcastState();
   } else {
-    // 라운드 종료
-    if (checkTimeUp()) return;
+    if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
     startRound();
   }
 }
 
-function checkTimeUp() {
-  if (!match.startTime) return false;
-  const elapsed = (Date.now() - match.startTime) / 1000;
-  if (elapsed >= match.timeLimit) {
-    const [a, b] = match.order;
-    const pa = match.players[a], pb = match.players[b];
-    let winner = null, reason;
-    if (pa.score !== pb.score) {
-      winner = pa.score > pb.score ? a : b;
-      reason = '제한시간 종료 — 술잔 점수 비교 승리';
-    } else if (pa.poison !== pb.poison) {
-      winner = pa.poison < pb.poison ? a : b;
-      reason = '제한시간 종료 — 점수 동률, 독 개수 적은 쪽 승리';
-    } else {
-      reason = '제한시간 종료 — 완전 동률(무승부)';
-    }
-    endMatch(reason, winner);
-    return true;
+function endMatchByScore() {
+  const [a, b] = match.order;
+  const pa = match.players[a], pb = match.players[b];
+  const finalize = (p) => p.score - p.poison * CONFIG.POISON_PENALTY;
+  const fa = finalize(pa), fb = finalize(pb);
+  pa.finalScore = fa; pb.finalScore = fb;
+  let winner = null, reason;
+  if (fa !== fb) {
+    winner = fa > fb ? a : b;
+    reason = `${CONFIG.ROUNDS}라운드 종료 — 최종 점수 비교 승리 (독배 -${CONFIG.POISON_PENALTY}점 반영)`;
+  } else {
+    reason = `${CONFIG.ROUNDS}라운드 종료 — 최종 점수 완전 동률(무승부)`;
   }
-  return false;
+  endMatch(reason, winner);
 }
 
 function endMatch(reason, winnerId) {
@@ -504,31 +737,35 @@ function buildClientState(forId) {
       note: cell.cluedNote || null,
     })));
 
+  const pr = match.pendingReward;
   return {
     phase: match.phase,
     round: match.round,
+    roundsTotal: CONFIG.ROUNDS,
     minigame: match.minigame && {
       type: match.minigame.type,
       name: MINIGAME_NAMES[match.minigame.type],
       // 클라이언트에 필요한 진행상황만 노출 (히든정보 보호)
       public: publicMinigameView(match.minigame, forId),
     },
-    priorityOrder: match.priorityOrder.map((id) => (id === forId ? 'me' : 'opp')),
+    roundReward: match.roundRewardType ? { type: match.roundRewardType, name: REWARD_NAMES[match.roundRewardType] } : null,
+    myReward: pr && pr.winnerId === forId ? { type: pr.type, name: REWARD_NAMES[pr.type], used: pr.used, expiresAt: pr.expiresAt } : null,
+    oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
+    actionOrder: match.actionOrder.map((id) => (id === forId ? 'me' : 'opp')),
     turnIndex: match.turnIndex,
-    isMyTurn: match.phase === 'ROUND_ACTION' && match.priorityOrder[match.turnIndex] === forId,
+    isMyTurn: match.phase === 'ROUND_ACTION' && match.actionOrder[match.turnIndex] === forId,
     me: me && {
-      name: me.name, poison: me.poison, antidote: me.antidote, score: me.score,
+      name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
       items: me.items, shield: me.shield,
       room: sanitizeRoom(me.room, match.phase === 'END'),
+      history: me.history || [],
     },
     opp: opp && {
-      name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score,
+      name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore,
       itemCount: opp.items.length, shield: opp.shield, connected: opp.connected,
       room: match.phase === 'END' ? sanitizeRoom(opp.room, true) : null,
     },
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
-    timeLimit: match.timeLimit,
-    startTime: match.startTime,
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
     config: CONFIG,
@@ -554,6 +791,25 @@ function publicMinigameView(mg, forId) {
   }
   if (mg.type === 'BOMB') return { passes: mg.passes, myTurn: mg.holder === forId };
   if (mg.type === 'PIN') return { pulls: mg.pulls, myTurn: mg.turn === forId };
+  if (mg.type === 'SIGIL') {
+    return { myPick: mg.picks[forId] || null, oppPicked: !!mg.picks[otherId(forId)], waitingForMe: !mg.picks[forId] };
+  }
+  if (mg.type === 'GUESS_COUNT') {
+    return { trueCount: mg.trueCount, myGuess: mg.guesses[forId] ?? null, oppGuessed: !!mg.guesses[otherId(forId)] && mg.guesses[otherId(forId)] !== undefined, waitingForMe: mg.guesses[forId] == null };
+  }
+  if (mg.type === 'PARITY') {
+    return { role: mg.oddPlayer === forId ? 'ODD' : 'EVEN', myPick: mg.picks[forId] || null, waitingForMe: !mg.picks[forId] };
+  }
+  if (mg.type === 'SHOWDOWN') {
+    return { myPick: mg.picks[forId] ?? null, oppPicked: mg.picks[otherId(forId)] != null, waitingForMe: mg.picks[forId] == null };
+  }
+  if (mg.type === 'BANK') {
+    return {
+      digits: CONFIG.BANK_DIGITS,
+      myTurn: mg.turn === forId,
+      history: mg.history.map((h) => ({ by: h.by === forId ? 'me' : 'opp', guess: h.guess, strikes: h.strikes, balls: h.balls })),
+    };
+  }
   return {};
 }
 
@@ -610,6 +866,7 @@ io.on('connection', (socket) => {
   socket.on('action:clue', (p) => doAction(socket.id, 'CLUE', p || {}));
   socket.on('action:open', (p) => doAction(socket.id, 'OPEN', p || {}));
   socket.on('action:item_use', (p) => doAction(socket.id, 'ITEM_USE', p || {}));
+  socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
 
   socket.on('admin:end', () => { if (match.phase !== 'END') endMatch('관리자가 조기 종료함'); });
   socket.on('admin:reset', () => { match = freshMatch(); broadcastState(); });

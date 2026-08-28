@@ -1,5 +1,5 @@
-// 자동 스모크 테스트: 두 개의 소켓 클라이언트로 셋업 + 여러 라운드를 진행시켜
-// 서버 로직이 예외 없이 동작하는지, 5종 미니게임이 모두 정상 진행되는지 확인한다.
+// 자동 스모크 테스트: 두 개의 소켓 클라이언트로 셋업 + 10라운드를 진행시켜
+// 서버 로직이 예외 없이 동작하는지, 10종 미니게임과 보상 시스템이 모두 정상 동작하는지 확인한다.
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
@@ -13,18 +13,21 @@ function connectPlayer(label) {
   socket.on('log', ({ msg }) => console.log('[LOG]', msg));
   socket.on('error', ({ message }) => console.log('[ERR]', label, message));
   socket.on('clueResult', ({ text }) => console.log('[CLUE]', label, text));
+  socket.on('rewardResult', (payload) => console.log('[REWARD]', label, JSON.stringify(payload)));
   return socket;
 }
 
 let setupSent = { A: false, B: false };
-let roundsSeen = new Set();
-let actionsThisTurn = { A: 0, B: 0 };
+let minigamesSeen = new Set();
+let rewardsSeen = new Set();
+let rewardUsed = { A: false, B: false };
+let bankGuessed = { A: new Set(), B: new Set() };
 
 let lastRoundLogged = { A: 0, B: 0 };
 function onState(label, socket, s) {
-  if (s.round && s.round !== lastRoundLogged[label] && s.round % 10 === 0) {
+  if (s.round && s.round !== lastRoundLogged[label]) {
     lastRoundLogged[label] = s.round;
-    console.log(`[STATUS r${s.round}] ${label}(${s.me.name}): poison=${s.me.poison} antidote=${s.me.antidote} score=${s.me.score}`);
+    console.log(`[STATUS r${s.round}/${s.roundsTotal}] ${label}(${s.me.name}): poison=${s.me.poison} antidote=${s.me.antidote} score=${s.me.score}`);
   }
   if (s.phase === 'SETUP' && !setupSent[label]) {
     setupSent[label] = true;
@@ -32,8 +35,10 @@ function onState(label, socket, s) {
     setTimeout(() => socket.emit('setup:confirm', { cells }), 50 + Math.random() * 100);
   }
 
+  if (s.roundReward) rewardsSeen.add(s.roundReward.type);
+
   if (s.phase === 'ROUND_MINIGAME' && s.minigame) {
-    roundsSeen.add(s.minigame.type);
+    minigamesSeen.add(s.minigame.type);
     playMinigame(label, socket, s);
   }
 
@@ -41,12 +46,31 @@ function onState(label, socket, s) {
     setTimeout(() => doRandomAction(label, socket, s), 30);
   }
 
+  if (s.phase === 'ROUND_ACTION' && s.myReward && !s.myReward.used && !rewardUsed[label]) {
+    rewardUsed[label] = true; // 라운드당 한 번만 시도(중복 emit 방지용 플래그, state 갱신시 아래에서 리셋)
+    setTimeout(() => useReward(label, socket, s), 40 + Math.random() * 80);
+  }
+  if (s.phase !== 'ROUND_ACTION' || !s.myReward) rewardUsed[label] = false;
+
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    console.log('minigame types seen:', [...roundsSeen]);
-    console.log('final me(' + label + '):', s.me);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10)`);
+    console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
+    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore });
     setTimeout(() => process.exit(0), 200);
+  }
+}
+
+function useReward(label, socket, s) {
+  const r = s.myReward;
+  if (!r || r.used) return;
+  if (r.type === 'FLASH_ALL') return socket.emit('reward:use', {});
+  if (r.type === 'PEEK_CELL') return socket.emit('reward:use', { row: Math.floor(Math.random() * 6), col: Math.floor(Math.random() * 6) });
+  if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
+    const cats = Object.keys(s.clueCatNames);
+    const cat = cats[Math.floor(Math.random() * cats.length)];
+    return socket.emit('reward:use', { index: Math.floor(Math.random() * 6), targetType: cat });
   }
 }
 
@@ -65,11 +89,43 @@ function playMinigame(label, socket, s) {
     }
     if (type === 'BOMB' && mg.myTurn) socket.emit('minigame:move', { action: 'PASS' });
     if (type === 'PIN' && mg.myTurn) socket.emit('minigame:move', { action: 'PULL' });
+    if (type === 'SIGIL' && mg.waitingForMe) {
+      const opts = ['SWORD', 'POISON', 'SHIELD'];
+      socket.emit('minigame:move', { pick: opts[Math.floor(Math.random() * opts.length)] });
+    }
+    if (type === 'GUESS_COUNT' && mg.myGuess == null) {
+      const offset = Math.floor(Math.random() * 3) - 1;
+      socket.emit('minigame:move', { guess: Math.max(0, mg.trueCount + offset) });
+    }
+    if (type === 'PARITY' && mg.waitingForMe) {
+      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 3) });
+    }
+    if (type === 'SHOWDOWN' && mg.waitingForMe) {
+      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 10) });
+    }
+    if (type === 'BANK' && mg.myTurn) {
+      const guess = randomUniqueDigits(mg.digits, bankGuessed[label]);
+      bankGuessed[label].add(guess.join(''));
+      socket.emit('minigame:move', { guess });
+    }
   }, 20 + Math.random() * 60);
 }
 
+function randomUniqueDigits(n, avoidSet) {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const pool = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const picked = [];
+    for (let i = 0; i < n; i++) picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    if (!avoidSet.has(picked.join(''))) return picked;
+  }
+  // 다 소진되었으면 그냥 아무거나(테스트 목적상 무한루프 방지)
+  const pool = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const picked = [];
+  for (let i = 0; i < n; i++) picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  return picked;
+}
+
 function doRandomAction(label, socket, s) {
-  actionsThisTurn[label]++;
   const r = Math.random();
   if (r < 0.08 && s.me.items.length < s.config.INVENTORY_CAP) {
     const keys = Object.keys(s.itemNames);

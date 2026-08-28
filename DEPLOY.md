@@ -64,8 +64,8 @@ git push -u origin main
 ## 밸런스 수치를 배포본에서 바꾸려면
 
 Render 대시보드 → 해당 서비스 → "Environment" 탭에서 환경변수를 추가하면
-로컬에서 쓰던 것과 똑같이 적용됩니다. 예: `TIME_LIMIT_SEC` = `120`,
-`NIM_LIMIT` = `21` 등 (전체 목록은 README.md 참고). 값을 바꾸고 저장하면
+로컬에서 쓰던 것과 똑같이 적용됩니다. 예: `ROUNDS` = `6`,
+`POISON_PENALTY` = `2` 등 (전체 목록은 README.md 참고). 값을 바꾸고 저장하면
 서비스가 자동 재시작됩니다.
 
 ## 로컬에서 먼저 확인하고 싶다면

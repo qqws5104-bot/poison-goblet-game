@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Noto+Serif+KR:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Noto+Serif+KR:wght@400;600&family=Noto+Sans+KR:wght@400;500;700&family=Nanum+Brush+Script&display=swap');
 
 :root {
   --bg: #140a0d;              /* 짙은 자단목/어둠 */
@@ -23,19 +23,41 @@ html, body {
   background: radial-gradient(ellipse at top, var(--bg-grad) 0%, var(--bg) 65%, var(--ink) 100%);
   background-attachment: fixed;
   color: var(--text);
-  font-family: 'Noto Serif KR', 'Nanum Myeongjo', 'Batang', serif;
+  font-family: 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
 }
 h1,h2,h3 { font-family: 'Nanum Myeongjo', 'Noto Serif KR', serif; margin: 0; letter-spacing: 0.02em; }
 button { font-family: inherit; cursor: pointer; }
 
 .topbar {
-  display:flex; justify-content:space-between; align-items:center; padding: 14px 24px;
-  background: linear-gradient(180deg, #2a1620, #1a0d13);
-  border-bottom: 2px solid var(--border-bright);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+  display:flex; justify-content:space-between; align-items:center; padding: 18px 24px;
+  background:
+    radial-gradient(ellipse 480px 160px at 22% 50%, rgba(230,163,50,0.18), transparent 70%),
+    linear-gradient(180deg, #1c1109, #0f0906);
+  border-bottom: 2px solid rgba(216,163,61,0.4);
+  box-shadow: 0 2px 20px rgba(173,116,20,0.3);
   flex-wrap: wrap; gap: 8px;
 }
-.topbar h1 { font-size: 21px; color: var(--gold); font-weight: 800; }
+.topbar h1 { display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
+.topbar .crownIcon {
+  width: 30px; height: 30px; flex: none; display: inline-block;
+  filter: drop-shadow(0 0 6px rgba(230,177,72,0.85)) drop-shadow(0 0 12px rgba(201,134,31,0.6));
+}
+.topbar .crownIcon svg { width: 100%; height: 100%; display: block; }
+.topbar .crownIcon .goblet { fill: none; stroke: #f0c975; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+.topbar .crownIcon .goblet-fill { fill: #f0c975; }
+.topbar .crownIcon .drip { fill: #f0c975; stroke: none; }
+.topbar .crownIcon .cut { fill: #150b06; }
+.topbar .titleGlow {
+  font-family: 'Nanum Brush Script', 'Nanum Myeongjo', serif;
+  font-size: 36px; font-weight: 400; letter-spacing: 0.03em;
+  color: #fff3d9;
+  text-shadow:
+    0 0 4px #ffe9b0,
+    0 0 10px #ffd166,
+    0 0 22px #e8a63c,
+    0 0 44px #c9861f,
+    0 0 80px rgba(201,134,31,0.5);
+}
 .topbar .ver { font-size: 12px; color: var(--muted); font-weight: normal; font-family: 'Noto Serif KR', serif; }
 .statusBar { display:flex; gap: 16px; font-size: 13px; color: var(--muted); }
 .statusBar b { color: var(--gold); }
@@ -73,13 +95,41 @@ button { font-family: inherit; cursor: pointer; }
 .cell.pickable { cursor: pointer; }
 .cell.pickable:hover { border-color: var(--gold); box-shadow: 0 0 6px rgba(201,162,75,0.5); }
 .cell.selected { outline: 2px solid var(--crimson-bright); }
-.cell.opened.P { background: linear-gradient(160deg, var(--crimson), #6e1522); color: #fbe6e6; }
-.cell.opened.G { background: linear-gradient(160deg, var(--gold), #8a641f); color: #2a1a02; }
-.cell.opened.S { background: linear-gradient(160deg, var(--silver), #8891ac); color: #1a1a2a; }
-.cell.opened.A { background: linear-gradient(160deg, var(--jade), #2f4d3d); color: #eafff2; }
-.cell.opened.E { background: #241621; color: var(--muted); }
-.cell.clued { border: 2px dashed var(--gold); color: var(--gold); font-weight:bold; }
-.cell .note { position:absolute; bottom:1px; font-size: 9px; }
+.cell.opened { font-size: 22px; }
+.cell.opened.P { background: linear-gradient(160deg, #2a0f16, #170a0e); }
+.cell.opened.G { background: linear-gradient(160deg, #2a2011, #1a130a); }
+.cell.opened.S { background: linear-gradient(160deg, #1c222e, #12151d); }
+.cell.opened.A { background: linear-gradient(160deg, #16261f, #0e1813); }
+.cell.opened.E { background: #1a1016; }
+.cell.clued { border: 2px dashed var(--gold); font-size: 20px; position: relative; }
+
+.cellIcon { width: 26px; height: 26px; display:block; overflow: visible; }
+.cell.clued .cellIcon { width: 19px; height: 19px; opacity: 0.92; }
+.cellIcon .rim, .cellIcon .bowl, .cellIcon .stem, .cellIcon .base {
+  fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round;
+}
+.cellIcon .cut { fill: #170d11; }
+.cellIcon-P .rim, .cellIcon-P .bowl, .cellIcon-P .stem, .cellIcon-P .base { stroke: var(--crimson-bright); }
+.cellIcon-P .drip, .cellIcon-P .glyph { fill: var(--crimson-bright); }
+.cellIcon-P .drip { stroke: none; }
+.cellIcon-P { filter: drop-shadow(0 0 3px rgba(209,66,90,0.9)) drop-shadow(0 0 7px rgba(209,66,90,0.55)); }
+
+.cellIcon-G .rim, .cellIcon-G .bowl, .cellIcon-G .stem, .cellIcon-G .base { stroke: var(--gold); }
+.cellIcon-G .glyph { fill: var(--gold); }
+.cellIcon-G { filter: drop-shadow(0 0 3px rgba(201,162,75,0.9)) drop-shadow(0 0 7px rgba(201,162,75,0.55)); }
+
+.cellIcon-S .rim, .cellIcon-S .bowl, .cellIcon-S .stem, .cellIcon-S .base { stroke: var(--silver); }
+.cellIcon-S .glyph { fill: var(--silver); }
+.cellIcon-S { filter: drop-shadow(0 0 3px rgba(201,211,234,0.9)) drop-shadow(0 0 7px rgba(201,211,234,0.55)); }
+
+.cellIcon-A .bowl, .cellIcon-A .neck, .cellIcon-A .cork, .cellIcon-A .leaf {
+  fill: none; stroke: var(--jade); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round;
+}
+.cellIcon-A { filter: drop-shadow(0 0 3px rgba(95,143,119,0.9)) drop-shadow(0 0 7px rgba(95,143,119,0.55)); }
+.cell.clued .clueMark { position:absolute; top: 1px; right: 4px; font-size: 11px; font-weight: bold; color: var(--gold); }
+.cell.hint-area { outline: 2px solid var(--crimson-bright); outline-offset: -2px; box-shadow: 0 0 9px rgba(209,66,90,0.65) inset; }
+.cell.hint-area.clued { outline-color: var(--gold); }
+.cell .note { position:absolute; bottom:1px; font-size: 9px; color: var(--muted); }
 
 .statgrid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align:center; margin-bottom: 10px; }
 .stat { background: #1a0f14; border: 1px solid var(--border); border-radius: 3px; padding: 9px 4px; }
@@ -92,7 +142,7 @@ button { font-family: inherit; cursor: pointer; }
 .btnRow { display:flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 button.action {
   background: #241521; color: var(--text); border: 1px solid var(--border); border-radius: 2px;
-  padding: 10px 14px; font-size: 13px; font-family: 'Noto Serif KR', serif;
+  padding: 10px 14px; font-size: 13px; font-family: 'Noto Sans KR', sans-serif;
   transition: border-color .15s, color .15s;
 }
 button.action:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
@@ -109,7 +159,7 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 
 .log {
   background: #0c0709; border-top: 2px solid var(--border-bright); padding: 8px 18px; height: 130px;
-  overflow-y: auto; font-size: 12px; color: #b39a75; font-family: 'Noto Serif KR', monospace;
+  overflow-y: auto; font-size: 12px; color: #b39a75; font-family: 'Noto Sans KR', monospace;
 }
 .log div { padding: 1px 0; }
 .adminRow { text-align: right; padding: 6px 18px; background: #0c0709; }
@@ -121,11 +171,52 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .itemChoice { display:flex; gap: 8px; flex-wrap:wrap; margin-top: 6px; }
 .itemPill { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 4px 10px; font-size: 11px; color: var(--text); }
 
+.itemCardGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.itemCard {
+  display:flex; align-items:flex-start; gap: 10px; background: #1a0f14; border: 1px solid var(--border);
+  border-radius: 3px; padding: 12px; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.itemCard:hover { border-color: var(--gold); background: #23151c; }
+.itemCard.disabled { opacity: 0.4; cursor: not-allowed; }
+.itemCardIcon {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; background: #241521; border: 1px solid var(--border);
+  display:flex; align-items:center; justify-content:center; font-size: 20px;
+}
+.itemCardBody { flex: 1; }
+.itemCardTitle { font-family: 'Nanum Myeongjo', serif; font-size: 14px; color: var(--gold); font-weight: 700; margin-bottom: 3px; }
+.itemCardDesc { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
 .endBanner { text-align:center; padding: 32px 10px; }
 .endBanner h2 { font-size: 32px; margin-bottom: 8px; font-family: 'Nanum Myeongjo', serif; }
 .endBanner.win h2 { color: var(--gold); }
 .endBanner.lose h2 { color: var(--crimson-bright); }
 .endBanner.draw h2 { color: var(--muted); }
 
+.historyPanel { min-height: 160px; }
+.historyList { display:flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.historyItem {
+  font-size: 12px; color: var(--text); background: #1a0f14; border-left: 3px solid var(--gold);
+  border-radius: 2px; padding: 6px 10px; line-height: 1.4;
+}
+
 .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .clueResultBox { background: #2c1c0f; border: 1px solid var(--gold); border-radius: 2px; padding: 8px 10px; font-size: 12px; color: var(--gold); margin-top: 8px; }
+
+.rewardBanner .desc { font-size: 12.5px; color: var(--text); line-height: 1.5; }
+.rewardBanner h2 { color: var(--gold); }
+
+.candleDisplay { font-size: 26px; letter-spacing: 4px; margin: 8px 0; line-height: 1.6; }
+
+.bankHistory { display:flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto; margin-bottom: 10px; }
+.bankRow { font-size: 12.5px; background: #1a0f14; border-left: 3px solid var(--border-bright); border-radius: 2px; padding: 5px 9px; }
+.bankInput {
+  width: 90px; background: #0c0709; color: var(--white); border: 1px solid var(--border); border-radius: 2px;
+  padding: 9px 10px; font-size: 15px; letter-spacing: 3px; text-align:center; font-family: 'Noto Sans KR', sans-serif;
+}
+.bankInput:focus { outline: none; border-color: var(--gold); }
+
+.pickerGrid .cell { background: #150c10; }
+.pickerGrid .cell.pickable:hover { background: #241521; }
+
+.flashOverlay { border: 2px solid var(--gold); box-shadow: 0 0 24px rgba(201,162,75,0.5); }
+.flashOverlay .grid6 { max-width: 460px; }
