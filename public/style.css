@@ -58,7 +58,12 @@ button { font-family: inherit; cursor: pointer; }
     0 0 44px #c9861f,
     0 0 80px rgba(201,134,31,0.5);
 }
-.topbar .ver { font-size: 12px; color: var(--muted); font-weight: normal; font-family: 'Noto Serif KR', serif; }
+.topbar .ver {
+  font-size: 16px; font-weight: 400; letter-spacing: 0.01em;
+  font-family: 'Nanum Brush Script', 'Nanum Myeongjo', serif;
+  color: #e8c98c;
+  text-shadow: 0 0 3px rgba(255,224,150,0.5), 0 0 8px rgba(201,134,31,0.35);
+}
 .statusBar { display:flex; gap: 16px; font-size: 13px; color: var(--muted); }
 .statusBar b { color: var(--gold); }
 
@@ -94,7 +99,11 @@ button { font-family: inherit; cursor: pointer; }
 }
 .cell.pickable { cursor: pointer; }
 .cell.pickable:hover { border-color: var(--gold); box-shadow: 0 0 6px rgba(201,162,75,0.5); }
-.cell.selected { outline: 2px solid var(--crimson-bright); }
+.cell.selected {
+  outline: 2px solid var(--crimson-bright);
+  color: #ffd60a; font-size: 22px; font-weight: bold;
+  text-shadow: 0 0 4px rgba(255,214,10,0.9), 0 0 10px rgba(255,214,10,0.6);
+}
 .cell.opened { font-size: 22px; }
 .cell.opened.P { background: linear-gradient(160deg, #2a0f16, #170a0e); }
 .cell.opened.G { background: linear-gradient(160deg, #2a2011, #1a130a); }
@@ -158,6 +167,7 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .badge.wait { background: #1a0f14; color: var(--muted); }
 
 .log {
+  display: none; /* 공용 로그(입장/셋업 등 안내문)는 화면에 노출하지 않음 — 개인 행동 기록 패널로 대체됨 */
   background: #0c0709; border-top: 2px solid var(--border-bright); padding: 8px 18px; height: 130px;
   overflow-y: auto; font-size: 12px; color: #b39a75; font-family: 'Noto Sans KR', monospace;
 }
@@ -208,6 +218,9 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .candleDisplay { font-size: 26px; letter-spacing: 4px; margin: 8px 0; line-height: 1.6; }
 
 .bankHistory { display:flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto; margin-bottom: 10px; }
+.bankDual { display:flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.bankCol { flex: 1 1 220px; display:flex; flex-direction: column; gap: 5px; max-height: 180px; overflow-y: auto; }
+.bankColTitle { font-size: 12px; color: var(--gold); font-weight: 600; margin-bottom: 2px; }
 .bankRow { font-size: 12.5px; background: #1a0f14; border-left: 3px solid var(--border-bright); border-radius: 2px; padding: 5px 9px; }
 .bankInput {
   width: 90px; background: #0c0709; color: var(--white); border: 1px solid var(--border); border-radius: 2px;

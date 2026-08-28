@@ -77,14 +77,18 @@ function newPlayer(id, name) {
     items: [], shield: false, decoyNextClue: false, connected: true,
   };
 }
+let matchSeq = 0;
 function freshMatch() {
+  matchSeq += 1;
   return {
+    seq: matchSeq, // 새 매치(재대전 포함)마다 증가 — 클라이언트가 화면/입력 상태를 리셋하는 신호로 사용
     phase: 'LOBBY', // LOBBY, SETUP, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
     round: 0, minigameOrder: shuffle(MINIGAME_SEQUENCE), minigame: null,
     roundRewardType: null, pendingReward: null,
     actionOrder: [], turnIndex: 0,
+    rematchReady: {},
     log: [], winner: null, endReason: null,
   };
 }
@@ -185,8 +189,9 @@ function initMinigame(type, roundNo) {
     return { ...base, picks: {} };
   }
   if (type === 'BANK') {
-    const secret = shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).slice(0, CONFIG.BANK_DIGITS);
-    return { ...base, secret, turn: firstIsA ? a : b, history: [] };
+    // 각자 자신만의 금고 번호(서로 다른 숫자 N개)를 직접 정한다. 둘 다 정하고 나면
+    // 번갈아 "상대의" 번호를 추리한다 — 숫자야구(스트라이크/볼/아웃) 방식.
+    return { ...base, secrets: {}, firstTurn: firstIsA ? a : b, turn: null, history: { [a]: [], [b]: [] } };
   }
   return base;
 }
@@ -238,7 +243,10 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'PARITY') return handleParity(id, payload, mg);
   if (mg.type === 'SHOWDOWN') return handleShowdown(id, payload, mg);
-  if (mg.type === 'BANK') return handleBank(id, payload, mg);
+  if (mg.type === 'BANK') {
+    if (payload && Array.isArray(payload.secret)) return handleBankSecret(id, payload, mg);
+    return handleBank(id, payload, mg);
+  }
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -403,26 +411,47 @@ function handleShowdown(id, payload, mg) {
   broadcastState();
 }
 
-// 10) 금고 번호 맞추기 — 둘이 함께 같은 비밀번호(서로 다른 숫자 N개)를 번갈아 추리(숫자야구형)
+// 10) 금고 번호 맞추기 — 숫자야구. 각자 자신의 금고 번호를 정한 뒤, 번갈아 상대의 번호를 추리한다.
+// 스트라이크(숫자·자리 모두 일치) / 볼(숫자만 일치) / 아웃(둘 다 없음). 먼저 상대 번호를 완전히 맞히면 승리.
+function isValidDigits(arr) {
+  return Array.isArray(arr) && arr.length === CONFIG.BANK_DIGITS
+    && arr.every((d) => Number.isInteger(d) && d >= 0 && d <= 9)
+    && new Set(arr).size === arr.length;
+}
+function handleBankSecret(id, payload, mg) {
+  if (mg.secrets[id]) return; // 이미 정했으면 변경 불가
+  const secret = Array.isArray(payload.secret) ? payload.secret.map(Number) : null;
+  if (!isValidDigits(secret)) return;
+  mg.secrets[id] = secret;
+  log(`${match.players[id].name}이 자신의 금고 번호를 정했습니다.`);
+  const [a, b] = match.order;
+  if (mg.secrets[a] && mg.secrets[b]) {
+    mg.turn = mg.firstTurn;
+    log('양쪽 모두 번호를 정했습니다 — 이제 서로 상대의 금고를 열어보세요.');
+  }
+  broadcastState();
+}
 function handleBank(id, payload, mg) {
-  if (mg.turn !== id) return;
+  if (mg.turn !== id) return; // 아직 양쪽 다 번호를 정하지 않았거나 내 차례가 아님
+  const oppId = otherId(id);
+  const secret = mg.secrets[oppId];
+  if (!secret) return;
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
-  if (!guess || guess.length !== CONFIG.BANK_DIGITS) return;
-  if (guess.some((d) => !Number.isInteger(d) || d < 0 || d > 9)) return;
-  if (new Set(guess).size !== guess.length) return; // 중복 숫자 불가
+  if (!isValidDigits(guess)) return;
   let strikes = 0, balls = 0;
   guess.forEach((d, i) => {
-    if (mg.secret[i] === d) strikes += 1;
-    else if (mg.secret.includes(d)) balls += 1;
+    if (secret[i] === d) strikes += 1;
+    else if (secret.includes(d)) balls += 1;
   });
-  mg.history.push({ by: id, guess: guess.slice(), strikes, balls });
-  log(`${match.players[id].name}: 금고 번호 ${guess.join('')} 시도 → ${strikes}스트라이크 ${balls}볼`);
+  mg.history[id].push({ guess: guess.slice(), strikes, balls });
+  const outcome = strikes === 0 && balls === 0 ? '아웃' : `${strikes}스트라이크 ${balls}볼`;
+  log(`${match.players[id].name}: 상대 금고에 ${guess.join('')} 시도 → ${outcome}`);
   if (strikes === CONFIG.BANK_DIGITS) {
-    log(`금고가 열렸습니다! 정답은 ${mg.secret.join('')}였습니다.`);
+    log(`${match.players[id].name}이 상대의 금고를 열었습니다! (번호: ${secret.join('')})`);
     broadcastState();
     return endMinigame(id);
   }
-  mg.turn = otherId(id);
+  mg.turn = oppId;
   broadcastState();
 }
 
@@ -725,6 +754,35 @@ function endMatch(reason, winnerId) {
   broadcastState();
 }
 
+// ------------------------------ 재대전(다시 하기) -----------------------------
+function handleRematchReady(id) {
+  if (match.phase !== 'END') return;
+  if (!match.order.includes(id)) return;
+  if (match.rematchReady[id]) return; // 이미 눌렀으면 무시
+  match.rematchReady[id] = true;
+  log(`${match.players[id].name}이(가) 다시 하기를 신청했습니다.`);
+  broadcastState();
+  if (match.order.every((pid) => match.rematchReady[pid])) {
+    resetForRematch();
+  }
+}
+
+// 같은 두 소켓(같은 브라우저 탭)을 그대로 유지한 채, 게임 데이터만 초기화하고 새 셋업을 시작한다.
+// 재접속 없이 곧바로 다음 판을 시작할 수 있게 하기 위함 — 이름(장남/차남)과 연결 상태는 유지한다.
+function resetForRematch() {
+  const order = match.order.slice();
+  const names = order.map((id) => match.players[id].name);
+  const connected = order.map((id) => match.players[id].connected);
+  match = freshMatch();
+  match.order = order;
+  order.forEach((id, i) => {
+    match.players[id] = newPlayer(id, names[i]);
+    match.players[id].connected = connected[i];
+  });
+  log('양측이 다시 하기에 합의했습니다 — 새 게임을 시작합니다.');
+  startSetup();
+}
+
 // ------------------------------ 소켓 -----------------------------------------
 function buildClientState(forId) {
   const me = match.players[forId];
@@ -739,6 +797,7 @@ function buildClientState(forId) {
 
   const pr = match.pendingReward;
   return {
+    seq: match.seq,
     phase: match.phase,
     round: match.round,
     roundsTotal: CONFIG.ROUNDS,
@@ -768,6 +827,7 @@ function buildClientState(forId) {
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
+    rematchReady: { me: !!match.rematchReady[forId], opp: !!match.rematchReady[otherId(forId)] },
     config: CONFIG,
     itemNames: ITEM_NAMES,
     clueCatNames: CLUE_CAT_NAMES,
@@ -804,10 +864,14 @@ function publicMinigameView(mg, forId) {
     return { myPick: mg.picks[forId] ?? null, oppPicked: mg.picks[otherId(forId)] != null, waitingForMe: mg.picks[forId] == null };
   }
   if (mg.type === 'BANK') {
+    const oppId = otherId(forId);
     return {
       digits: CONFIG.BANK_DIGITS,
+      mySecretSet: !!mg.secrets[forId],
+      oppSecretSet: !!mg.secrets[oppId],
       myTurn: mg.turn === forId,
-      history: mg.history.map((h) => ({ by: h.by === forId ? 'me' : 'opp', guess: h.guess, strikes: h.strikes, balls: h.balls })),
+      myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
+      oppGuesses: (mg.history[oppId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
     };
   }
   return {};
@@ -867,6 +931,7 @@ io.on('connection', (socket) => {
   socket.on('action:open', (p) => doAction(socket.id, 'OPEN', p || {}));
   socket.on('action:item_use', (p) => doAction(socket.id, 'ITEM_USE', p || {}));
   socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
+  socket.on('rematch:ready', () => handleRematchReady(socket.id));
 
   socket.on('admin:end', () => { if (match.phase !== 'END') endMatch('관리자가 조기 종료함'); });
   socket.on('admin:reset', () => { match = freshMatch(); broadcastState(); });

@@ -22,6 +22,28 @@ let minigamesSeen = new Set();
 let rewardsSeen = new Set();
 let rewardUsed = { A: false, B: false };
 let bankGuessed = { A: new Set(), B: new Set() };
+let bankSecretSent = { A: false, B: false };
+let bankCandidates = { A: null, B: null };
+
+function allPermutations(n) {
+  const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const results = [];
+  function permute(current, remaining) {
+    if (current.length === n) { results.push(current.slice()); return; }
+    for (let i = 0; i < remaining.length; i++) {
+      const next = remaining.slice();
+      const d = next.splice(i, 1)[0];
+      permute([...current, d], next);
+    }
+  }
+  permute([], digits);
+  return results;
+}
+function scoreGuessAgainst(guess, secret) {
+  let strikes = 0, balls = 0;
+  guess.forEach((d, i) => { if (secret[i] === d) strikes += 1; else if (secret.includes(d)) balls += 1; });
+  return { strikes, balls };
+}
 
 let lastRoundLogged = { A: 0, B: 0 };
 function onState(label, socket, s) {
@@ -103,8 +125,24 @@ function playMinigame(label, socket, s) {
     if (type === 'SHOWDOWN' && mg.waitingForMe) {
       socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 10) });
     }
-    if (type === 'BANK' && mg.myTurn) {
-      const guess = randomUniqueDigits(mg.digits, bankGuessed[label]);
+    if (type === 'BANK' && !mg.mySecretSet && !bankSecretSent[label]) {
+      bankSecretSent[label] = true;
+      const secret = randomUniqueDigits(mg.digits, new Set());
+      socket.emit('minigame:move', { secret });
+    }
+    if (type === 'BANK' && mg.mySecretSet && mg.oppSecretSet && mg.myTurn) {
+      // 순수 무작위 추측은 720개 순열 중 하나를 맞히는 데 평균 수백 번이 걸려 테스트가 느려지므로,
+      // 스트라이크/볼 결과로 후보를 계속 좁혀나가는 간단한 추론 봇을 사용한다(실제 사람의 플레이를 근사).
+      if (!bankCandidates[label]) bankCandidates[label] = allPermutations(mg.digits);
+      if (mg.myGuesses.length) {
+        const last = mg.myGuesses[mg.myGuesses.length - 1];
+        bankCandidates[label] = bankCandidates[label].filter((c) => {
+          const r = scoreGuessAgainst(last.guess, c);
+          return r.strikes === last.strikes && r.balls === last.balls;
+        });
+      }
+      const pool = bankCandidates[label].length ? bankCandidates[label] : allPermutations(mg.digits);
+      const guess = pool[Math.floor(Math.random() * pool.length)];
       bankGuessed[label].add(guess.join(''));
       socket.emit('minigame:move', { guess });
     }

@@ -12,6 +12,7 @@ let guessCountRound = null;
 let guessCountRevealUntil = 0;
 let flashRoom = null; // 섬광 정찰 보상: 0.1초간 전체 공개할 상대 처소 타입 배열
 let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종류
+let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
 
 const CELL_NAME = { P: '독', G: '금', S: '은', A: '해독', E: '' };
 const CELL_EMOJI = { P: '☠️', G: '🥇', S: '🥈', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
@@ -74,12 +75,23 @@ socket.on('rewardResult', (payload) => {
 });
 
 socket.on('state', (state) => {
+  if (state.seq !== seenSeq) {
+    // 새 매치 시작(최초 접속 또는 재대전) — 지난 판에서 남은 화면/입력 상태를 전부 초기화
+    seenSeq = state.seq;
+    setupSelection = [];
+    actionMode = null;
+    itemUseType = null;
+    lastClueResult = null;
+    guessCountRound = null;
+    guessCountRevealUntil = 0;
+    flashRoom = null;
+    rewardChosenType = null;
+  }
   lastState = state;
   render(state);
 });
 
-document.getElementById('btnReset').onclick = () => { if (confirm('전체 게임 상태를 초기화할까요? (두 플레이어 모두 다시 접속해야 할 수 있습니다)')) socket.emit('admin:reset'); };
-document.getElementById('btnEnd').onclick = () => { if (confirm('지금 즉시 게임을 종료할까요?')) socket.emit('admin:end'); };
+document.getElementById('btnReset').onclick = () => { if (confirm('게임을 재시작할까요? (두 플레이어 모두 다시 접속해야 할 수 있습니다)')) socket.emit('admin:reset'); };
 
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
 
@@ -445,35 +457,54 @@ function renderMinigamePanel(state) {
     }
     box.appendChild(row);
   } else if (type === 'BANK') {
-    box.appendChild(el('div', 'desc', `둘이 함께 같은 금고를 풉니다. 0~9 중 서로 다른 숫자 ${mg.digits}개를 맞혀보세요. ⚡스트라이크 = 숫자·위치 모두 일치, ・볼 = 숫자만 일치.`));
-    if (mg.history && mg.history.length) {
-      const hist = el('div', 'bankHistory');
-      mg.history.slice().reverse().forEach((h) => {
-        hist.appendChild(el('div', 'bankRow', `${h.by === 'me' ? '나' : '상대'}: <b>${h.guess.join('')}</b> → ⚡${h.strikes} ・${h.balls}`));
-      });
-      box.appendChild(hist);
-    }
-    if (mg.myTurn) {
-      box.appendChild(el('div', 'hint', `서로 다른 숫자 ${mg.digits}개를 입력하세요.`));
+    box.appendChild(el('div', 'desc', `숫자야구입니다. 각자 나만의 금고 번호(0~9 중 서로 다른 숫자 ${mg.digits}개)를 정하고, 번갈아 상대의 번호를 추리하세요. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
+
+    const makeDigitInput = (buttonLabel, onSubmit) => {
       const row = el('div', 'btnRow');
       const inp = document.createElement('input');
-      inp.type = 'text'; inp.maxLength = mg.digits; inp.className = 'bankInput'; inp.placeholder = `예: 春`.repeat(0) || `숫자 ${mg.digits}개`;
+      inp.type = 'text'; inp.maxLength = mg.digits; inp.className = 'bankInput'; inp.placeholder = `숫자 ${mg.digits}개`;
       inp.inputMode = 'numeric';
-      const btn = el('button', 'action primary', '금고 열기 시도');
+      const btn = el('button', 'action primary', buttonLabel);
       btn.onclick = () => {
-        const raw = inp.value.trim();
-        const digits = raw.split('').map((ch) => Number(ch));
-        if (digits.length !== mg.digits || digits.some((d) => Number.isNaN(d)) || new Set(digits).size !== digits.length) {
-          addLog(`⚠ 서로 다른 숫자 ${mg.digits}개를 입력하세요 (예: 지금과 겹치지 않게).`);
+        const digits = inp.value.trim().split('').map((ch) => Number(ch));
+        if (digits.length !== mg.digits || digits.some((d) => Number.isNaN(d) || d < 0 || d > 9) || new Set(digits).size !== digits.length) {
+          addLog(`⚠ 서로 다른 숫자 ${mg.digits}개를 입력하세요.`);
           return;
         }
-        socket.emit('minigame:move', { guess: digits });
+        onSubmit(digits);
         inp.value = '';
       };
       row.appendChild(inp); row.appendChild(btn);
-      box.appendChild(row);
+      return row;
+    };
+    const outcomeLabel = (h) => (h.strikes === 0 && h.balls === 0 ? '아웃' : `⚡${h.strikes} ・${h.balls}`);
+
+    if (!mg.mySecretSet) {
+      box.appendChild(el('div', 'hint', '먼저 나만의 금고 번호를 정하세요 (상대에게는 보이지 않습니다).'));
+      box.appendChild(makeDigitInput('내 번호로 정하기', (digits) => socket.emit('minigame:move', { secret: digits })));
+    } else if (!mg.oppSecretSet) {
+      box.appendChild(el('div', 'hint', '내 번호 설정 완료. 상대가 번호를 정하는 중입니다...'));
     } else {
-      box.appendChild(el('div', 'hint', '상대의 차례입니다...'));
+      const dual = el('div', 'bankDual');
+      const mine = el('div', 'bankCol');
+      mine.appendChild(el('div', 'bankColTitle', '내가 상대 번호에 시도'));
+      (mg.myGuesses || []).slice().reverse().forEach((h) => {
+        mine.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
+      });
+      const theirs = el('div', 'bankCol');
+      theirs.appendChild(el('div', 'bankColTitle', '상대가 내 번호에 시도'));
+      (mg.oppGuesses || []).slice().reverse().forEach((h) => {
+        theirs.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
+      });
+      dual.appendChild(mine); dual.appendChild(theirs);
+      box.appendChild(dual);
+
+      if (mg.myTurn) {
+        box.appendChild(el('div', 'hint', `상대의 금고 번호를 추리하세요 (서로 다른 숫자 ${mg.digits}개).`));
+        box.appendChild(makeDigitInput('번호 불러보기', (digits) => socket.emit('minigame:move', { guess: digits })));
+      } else {
+        box.appendChild(el('div', 'hint', '상대의 차례입니다...'));
+      }
     }
   }
   p.appendChild(box);
@@ -688,8 +719,24 @@ function renderEnd(state) {
     cols.appendChild(opp);
   }
   p.appendChild(cols);
-  p.appendChild(el('p', 'hint', '다시 테스트하려면 아래 "전체 초기화" 버튼을 사용하세요.'));
   app.appendChild(p);
+  app.appendChild(renderRematchPanel(state));
+}
+
+function renderRematchPanel(state) {
+  const p = el('div', 'panel center');
+  p.appendChild(el('h2', null, '다시 하기'));
+  const rr = state.rematchReady || { me: false, opp: false };
+  if (rr.me) {
+    p.appendChild(el('p', 'badge ' + (rr.opp ? 'win' : 'wait'), rr.opp ? '양측 준비 완료 — 새 게임을 시작합니다...' : '✅ 준비 완료 — 상대방을 기다리는 중...'));
+  } else {
+    const btn = el('button', 'action primary', '🔁 다시 하기');
+    btn.onclick = () => { socket.emit('rematch:ready'); btn.disabled = true; btn.textContent = '대기 중...'; };
+    p.appendChild(btn);
+    if (rr.opp) p.appendChild(el('p', 'hint', '상대방은 이미 다시 하기를 신청했습니다.'));
+  }
+  p.appendChild(el('p', 'hint', '같은 두 사람이 곧바로 다시 대전합니다. 아예 새로 시작하려면(예: 다른 사람과 교체) 아래 "전체 초기화"를 사용하세요.'));
+  return p;
 }
 
 function buildRevealGrid(room) {
