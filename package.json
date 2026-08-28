@@ -1,0 +1,16 @@
+{
+  "name": "poison-goblet-prototype",
+  "version": "0.1.0",
+  "description": "당신의 술잔에 독배를 - 2인 밸런스 테스트용 프로토타입",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}

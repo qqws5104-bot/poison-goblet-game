@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>당신의 술잔에 독배를 — 프로토타입</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>👑 당신의 술잔에 독배를 <span class="ver">— 왕위를 건 형제의 밀실 암투 (밸런스 테스트)</span></h1>
+    <div id="statusBar" class="statusBar"></div>
+  </header>
+
+  <main id="app">
+    <section id="lobby" class="panel center">
+      <p>서버에 접속 중...</p>
+    </section>
+  </main>
+
+  <footer>
+    <div id="log" class="log"></div>
+    <div class="adminRow">
+      <button id="btnReset" class="ghost">전체 초기화(관리자)</button>
+      <button id="btnEnd" class="ghost">즉시 종료(관리자)</button>
+    </div>
+  </footer>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
