@@ -7,7 +7,15 @@ let lastState = null;
 let setupSelection = []; // [{row,col}]
 let guessCountRound = null;
 let guessCountRevealUntil = 0;
-let flashRoom = null; // 섬광 정찰 보상: 0.1초간 전체 공개할 내 처소 타입 배열
+let guessCountTransitioned = false; // 공개→입력 화면 전환을 딱 한 번만 하기 위한 플래그
+let guessCountEntry = ''; // 탁자 위 술잔 개수 세기: 숫자 키패드로 입력 중인 값
+let guessCountScene = []; // 화면에 흩뿌려 놓을 술잔 위치(라운드당 한 번만 계산 — 매번 다시 그릴 때 위치가 흔들리지 않도록)
+let bankEntry = ''; // 금고 번호 맞추기: 숫자 키패드로 입력 중인 값
+let bankRound = null;
+let memoryRound = null;
+let memoryRevealUntil = 0;
+let memoryTransitioned = false;
+let flashRoom = null; // 섬광 정찰 보상: 잠깐 전체 공개할 내 처소 타입 배열
 let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종류
 let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
 
@@ -54,6 +62,75 @@ function selectionMarkSVG() {
     <rect class="cut" x="14.7" y="15.5" width="2.6" height="0.9" rx="0.3"/>
   </svg>`;
 }
+// 탁자 위 술잔 개수 세기 미니게임에서 흩뿌려 놓는 작은 술잔 아이콘(중립 금색 — 독/금/은 의미 없음).
+function sceneCupSVG() {
+  return `<svg viewBox="0 0 32 32" class="sceneCup" aria-hidden="true">
+    <ellipse class="rim" cx="16" cy="8" rx="9.5" ry="1.9"/>
+    <path class="bowl" d="M6.5,8.3 L25.5,8.3 L17.8,19.5 L14.2,19.5 Z"/>
+    <path class="stem" d="M16,19.5 L16,23.6"/>
+    <ellipse class="base" cx="16" cy="24.2" rx="5.2" ry="1.3"/>
+  </svg>`;
+}
+// 매 라운드 한 번만 계산되는, 겹치지 않게 격자를 살짝 흔든 무작위 배치(너무 가지런해 보이지 않게).
+function computeGuessCountScene(count) {
+  const cols = 6, rows = 4; // 24칸 — 최대 20개까지 안전하게 배치 가능
+  const cells = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push({ r, c });
+  for (let i = cells.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cells[i], cells[j]] = [cells[j], cells[i]]; }
+  return cells.slice(0, count).map(({ r, c }) => ({
+    x: (c + 0.5) / cols * 100 + (Math.random() * 10 - 5),
+    y: (r + 0.5) / rows * 100 + (Math.random() * 14 - 7),
+    rot: Math.random() * 50 - 25,
+    scale: 0.85 + Math.random() * 0.4,
+  }));
+}
+// 독배 채우기(NIM) 미니게임: 정확한 숫자 대신, 잔이 얼마나 차올랐는지를 술잔 안에 차오르는
+// 액체로 보여준다. ratio(0~1)만 받아서 그린다 — 정확한 누적/한계 수치는 서버가 아예 내려주지 않음.
+function nimGobletSVG(ratio) {
+  const r = Math.max(0, Math.min(1, ratio || 0));
+  const topY = 8.4, botY = 22, h = botY - topY;
+  const liquidTop = (botY - r * h).toFixed(2);
+  const liquidH = (botY - liquidTop).toFixed(2);
+  return `<svg viewBox="0 0 32 32" class="nimGoblet" aria-hidden="true">
+    <defs><clipPath id="nimClip"><path d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/></clipPath></defs>
+    <rect class="liquid" x="0" y="${liquidTop}" width="32" height="${liquidH}" clip-path="url(#nimClip)"/>
+    <ellipse class="rim" cx="16" cy="8" rx="11.6" ry="2.2"/>
+    <path class="bowl" d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/>
+    <path class="stem" d="M16,22 L16,26.8"/>
+    <ellipse class="base" cx="16" cy="27.6" rx="6.2" ry="1.6"/>
+  </svg>`;
+}
+
+// 폭탄 눈치 넘기기 / 안전핀 뽑기 배팅 버튼에 쓰는 일러스트풍 아이콘(기존 손그림 SVG와 같은 화법).
+function bombIconSVG() {
+  return `<svg viewBox="0 0 32 32" class="mgIcon mgIcon-bomb" aria-hidden="true">
+    <path class="fuse" d="M17.5,8.5 C18.5,5.6 21.3,3.6 24.5,3.6"/>
+    <path class="spark" d="M24.5,1.6 L24.5,3.2 M22.7,3.9 L23.9,4.9 M26.6,3.9 L25.4,4.9 M26.5,1.9 L25.3,3.6"/>
+    <circle class="body" cx="15.5" cy="19.5" r="10.8"/>
+    <path class="shine" d="M9,14.5 C10.2,11.8 13,10.2 15.8,10.4"/>
+  </svg>`;
+}
+function pinIconSVG() {
+  return `<svg viewBox="0 0 32 32" class="mgIcon mgIcon-pin" aria-hidden="true">
+    <circle class="ring" cx="11" cy="8.5" r="5.4"/>
+    <path class="shaft" d="M11,13.9 L11,19.5"/>
+    <path class="leg1" d="M11,19.5 Q7,23.5 5,29"/>
+    <path class="leg2" d="M11,19.5 Q15.5,23.5 18,29"/>
+  </svg>`;
+}
+
+// 사라진 유품 찾기(MEMORY) 미니게임에서 쓰는 5가지 유품 아이콘 — 기존 손그림 SVG와 같은 화법.
+const MEMORY_NAMES_KR = { CROWN: '왕관', SCROLL: '밀서', DAGGER: '단검', RING: '인장 반지', KEY: '열쇠' };
+function memoryIconSVG(key) {
+  const paths = {
+    CROWN: `<path class="ln" d="M5,22 L7,11 L12,16 L16,9 L20,16 L25,11 L27,22 Z"/><path class="ln" d="M5,22 L27,22 L27,25 L5,25 Z"/>`,
+    SCROLL: `<rect class="ln" x="7" y="8" width="18" height="16" rx="1.5"/><circle class="rod" cx="7" cy="8" r="2.4"/><circle class="rod" cx="7" cy="24" r="2.4"/><circle class="rod" cx="25" cy="8" r="2.4"/><circle class="rod" cx="25" cy="24" r="2.4"/><path class="ln2" d="M11,13 L21,13 M11,17 L21,17 M11,21 L18,21"/>`,
+    DAGGER: `<path class="ln" d="M16,4 L19,17 L16,20 L13,17 Z"/><path class="ln2" d="M9,17 L23,17"/><path class="ln" d="M13.5,17 L13.5,22 L16,25 L18.5,22 L18.5,17"/>`,
+    RING: `<circle class="ln" cx="16" cy="20" r="7"/><path class="ln" d="M11,13 L16,5 L21,13 Z"/><circle class="gem" cx="16" cy="10.5" r="2"/>`,
+    KEY: `<circle class="ln" cx="10" cy="11" r="5.5"/><path class="ln2" d="M14,15 L25,26 M20,21 L24,17 M23,24 L27,20"/>`,
+  };
+  return `<svg viewBox="0 0 32 32" class="memIcon memIcon-${key}" aria-hidden="true">${paths[key] || ''}</svg>`;
+}
 
 function addLog(msg) {
   const div = document.createElement('div');
@@ -72,9 +149,10 @@ socket.on('reload', () => { location.reload(); });
 socket.on('rewardResult', (payload) => {
   if (payload.kind === 'FLASH_ALL') {
     flashRoom = payload.room;
-    addLog('⚡ 섬광 정찰 — 내 처소 전체가 0.1초간 드러났습니다.');
+    const revealMs = payload.revealMs || 500;
+    addLog(`⚡ 섬광 정찰 — 내 처소 전체가 ${(revealMs / 1000).toFixed(1)}초간 드러났습니다.`);
     render(lastState);
-    setTimeout(() => { flashRoom = null; render(lastState); }, 100);
+    setTimeout(() => { flashRoom = null; render(lastState); }, revealMs);
     return;
   }
   if (payload.kind === 'PEEK_CELL') {
@@ -94,6 +172,14 @@ socket.on('state', (state) => {
     setupSelection = [];
     guessCountRound = null;
     guessCountRevealUntil = 0;
+    guessCountTransitioned = false;
+    guessCountEntry = '';
+    guessCountScene = [];
+    bankEntry = '';
+    bankRound = null;
+    memoryRound = null;
+    memoryRevealUntil = 0;
+    memoryTransitioned = false;
     flashRoom = null;
     rewardChosenType = null;
   }
@@ -104,6 +190,44 @@ socket.on('state', (state) => {
 document.getElementById('btnReset').onclick = () => { if (confirm('게임을 재시작할까요? (두 플레이어 모두 다시 접속해야 할 수 있습니다)')) socket.emit('admin:reset'); };
 
 function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+
+// 숫자 입력이 필요한 미니게임(촛불 개수 맞히기 / 금고 번호 맞추기)에서 공용으로 쓰는 화면 키패드.
+// 예전에는 <input type=number>를 썼는데, 서버 상태가 자주 갱신될 때마다 화면 전체가 다시 그려지며
+// 입력하던 값이 통째로 지워지는 문제가 있었다("갯수입력이 잘 안되네"). 값을 DOM이 아니라 JS 변수에
+// 저장하고 버튼 클릭으로만 값을 바꾸는 방식으로 바꿔서, 다시 그려져도 값이 유지되게 했다.
+function numKeypad(opts) {
+  const wrap = el('div', 'numpadWrap');
+  const display = el('div', 'numpadDisplay', opts.get() || '&nbsp;');
+  wrap.appendChild(display);
+  const refreshDisplay = () => { display.textContent = opts.get() || ' '; };
+  const pad = el('div', 'numpad');
+  const appendDigit = (d) => {
+    const cur = opts.get();
+    if (cur.length >= opts.maxLen) return;
+    if (opts.allowDigit && !opts.allowDigit(d, cur)) return;
+    opts.set(cur + d);
+    refreshDisplay();
+  };
+  for (let n = 1; n <= 9; n++) {
+    const b = el('button', 'numkey', String(n));
+    b.onclick = () => appendDigit(String(n));
+    pad.appendChild(b);
+  }
+  const back = el('button', 'numkey numkeyFn', '⌫');
+  back.onclick = () => { opts.set(opts.get().slice(0, -1)); refreshDisplay(); };
+  pad.appendChild(back);
+  const zero = el('button', 'numkey', '0');
+  zero.onclick = () => appendDigit('0');
+  pad.appendChild(zero);
+  const submit = el('button', 'numkey numkeyFn primary', opts.submitLabel || '제출');
+  submit.onclick = () => {
+    const ok = opts.onSubmit(opts.get());
+    if (ok !== false) { opts.set(''); refreshDisplay(); }
+  };
+  pad.appendChild(submit);
+  wrap.appendChild(pad);
+  return wrap;
+}
 
 function render(state) {
   if (flashRoom) return renderFlashOverlay(flashRoom);
@@ -116,10 +240,12 @@ function render(state) {
   return renderMain(state);
 }
 
+// 섬광 정찰 보상 연출 — 옛날 예능의 "철가방(배달통)" 개그처럼, 뚜껑이 확 열렸다가 순식간에
+// 다시 닫히는 느낌으로 내 처소 전체를 아주 잠깐 보여준다.
 function renderFlashOverlay(room) {
   app.innerHTML = '';
-  const p = el('div', 'panel flashOverlay');
-  p.appendChild(el('h2', null, '⚡ 섬광 정찰 — 내 처소 전체 (0.1초)'));
+  const p = el('div', 'panel flashOverlay boxOpenAnim');
+  p.appendChild(el('h2', null, '🍱 철가방 정찰 — 뚜껑이 열린 순간!'));
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
@@ -208,7 +334,6 @@ function renderMain(state) {
   if (state.phase === 'ROUND_MINIGAME') right.appendChild(renderMinigamePanel(state));
   if (state.phase === 'ROUND_ACTION') right.appendChild(renderActionPanel(state));
   if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.used) right.appendChild(renderRewardPanel(state));
-  right.appendChild(renderHistoryPanel(state));
   cols.appendChild(right);
 
   app.appendChild(cols);
@@ -252,10 +377,12 @@ function renderStatsPanel(state) {
   mine.appendChild(statGrid(state.me));
   wrap.appendChild(mine);
 
+  // 상대의 점수/독/해독제 현황은 게임이 끝나기 전까지 비공개 — 서로의 패를 못 보게 하는 것이
+  // 이 게임의 핵심 재미이므로, 실시간으로 다 보여주지 않는다(최종 결과 화면에서만 공개).
   if (state.opp) {
     const opp = el('div', 'col');
-    opp.appendChild(el('h3', null, `상대 처소 (${state.opp.name}) ${state.opp.connected ? '' : '<span class="hint">(연결 끊김)</span>'}`));
-    opp.appendChild(statGrid(state.opp));
+    opp.appendChild(el('h3', null, `상대 (${state.opp.name}) ${state.opp.connected ? '' : '<span class="hint">(연결 끊김)</span>'}`));
+    opp.appendChild(el('p', 'hint', '상대의 점수·독·해독제 현황은 게임이 끝날 때까지 비공개입니다.'));
     wrap.appendChild(opp);
   }
   p.appendChild(wrap);
@@ -313,7 +440,10 @@ function renderMinigamePanel(state) {
   const type = state.minigame.type;
 
   if (type === 'NIM') {
-    box.appendChild(el('div', 'desc', `번갈아 1~3만큼 잔을 채웁니다. 누적이 ${mg.limit} 이상이 되게 만든 사람이 이번 미니게임에서 집니다. (현재 누적: ${mg.count}/${mg.limit})`));
+    box.appendChild(el('div', 'desc', '번갈아 1~3만큼 독배를 채웁니다. 정확히 몇 번째에 넘치는지는 아무도 모릅니다 — 넘치게 만든 사람이 이번 미니게임에서 집니다.'));
+    const gobletWrap = el('div', 'nimGobletWrap');
+    gobletWrap.innerHTML = nimGobletSVG(mg.fillRatio);
+    box.appendChild(gobletWrap);
     const row = el('div', 'btnRow');
     [1, 2, 3].forEach((n) => {
       const b = el('button', 'action', `${n}칸 채우기`);
@@ -347,32 +477,30 @@ function renderMinigamePanel(state) {
       box.appendChild(row);
     }
   } else if (type === 'REFLEX') {
-    box.appendChild(el('div', 'desc', '신호가 뜨면 최대한 빠르게 눌러 잔을 낚아채세요. 신호가 뜨기 전에 누르면 성급하게 움직인 것으로 간주되어 그 자리에서 패배합니다.'));
-    const row = el('div', 'btnRow');
-    const b = el('button', 'action' + (mg.goFired ? ' primary danger' : ''), mg.goFired ? '지금! 잔 낚아채기' : '대기 중... (누르면 바로 판정됩니다)');
-    b.disabled = mg.myClicked;
-    b.onclick = () => socket.emit('minigame:move', { action: 'CLICK' });
-    row.appendChild(b);
-    box.appendChild(row);
+    // 완전히 암전된 화면이었다가, 무작위 순간에 잔이 환하게 밝혀지면 그때 가장 먼저 누르는 사람이 승리.
+    // 어두울 때 누르면 성급하게 움직인 것으로 간주되어 그 자리에서 즉시 패배한다.
+    box.appendChild(el('div', 'desc', '화면이 완전히 어두워집니다. 잔이 환하게 밝혀지는 순간, 누구보다 빨리 클릭하세요. 어두울 때 클릭하면 즉시 패배합니다.'));
+    const stage = el('div', 'reflexStage' + (mg.goFired ? ' lit' : ''));
+    stage.innerHTML = mg.goFired
+      ? `<div class="reflexGoblet">${sceneCupSVG()}</div><div class="reflexCta">지금 클릭!</div>`
+      : '<div class="reflexDark">잔이 어둠 속에 있습니다...</div>';
+    if (!mg.myClicked) stage.onclick = () => socket.emit('minigame:move', { action: 'CLICK' });
+    else stage.classList.add('done');
+    box.appendChild(stage);
     if (mg.myClicked) box.appendChild(el('div', 'hint', '상대의 반응을 기다리는 중...'));
-    else if (!mg.goFired) box.appendChild(el('div', 'hint', '아직 신호 전입니다 — 성급하게 누르지 마세요.'));
   } else if (type === 'BOMB') {
-    box.appendChild(el('div', 'desc', `폭탄이 숨겨진 순간에 터집니다. 지금까지 ${mg.passes}번 넘겨졌습니다. 터질 때 들고 있으면 집니다.`));
-    const row = el('div', 'btnRow');
-    const b = el('button', 'action danger', '폭탄 넘기기');
+    box.appendChild(el('div', 'desc', `정해진 시간이 다 되면 터집니다. 지금까지 ${mg.passes}번 넘겨졌습니다. 터지는 순간 들고 있으면 집니다.`));
+    const b = el('button', 'iconBtn danger' + (mg.myTurn ? '' : ' waiting'), `${bombIconSVG()}<span>폭탄 넘기기</span>`);
     b.disabled = !mg.myTurn;
     b.onclick = () => socket.emit('minigame:move', { action: 'PASS' });
-    row.appendChild(b);
-    box.appendChild(row);
+    box.appendChild(b);
     box.appendChild(turnBadge(mg.myTurn, '지금 내가 들고 있음'));
   } else if (type === 'PIN') {
     box.appendChild(el('div', 'desc', `안전핀을 번갈아 뽑습니다. 지금까지 ${mg.pulls}번 뽑았습니다. 언제 터질지는 아무도 모릅니다.`));
-    const row = el('div', 'btnRow');
-    const b = el('button', 'action danger', '핀 뽑기');
+    const b = el('button', 'iconBtn danger' + (mg.myTurn ? '' : ' waiting'), `${pinIconSVG()}<span>핀 뽑기</span>`);
     b.disabled = !mg.myTurn;
     b.onclick = () => socket.emit('minigame:move', { action: 'PULL' });
-    row.appendChild(b);
-    box.appendChild(row);
+    box.appendChild(b);
     box.appendChild(turnBadge(mg.myTurn));
   } else if (type === 'SIGIL') {
     box.appendChild(el('div', 'desc', '검은 독배를 베고, 독배는 방패에 스며들고, 방패는 검을 막습니다. 상대와 동시에 하나를 고르세요.'));
@@ -386,25 +514,41 @@ function renderMinigamePanel(state) {
     box.appendChild(row);
     if (!mg.waitingForMe) box.appendChild(el('div', 'hint', mg.oppPicked ? '결과 공개 중...' : '상대의 선택을 기다리는 중...'));
   } else if (type === 'GUESS_COUNT') {
-    if (guessCountRound !== state.round) { guessCountRound = state.round; guessCountRevealUntil = Date.now() + 1500; }
+    if (guessCountRound !== state.round) {
+      guessCountRound = state.round;
+      guessCountRevealUntil = Date.now() + 2000;
+      guessCountTransitioned = false;
+      guessCountEntry = '';
+      guessCountScene = computeGuessCountScene(mg.trueCount);
+    }
     const remaining = guessCountRevealUntil - Date.now();
     if (remaining > 0 && mg.myGuess == null) {
-      box.appendChild(el('div', 'desc', '촛불 개수를 잘 봐두세요 — 잠시 후 화면에서 사라집니다.'));
-      box.appendChild(el('div', 'candleDisplay', '🕯️'.repeat(mg.trueCount)));
+      box.appendChild(el('div', 'desc', '탁자 위에 놓인 술잔을 잘 세어두세요 — 잠시 후 사라집니다.'));
+      const scene = el('div', 'guessScene');
+      guessCountScene.forEach((pos) => {
+        const cup = el('div', 'guessSceneItem', sceneCupSVG());
+        cup.style.left = pos.x + '%';
+        cup.style.top = pos.y + '%';
+        cup.style.transform = `translate(-50%, -50%) rotate(${pos.rot.toFixed(1)}deg) scale(${pos.scale.toFixed(2)})`;
+        scene.appendChild(cup);
+      });
+      box.appendChild(scene);
       box.appendChild(el('div', 'hint', `${Math.max(1, Math.ceil(remaining / 1000))}초 후 가려집니다`));
     } else if (mg.myGuess == null) {
       box.appendChild(el('div', 'desc', '몇 개였을까요? 가장 가깝게 맞히는 쪽이 이깁니다.'));
-      const row = el('div', 'btnRow');
-      const inp = document.createElement('input');
-      inp.type = 'number'; inp.min = '0'; inp.max = '20'; inp.className = 'bankInput'; inp.placeholder = '개수';
-      const btn = el('button', 'action primary', '추측 제출');
-      btn.onclick = () => {
-        const n = Number(inp.value);
-        if (!Number.isInteger(n) || n < 0 || n > 20) { addLog('⚠ 0~20 사이의 숫자를 입력하세요.'); return; }
-        socket.emit('minigame:move', { guess: n });
-      };
-      row.appendChild(inp); row.appendChild(btn);
-      box.appendChild(row);
+      box.appendChild(numKeypad({
+        get: () => guessCountEntry,
+        set: (v) => { guessCountEntry = v; },
+        maxLen: 2,
+        allowDigit: (d, cur) => Number(cur + d) <= 20,
+        submitLabel: '추측 제출',
+        onSubmit: (entry) => {
+          const n = Number(entry);
+          if (!entry || !Number.isInteger(n) || n < 0 || n > 20) { addLog('⚠ 0~20 사이의 숫자를 입력하세요.'); return false; }
+          socket.emit('minigame:move', { guess: n });
+          return true;
+        },
+      }));
     } else {
       box.appendChild(el('div', 'desc', `내 추측: ${mg.myGuess}개 — 상대 추측을 기다리는 중...`));
     }
@@ -419,54 +563,67 @@ function renderMinigamePanel(state) {
     });
     box.appendChild(row);
   } else if (type === 'BANK') {
-    box.appendChild(el('div', 'desc', `숫자야구입니다. 각자 나만의 금고 번호(0~9 중 서로 다른 숫자 ${mg.digits}개)를 정하고, 번갈아 상대의 번호를 추리하세요. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
+    // 시스템이 금고 번호를 하나 정해두고, 두 사람이 순서 없이 동시에 계속 추리할 수 있다 —
+    // 먼저 정확히 맞히는 쪽이 승리.
+    if (bankRound !== state.round) { bankRound = state.round; bankEntry = ''; }
+    box.appendChild(el('div', 'desc', `숫자야구입니다. 시스템이 금고 번호(0~9 중 서로 다른 숫자 ${mg.digits}개)를 정해두었습니다. 두 사람이 동시에 추리할 수 있으니, 먼저 정확히 맞히는 쪽이 이깁니다. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
 
-    const makeDigitInput = (buttonLabel, onSubmit) => {
-      const row = el('div', 'btnRow');
-      const inp = document.createElement('input');
-      inp.type = 'text'; inp.maxLength = mg.digits; inp.className = 'bankInput'; inp.placeholder = `숫자 ${mg.digits}개`;
-      inp.inputMode = 'numeric';
-      const btn = el('button', 'action primary', buttonLabel);
-      btn.onclick = () => {
-        const digits = inp.value.trim().split('').map((ch) => Number(ch));
-        if (digits.length !== mg.digits || digits.some((d) => Number.isNaN(d) || d < 0 || d > 9) || new Set(digits).size !== digits.length) {
-          addLog(`⚠ 서로 다른 숫자 ${mg.digits}개를 입력하세요.`);
-          return;
-        }
-        onSubmit(digits);
-        inp.value = '';
-      };
-      row.appendChild(inp); row.appendChild(btn);
-      return row;
-    };
     const outcomeLabel = (h) => (h.strikes === 0 && h.balls === 0 ? '아웃' : `⚡${h.strikes} ・${h.balls}`);
 
-    if (!mg.mySecretSet) {
-      box.appendChild(el('div', 'hint', '먼저 나만의 금고 번호를 정하세요 (상대에게는 보이지 않습니다).'));
-      box.appendChild(makeDigitInput('내 번호로 정하기', (digits) => socket.emit('minigame:move', { secret: digits })));
-    } else if (!mg.oppSecretSet) {
-      box.appendChild(el('div', 'hint', '내 번호 설정 완료. 상대가 번호를 정하는 중입니다...'));
-    } else {
-      const dual = el('div', 'bankDual');
-      const mine = el('div', 'bankCol');
-      mine.appendChild(el('div', 'bankColTitle', '내가 상대 번호에 시도'));
-      (mg.myGuesses || []).slice().reverse().forEach((h) => {
-        mine.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
-      });
-      const theirs = el('div', 'bankCol');
-      theirs.appendChild(el('div', 'bankColTitle', '상대가 내 번호에 시도'));
-      (mg.oppGuesses || []).slice().reverse().forEach((h) => {
-        theirs.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
-      });
-      dual.appendChild(mine); dual.appendChild(theirs);
-      box.appendChild(dual);
+    const dual = el('div', 'bankDual');
+    const mine = el('div', 'bankCol');
+    mine.appendChild(el('div', 'bankColTitle', '내 시도'));
+    (mg.myGuesses || []).slice().reverse().forEach((h) => {
+      mine.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
+    });
+    const theirs = el('div', 'bankCol');
+    theirs.appendChild(el('div', 'bankColTitle', '상대 시도'));
+    (mg.oppGuesses || []).slice().reverse().forEach((h) => {
+      theirs.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
+    });
+    dual.appendChild(mine); dual.appendChild(theirs);
+    box.appendChild(dual);
 
-      if (mg.myTurn) {
-        box.appendChild(el('div', 'hint', `상대의 금고 번호를 추리하세요 (서로 다른 숫자 ${mg.digits}개).`));
-        box.appendChild(makeDigitInput('번호 불러보기', (digits) => socket.emit('minigame:move', { guess: digits })));
-      } else {
-        box.appendChild(el('div', 'hint', '상대의 차례입니다...'));
-      }
+    box.appendChild(el('div', 'hint', `금고 번호를 추리하세요 (서로 다른 숫자 ${mg.digits}개, 몇 번이든 시도 가능).`));
+    box.appendChild(numKeypad({
+      get: () => bankEntry,
+      set: (v) => { bankEntry = v; },
+      maxLen: mg.digits,
+      allowDigit: (d, cur) => !cur.includes(d),
+      submitLabel: '번호 불러보기',
+      onSubmit: (entry) => {
+        const digits = entry.split('').map((ch) => Number(ch));
+        if (digits.length !== mg.digits || new Set(digits).size !== digits.length) {
+          addLog(`⚠ 서로 다른 숫자 ${mg.digits}개를 입력하세요.`);
+          return false;
+        }
+        socket.emit('minigame:move', { guess: digits });
+        return true;
+      },
+    }));
+  } else if (type === 'MEMORY') {
+    if (memoryRound !== state.round) { memoryRound = state.round; memoryRevealUntil = mg.revealUntil; memoryTransitioned = false; }
+    const remaining = memoryRevealUntil - Date.now();
+    if (remaining > 0 && !mg.myAnswered) {
+      box.appendChild(el('div', 'desc', '아래 유품들을 잘 봐두세요 — 잠시 후 하나가 사라진 채로 다시 보여드립니다.'));
+      const row = el('div', 'memoryRow');
+      mg.shown.forEach((key) => {
+        row.appendChild(el('div', 'memoryItem', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`));
+      });
+      box.appendChild(row);
+      box.appendChild(el('div', 'hint', `${Math.max(1, Math.ceil(remaining / 1000))}초 후 가려집니다`));
+    } else if (!mg.myAnswered) {
+      box.appendChild(el('div', 'desc', '방금 보여드린 5개 중 없었던 유품 1개를 고르세요. 더 정확하고 빠르게 맞히는 쪽이 이깁니다.'));
+      const row = el('div', 'memoryRow');
+      mg.pool.forEach((key) => {
+        const b = el('button', 'memoryChoice', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`);
+        b.onclick = () => socket.emit('minigame:move', { choice: key });
+        row.appendChild(b);
+      });
+      box.appendChild(row);
+    } else {
+      box.appendChild(el('div', 'desc', '답을 제출했습니다 — 상대의 답을 기다리는 중...'));
+      box.appendChild(el('div', 'hint', mg.oppAnswered ? '결과 공개 중...' : '상대는 아직 고르는 중입니다...'));
     }
   }
   p.appendChild(box);
@@ -483,11 +640,13 @@ function turnBadge(myTurn, label) {
 function renderActionPanel(state) {
   const p = el('div', 'panel');
   p.appendChild(el('h2', null, '본행동'));
+  // 처소 열기는 두 사람이 동시에 각자 진행한다 — 서로 기다릴 필요 없이 바로 열면 된다.
   if (!state.isMyTurn) {
-    p.appendChild(el('p', 'hint', '상대의 턴입니다. 잠시 기다려주세요...'));
+    p.appendChild(el('p', 'badge', '✅ 이번 라운드 몫을 다 열었습니다.'));
+    p.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? `상대는 아직 ${state.oppOpensRemaining}칸 더 열어야 합니다...` : '상대도 완료했습니다 — 다음 라운드로 넘어갑니다.'));
     return p;
   }
-  p.appendChild(el('p', 'badge turn', `내 턴 — 왼쪽 "내 처소"에서 열고 싶은 칸 ${state.opensRemaining}개를 고르세요`));
+  p.appendChild(el('p', 'badge turn', `왼쪽 "내 처소"에서 열고 싶은 칸 ${state.opensRemaining}개를 고르세요 (상대와 동시에 진행됩니다)`));
   return p;
 }
 
@@ -499,8 +658,8 @@ function renderRewardPanel(state) {
   const r = state.myReward;
 
   if (r.type === 'FLASH_ALL') {
-    const remaining = r.expiresAt ? Math.max(0, Math.ceil((r.expiresAt - Date.now()) / 1000)) : 0;
-    box.appendChild(el('div', 'desc', `30초 안의 무작위 순간에 내 처소 전체가 저절로 0.1초간 드러납니다. 늦어도 ${remaining}초 안에는 발동됩니다 — 잘 지켜보세요.`));
+    // 정확히 언제 터질지는 알려주지 않는다 — 예측 가능해지면 보상의 의미가 없어짐.
+    box.appendChild(el('div', 'desc', '🍱 철가방 정찰 — 무작위 순간에 내 처소 전체의 뚜껑이 확 열렸다가 저절로 잠깐 드러납니다. 언제 올지 모르니 잘 지켜보세요.'));
   } else if (r.type === 'PEEK_CELL') {
     box.appendChild(el('div', 'desc', '내 처소에서 확인할 칸 1개를 고르세요 (아래는 내 처소의 좌표판입니다).'));
     const grid = el('div', 'grid6 pickerGrid');
@@ -600,14 +759,17 @@ function buildRevealGrid(room) {
 
 setInterval(() => {
   if (!lastState) return;
-  // 촛불 개수 맞히기: 공개 시간이 지나면 새 서버 상태 없이도 "추측 입력" 화면으로 넘어가야 함
-  if (lastState.phase === 'ROUND_MINIGAME' && lastState.minigame && lastState.minigame.type === 'GUESS_COUNT'
+  // 촛불 개수 맞히기: 공개 시간이 지나면 새 서버 상태 없이도 "추측 입력" 화면으로 딱 한 번 전환한다.
+  // (전환 후에는 계속 다시 그리지 않음 — 숫자 키패드 입력 중에 화면이 계속 다시 그려지면 입력이 씹히던 문제의 재발을 막기 위함)
+  if (!guessCountTransitioned && lastState.phase === 'ROUND_MINIGAME' && lastState.minigame && lastState.minigame.type === 'GUESS_COUNT'
       && lastState.minigame.public.myGuess == null && guessCountRevealUntil && Date.now() >= guessCountRevealUntil) {
-    render(lastState);
-    return;
-  }
-  // 섬광 정찰 보상: 남은 시간 카운트다운 갱신
-  if (lastState.phase === 'ROUND_ACTION' && lastState.myReward && lastState.myReward.type === 'FLASH_ALL' && !lastState.myReward.used) {
+    guessCountTransitioned = true;
     render(lastState);
   }
-}, 500);
+  // 사라진 유품 찾기: 공개 시간이 지나면 새 서버 상태 없이도 "선택" 화면으로 딱 한 번 전환한다.
+  if (!memoryTransitioned && lastState.phase === 'ROUND_MINIGAME' && lastState.minigame && lastState.minigame.type === 'MEMORY'
+      && !lastState.minigame.public.myAnswered && memoryRevealUntil && Date.now() >= memoryRevealUntil) {
+    memoryTransitioned = true;
+    render(lastState);
+  }
+}, 300);

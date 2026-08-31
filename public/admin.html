@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>관리자 화면 — 당신의 술잔에 독배를</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1><span class="titleGlow" style="font-size:26px;">관리자 화면</span><span class="ver">— 장남 · 차남 실시간 처소</span></h1>
+    <div id="statusBar" class="statusBar"></div>
+  </header>
+
+  <main id="app" style="max-width: 1100px;">
+    <section class="panel center"><p>연결 중...</p></section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

@@ -16,22 +16,26 @@ const CONFIG = {
   POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
   ROUNDS: 10,             // 총 라운드 수 (고정)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
-  NIM_LIMIT: 15,          // 독배 채우기: 이 숫자에 도달/초과시키면 그 사람이 패배
-  BOMB_FUSE_MIN: 3, BOMB_FUSE_MAX: 7,
+  NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
+  BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_POP_MIN: 3, PIN_POP_MAX: 8,
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_MS: 30000, // 섬광 정찰 보상: 이 시간(ms) 안의 무작위 순간에 자동으로 0.1초간 발동
+  REWARD_FLASH_MS: 30000,       // 섬광 정찰 보상: 이 시간(ms) 안의 무작위 순간에 자동 발동
+  REWARD_FLASH_REVEAL_MS: 500, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms)
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
 // 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 9종을 섞은 뒤 하나를 무작위로 한 번 더 채운다(buildMinigameOrder).
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'BANK'];
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'BANK', 'MEMORY'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
-  SIGIL: '표식 대결', GUESS_COUNT: '촛불 개수 맞히기', PARITY: '숫자 합 홀짝',
-  BANK: '금고 번호 맞추기',
+  SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기', PARITY: '숫자 합 홀짝',
+  BANK: '금고 번호 맞추기', MEMORY: '사라진 유품 찾기',
 };
+// 사라진 유품 찾기(MEMORY): 5개 중 4개를 잠깐 보여준 뒤, 보이지 않았던 1개를 맞히는 기억력 게임.
+const MEMORY_POOL = ['CROWN', 'SCROLL', 'DAGGER', 'RING', 'KEY'];
+const MEMORY_NAMES_KR = { CROWN: '왕관', SCROLL: '밀서', DAGGER: '단검', RING: '인장 반지', KEY: '열쇠' };
 function buildMinigameOrder() {
   const order = shuffle(MINIGAME_SEQUENCE);
   while (order.length < CONFIG.ROUNDS) {
@@ -51,7 +55,7 @@ const CELL_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해�
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
-  FLASH_ALL: '섬광 정찰 — 30초 안의 무작위 순간, 내 처소 전체가 저절로 0.1초간 드러남',
+  FLASH_ALL: '철가방 정찰 — 무작위 순간, 내 처소 전체가 뚜껑처럼 확 열렸다가 저절로 잠깐 드러남',
   PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
   ROW_COUNT: '행 정찰 — 내 처소 원하는 행에서 지정한 술잔 개수 확인',
   COL_COUNT: '열 정찰 — 내 처소 원하는 열에서 지정한 술잔 개수 확인',
@@ -68,6 +72,7 @@ for (const key of Object.keys(CONFIG)) {
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -98,7 +103,7 @@ function freshMatch() {
     setupSelections: {},
     round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
     roundRewardType: null, pendingReward: null,
-    actionOrder: [], turnIndex: 0, opensThisTurn: 0,
+    actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     rematchReady: {},
     log: [], winner: null, endReason: null,
   };
@@ -117,6 +122,7 @@ function actionLog(player, msg) {
 }
 function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function randomDistinctDigits(n) { return shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).slice(0, n); }
 
 // ------------------------------ 셋업 -----------------------------------------
 function startSetup() {
@@ -172,7 +178,9 @@ function initMinigame(type, roundNo) {
   const firstIsA = roundNo % 2 === 1; // 라운드마다 선공 교대
   const base = { type, moves: {}, result: null };
   if (type === 'NIM') {
-    return { ...base, count: 0, turn: firstIsA ? a : b, limit: CONFIG.NIM_LIMIT };
+    // 목표치(limit)를 매 판 15~30 사이에서 무작위로 정하고, 클라이언트에는 이 숫자를 노출하지 않는다
+    // (publicMinigameView에서 fillRatio로만 시각화 — 술잔이 차오르는 이미지로만 보여준다).
+    return { ...base, count: 0, turn: firstIsA ? a : b, limit: randInt(CONFIG.NIM_LIMIT_MIN, CONFIG.NIM_LIMIT_MAX) };
   }
   if (type === 'HAND') {
     return { ...base, hider: firstIsA ? a : b, guesser: firstIsA ? b : a, hiderPick: null, guesserPick: null };
@@ -191,7 +199,19 @@ function initMinigame(type, roundNo) {
     return mgReflex;
   }
   if (type === 'BOMB') {
-    return { ...base, holder: firstIsA ? a : b, fuse: randInt(CONFIG.BOMB_FUSE_MIN, CONFIG.BOMB_FUSE_MAX), passes: 0 };
+    // 더 이상 "넘긴 횟수"가 아니라 실시간(ms) 퓨즈로 터진다 — 정해진 시간이 다 되면
+    // 그 순간 폭탄을 들고 있는 사람이 진다. 넘기는 횟수는 표시용일 뿐, 승패에는 영향 없음.
+    const mgBomb = { ...base, holder: firstIsA ? a : b, passes: 0 };
+    const delay = randInt(CONFIG.BOMB_FUSE_MS_MIN, CONFIG.BOMB_FUSE_MS_MAX);
+    setTimeout(() => {
+      if (match.minigame === mgBomb && match.phase === 'ROUND_MINIGAME') {
+        const loser = mgBomb.holder;
+        log(`펑! 폭탄이 ${match.players[loser].name}의 손에서 터졌습니다.`);
+        broadcastState();
+        endMinigame(otherId(loser));
+      }
+    }, delay);
+    return mgBomb;
   }
   if (type === 'PIN') {
     return { ...base, turn: firstIsA ? a : b, pulls: 0, popAt: randInt(CONFIG.PIN_POP_MIN, CONFIG.PIN_POP_MAX) };
@@ -207,9 +227,15 @@ function initMinigame(type, roundNo) {
     return { ...base, oddPlayer: firstIsA ? a : b, evenPlayer: firstIsA ? b : a, picks: {} };
   }
   if (type === 'BANK') {
-    // 각자 자신만의 금고 번호(서로 다른 숫자 N개)를 직접 정한다. 둘 다 정하고 나면
-    // 번갈아 "상대의" 번호를 추리한다 — 숫자야구(스트라이크/볼/아웃) 방식.
-    return { ...base, secrets: {}, firstTurn: firstIsA ? a : b, turn: null, history: { [a]: [], [b]: [] } };
+    // 서버가 금고 번호(0~9 중 서로 다른 숫자 N개)를 하나 정해두고, 두 사람이 동시에(순서 제한 없이)
+    // 각자 추리한다 — 숫자야구(스트라이크/볼/아웃) 방식. 먼저 정확히 맞히는 쪽이 승리.
+    return { ...base, secret: randomDistinctDigits(CONFIG.BANK_DIGITS), history: { [a]: [], [b]: [] } };
+  }
+  if (type === 'MEMORY') {
+    // 유품 5개 중 4개를 잠깐 보여주고 감춘다. 두 사람 다 똑같은 걸 보므로 숨김정보가 없는 대신,
+    // 무엇이 안 보였는지 더 정확하고 빠르게 맞히는 쪽이 이긴다.
+    const pool = shuffle(MEMORY_POOL);
+    return { ...base, pool, shown: pool.slice(0, 4), missing: pool[4], revealUntil: Date.now() + 3000, answers: {} };
   }
   return base;
 }
@@ -226,17 +252,14 @@ function endMinigame(winnerId) {
     expiresAt: match.roundRewardType === 'FLASH_ALL' ? Date.now() + CONFIG.REWARD_FLASH_MS : null,
   };
 
-  // 행동 순서는 더 이상 미니게임 승패가 아니라 라운드 홀/짝으로 고정 교대한다 (보상이 우선권을 대체).
-  const [a, b] = match.order;
-  const firstId = match.round % 2 === 1 ? a : b;
-  match.actionOrder = [firstId, otherId(firstId)];
-  match.turnIndex = 0;
-  match.opensThisTurn = 0;
+  // 본행동(칸 열기)은 더 이상 순서 교대가 아니라 두 사람이 동시에 독립적으로 진행한다.
+  match.actionOpens = {};
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 보상 [${REWARD_NAMES[match.roundRewardType]}] 획득`);
 
   // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 정해진 시간(REWARD_FLASH_MS) 안의
-  // 무작위 순간에 자동으로 0.1초간 내 처소 전체가 드러나는 방식이다.
+  // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다.
+  // (발동까지 남은 시간은 클라이언트에 알려주지 않는다 — 예측 가능해지면 보상 가치가 떨어짐.)
   if (match.pendingReward.expiresAt) {
     const roundAtGrant = match.round;
     const fireDelay = randInt(0, CONFIG.REWARD_FLASH_MS);
@@ -245,8 +268,8 @@ function endMinigame(winnerId) {
         match.pendingReward.used = true;
         const winner = match.players[winnerId];
         const room = winner.room.map((r) => r.map((cell) => cell.type));
-        actionLog(winner, '보상 발동 — 섬광 정찰로 내 처소 전체가 0.1초간 드러났습니다.');
-        io.to(winnerId).emit('rewardResult', { kind: 'FLASH_ALL', room });
+        actionLog(winner, `보상 발동 — 섬광 정찰로 내 처소 전체가 ${(CONFIG.REWARD_FLASH_REVEAL_MS / 1000).toFixed(1)}초간 드러났습니다.`);
+        io.to(winnerId).emit('rewardResult', { kind: 'FLASH_ALL', room, revealMs: CONFIG.REWARD_FLASH_REVEAL_MS });
         broadcastState();
       }
     }, fireDelay);
@@ -267,10 +290,8 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'PARITY') return handleParity(id, payload, mg);
-  if (mg.type === 'BANK') {
-    if (payload && Array.isArray(payload.secret)) return handleBankSecret(id, payload, mg);
-    return handleBank(id, payload, mg);
-  }
+  if (mg.type === 'BANK') return handleBank(id, payload, mg);
+  if (mg.type === 'MEMORY') return handleMemory(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -326,19 +347,14 @@ function handleReflex(id, payload, mg) {
   broadcastState();
 }
 
-// 4) 폭탄 눈치 넘기기 — 숨겨진 퓨즈 길이(확률/눈치형)
+// 4) 폭탄 눈치 넘기기 — 숨겨진 실시간 퓨즈(초 단위, 확률/눈치형). 승패는 initMinigame에 걸린
+// setTimeout이 판정하므로, 여기서는 넘기기 동작만 처리한다(넘긴 횟수는 표시용).
 function handleBomb(id, payload, mg) {
   if (mg.holder !== id) return;
   if (payload.action !== 'PASS') return;
   mg.passes += 1;
-  log(`${match.players[id].name}이 폭탄을 넘겼습니다. (${mg.passes}번째 전달)`);
-  if (mg.passes >= mg.fuse) {
-    const nextHolder = otherId(id);
-    log(`펑! 폭탄이 ${match.players[nextHolder].name}의 손에서 터졌습니다.`);
-    broadcastState();
-    return endMinigame(id); // 터진 사람이 패배 → 안 터진 사람(마지막으로 넘긴 id)이 승리
-  }
   mg.holder = otherId(id);
+  log(`${match.players[id].name}이 폭탄을 넘겼습니다. (${mg.passes}번째 전달)`);
   broadcastState();
 }
 
@@ -414,33 +430,18 @@ function handleParity(id, payload, mg) {
   broadcastState();
 }
 
-// 10) 금고 번호 맞추기 — 숫자야구. 각자 자신의 금고 번호를 정한 뒤, 번갈아 상대의 번호를 추리한다.
-// 스트라이크(숫자·자리 모두 일치) / 볼(숫자만 일치) / 아웃(둘 다 없음). 먼저 상대 번호를 완전히 맞히면 승리.
+// 10) 금고 번호 맞추기 — 숫자야구. 서버가 금고 번호를 하나 정해두고, 두 사람이 순서 제한 없이
+// 동시에 추리한다. 스트라이크(숫자·자리 모두 일치) / 볼(숫자만 일치) / 아웃(둘 다 없음).
+// 먼저 정확히 맞히는 쪽이 승리 — 몇 번이든 계속 시도할 수 있다.
 function isValidDigits(arr) {
   return Array.isArray(arr) && arr.length === CONFIG.BANK_DIGITS
     && arr.every((d) => Number.isInteger(d) && d >= 0 && d <= 9)
     && new Set(arr).size === arr.length;
 }
-function handleBankSecret(id, payload, mg) {
-  if (mg.secrets[id]) return; // 이미 정했으면 변경 불가
-  const secret = Array.isArray(payload.secret) ? payload.secret.map(Number) : null;
-  if (!isValidDigits(secret)) return;
-  mg.secrets[id] = secret;
-  log(`${match.players[id].name}이 자신의 금고 번호를 정했습니다.`);
-  const [a, b] = match.order;
-  if (mg.secrets[a] && mg.secrets[b]) {
-    mg.turn = mg.firstTurn;
-    log('양쪽 모두 번호를 정했습니다 — 이제 서로 상대의 금고를 열어보세요.');
-  }
-  broadcastState();
-}
 function handleBank(id, payload, mg) {
-  if (mg.turn !== id) return; // 아직 양쪽 다 번호를 정하지 않았거나 내 차례가 아님
-  const oppId = otherId(id);
-  const secret = mg.secrets[oppId];
-  if (!secret) return;
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
   if (!isValidDigits(guess)) return;
+  const secret = mg.secret;
   let strikes = 0, balls = 0;
   guess.forEach((d, i) => {
     if (secret[i] === d) strikes += 1;
@@ -448,13 +449,37 @@ function handleBank(id, payload, mg) {
   });
   mg.history[id].push({ guess: guess.slice(), strikes, balls });
   const outcome = strikes === 0 && balls === 0 ? '아웃' : `${strikes}스트라이크 ${balls}볼`;
-  log(`${match.players[id].name}: 상대 금고에 ${guess.join('')} 시도 → ${outcome}`);
+  log(`${match.players[id].name}: 금고에 ${guess.join('')} 시도 → ${outcome}`);
   if (strikes === CONFIG.BANK_DIGITS) {
-    log(`${match.players[id].name}이 상대의 금고를 열었습니다! (번호: ${secret.join('')})`);
+    log(`${match.players[id].name}이 금고를 열었습니다! (번호: ${secret.join('')})`);
     broadcastState();
     return endMinigame(id);
   }
-  mg.turn = oppId;
+  broadcastState();
+}
+
+// 11) 사라진 유품 찾기 — 유품 5개 중 4개를 잠깐 보여주고, 안 보였던 1개를 맞힌다.
+// 둘 다 같은 것을 보므로 순수 기억력/속도 승부(숨김정보 없음). 정답+더 빠른 쪽이 승리,
+// 둘 다 틀리면 무작위로 승자를 정한다(드문 경우).
+function handleMemory(id, payload, mg) {
+  if (mg.answers[id]) return; // 이미 답함
+  const choice = payload && payload.choice;
+  if (!mg.pool.includes(choice)) return;
+  mg.answers[id] = { choice, t: Date.now() };
+  log(`${match.players[id].name}이 "${MEMORY_NAMES_KR[choice]}"이(가) 없었다고 답했습니다.`);
+  const [a, b] = match.order;
+  if (mg.answers[a] && mg.answers[b]) {
+    const correctA = mg.answers[a].choice === mg.missing;
+    const correctB = mg.answers[b].choice === mg.missing;
+    let winner;
+    if (correctA && correctB) winner = mg.answers[a].t <= mg.answers[b].t ? a : b;
+    else if (correctA) winner = a;
+    else if (correctB) winner = b;
+    else winner = Math.random() < 0.5 ? a : b;
+    log(`정답 공개: 없었던 유품은 "${MEMORY_NAMES_KR[mg.missing]}"이었습니다.`);
+    broadcastState();
+    return endMinigame(winner);
+  }
   broadcastState();
 }
 
@@ -463,21 +488,17 @@ function handleBank(id, payload, mg) {
 // (아이템/단서 획득 같은 별도 행동 선택 없이, 정찰은 미니게임 보상으로만 얻는다.)
 function doAction(id, kind, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
-  const activeId = match.actionOrder[match.turnIndex];
-  if (activeId !== id) return;
   if (kind !== 'OPEN') return;
+  const opens = match.actionOpens[id] || 0;
+  if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 몫을 다 열었음
   const player = match.players[id];
   const { row, col } = payload;
   if (row == null || col == null || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
   const cell = player.room[row][col];
   if (cell.opened) return;
   resolveOpen(player, row, col, cell);
-  match.opensThisTurn = (match.opensThisTurn || 0) + 1;
-  if (match.opensThisTurn >= CONFIG.OPENS_PER_TURN) {
-    afterAction();
-  } else {
-    broadcastState();
-  }
+  match.actionOpens[id] = opens + 1;
+  checkRoundActionDone();
 }
 
 function resolveOpen(player, row, col, cell) {
@@ -550,17 +571,15 @@ function handleRewardUse(id, payload) {
 }
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
-function afterAction() {
+// 처소 열기는 두 사람이 각자 동시에 진행하므로, 한 명이 칸을 열 때마다 이 함수로 상태를 갱신하고
+// 두 사람 모두 이번 라운드 몫(OPENS_PER_TURN)을 다 열었을 때만 다음 라운드로 넘어간다.
+function checkRoundActionDone() {
   broadcastState();
   if (match.phase !== 'ROUND_ACTION') return;
-  if (match.turnIndex === 0) {
-    match.turnIndex = 1;
-    match.opensThisTurn = 0;
-    broadcastState();
-  } else {
-    if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
-    startRound();
-  }
+  const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN);
+  if (!allDone) return;
+  if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
+  startRound();
 }
 
 function endMatchByScore() {
@@ -573,8 +592,12 @@ function endMatchByScore() {
   if (fa !== fb) {
     winner = fa > fb ? a : b;
     reason = `${CONFIG.ROUNDS}라운드 종료 — 최종 점수 비교 승리 (독배 -${CONFIG.POISON_PENALTY}점 반영)`;
+  } else if (pa.poison !== pb.poison) {
+    // 최종 점수가 완전히 같으면, 무효화하지 못한 독을 더 적게 마신 쪽(더 안전하게 버틴 쪽)이 승리한다.
+    winner = pa.poison < pb.poison ? a : b;
+    reason = `${CONFIG.ROUNDS}라운드 종료 — 점수 동률, 무효화하지 못한 독 개수로 승부 판정`;
   } else {
-    reason = `${CONFIG.ROUNDS}라운드 종료 — 최종 점수 완전 동률(무승부)`;
+    reason = `${CONFIG.ROUNDS}라운드 종료 — 점수·독 개수 완전 동률(무승부)`;
   }
   endMatch(reason, winner);
 }
@@ -641,22 +664,22 @@ function buildClientState(forId) {
       public: publicMinigameView(match.minigame, forId),
     },
     roundReward: match.roundRewardType ? { type: match.roundRewardType, name: REWARD_NAMES[match.roundRewardType] } : null,
-    myReward: pr && pr.winnerId === forId ? { type: pr.type, name: REWARD_NAMES[pr.type], used: pr.used, expiresAt: pr.expiresAt } : null,
+    // FLASH_ALL은 언제 터질지 알려주면 보상의 의미가 없어지므로 expiresAt(발동 시한)은 내려주지 않는다.
+    myReward: pr && pr.winnerId === forId ? { type: pr.type, name: REWARD_NAMES[pr.type], used: pr.used } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
-    actionOrder: match.actionOrder.map((id) => (id === forId ? 'me' : 'opp')),
-    turnIndex: match.turnIndex,
-    isMyTurn: match.phase === 'ROUND_ACTION' && match.actionOrder[match.turnIndex] === forId,
-    opensRemaining: CONFIG.OPENS_PER_TURN - (match.opensThisTurn || 0),
+    // 처소 열기는 두 사람이 동시에 독립적으로 진행 — "내 턴"은 이제 "아직 이번 라운드 몫이 남았는가"를 뜻한다.
+    isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
+    opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
+    oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
     me: me && {
       name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
-    opp: opp && {
-      name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore,
-      connected: opp.connected,
-      room: match.phase === 'END' ? sanitizeRoom(opp.room, true) : null,
-    },
+    // 상대의 점수/독/해독제는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다(콘솔로 훔쳐보기 방지).
+    opp: opp && (match.phase === 'END'
+      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      : { name: opp.name, connected: opp.connected, room: null }),
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
@@ -669,7 +692,10 @@ function buildClientState(forId) {
 
 function publicMinigameView(mg, forId) {
   const mine = (pid) => pid === forId;
-  if (mg.type === 'NIM') return { count: mg.count, limit: mg.limit, myTurn: mg.turn === forId };
+  if (mg.type === 'NIM') {
+    // 정확한 누적/한계 숫자는 숨기고, 술잔이 얼마나 차올랐는지 비율(fillRatio)만 시각화용으로 내려준다.
+    return { fillRatio: Math.min(1, mg.count / mg.limit), myTurn: mg.turn === forId };
+  }
   if (mg.type === 'HAND') {
     const role = mine(mg.hider) ? 'hider' : mine(mg.guesser) ? 'guesser' : null;
     return { role, waitingForMe: (role === 'hider' && mg.hiderPick == null) || (role === 'guesser' && mg.hiderPick != null && mg.guesserPick == null), hiderDone: mg.hiderPick != null };
@@ -692,11 +718,15 @@ function publicMinigameView(mg, forId) {
     const oppId = otherId(forId);
     return {
       digits: CONFIG.BANK_DIGITS,
-      mySecretSet: !!mg.secrets[forId],
-      oppSecretSet: !!mg.secrets[oppId],
-      myTurn: mg.turn === forId,
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
       oppGuesses: (mg.history[oppId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
+    };
+  }
+  if (mg.type === 'MEMORY') {
+    // 정답(missing)은 절대 내려주지 않는다 — 둘 다 답하고 나서야 endMinigame으로 결과가 공개됨.
+    return {
+      pool: mg.pool, shown: mg.shown, revealUntil: mg.revealUntil,
+      myAnswered: !!mg.answers[forId], oppAnswered: !!mg.answers[otherId(forId)],
     };
   }
   return {};
@@ -706,9 +736,41 @@ function broadcastState() {
   for (const id of match.order) {
     io.to(id).emit('state', buildClientState(id));
   }
+  broadcastAdminState();
+}
+
+// 관리자(관전) 화면용 — 두 플레이어(장남/차남)의 처소를 전부(비공개 정보 포함) 그대로 보여준다.
+// 밸런스 테스트 관찰 용도이므로 플레이어에게는 숨기는 정보도 관리자에게는 그대로 내려준다.
+function buildAdminState() {
+  return {
+    phase: match.phase,
+    round: match.round,
+    roundsTotal: CONFIG.ROUNDS,
+    minigame: match.minigame ? { type: match.minigame.type, name: MINIGAME_NAMES[match.minigame.type] } : null,
+    players: match.order.map((id) => {
+      const p = match.players[id];
+      return {
+        name: p.name,
+        connected: p.connected,
+        poison: p.poison, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
+        opens: match.actionOpens[id] || 0,
+        room: p.room.map((row) => row.map((cell) => ({ type: cell.type, opened: cell.opened }))),
+      };
+    }),
+  };
+}
+function broadcastAdminState() {
+  io.to('admins').emit('adminState', buildAdminState());
 }
 
 io.on('connection', (socket) => {
+  // 관리자(관전) 화면 — 플레이어 슬롯을 차지하지 않고 그냥 지켜만 본다.
+  if (socket.handshake.query && socket.handshake.query.role === 'admin') {
+    socket.join('admins');
+    socket.emit('adminState', buildAdminState());
+    return;
+  }
+
   // "게임 재시작"은 방이 꽉 차서 거부된 상태(예: 예전 접속자들이 유령으로 자리를 차지한 경우)에서도
   // 눌러야 하는 경우가 많으므로, 방 정원 체크보다 먼저 등록해 항상 동작하게 한다.
   // 누가 눌렀는지와 무관하게 서버 상태를 완전히 새로 만들고, 접속해 있는 모든 클라이언트를
@@ -716,6 +778,7 @@ io.on('connection', (socket) => {
   socket.on('admin:reset', () => {
     match = freshMatch();
     io.emit('reload');
+    broadcastAdminState();
   });
 
   if (match.order.length >= 2 && !match.order.includes(socket.id)) {
