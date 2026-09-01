@@ -295,8 +295,20 @@ button.memoryChoice:hover { border-color: var(--gold); background: #23151c; }
 .pickerGrid .cell { background: #150c10; }
 .pickerGrid .cell.pickable:hover { background: #241521; }
 
-.flashOverlay { border: 2px solid var(--gold); box-shadow: 0 0 24px rgba(201,162,75,0.5); }
-.flashOverlay .grid6 { max-width: 460px; }
+/* "내 처소" 6×6 그리드가 있는 자리 위에 그대로 덮이는 오버레이 — 페이지 전체를 갈아치우지 않는다 */
+.roomGridHolder { position: relative; }
+.flashOverlay {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  background: #150c10; border: 2px solid var(--gold); border-radius: 3px;
+  box-shadow: 0 0 24px rgba(201,162,75,0.5); padding: 8px;
+}
+.flashOverlayLabel { font-family: 'Nanum Myeongjo', serif; color: var(--gold); font-size: 15px; text-align: center; }
+.flashOverlay .grid6 { width: 100%; max-width: 100%; }
+
+/* 보상(정찰)으로 무엇을 알아냈는지 라운드 내내 계속 보이도록 하는 패널 */
+.rewardResultPanel { border: 1px solid var(--gold); }
+.rewardResultPanel .desc { color: var(--gold); font-size: 14.5px; line-height: 1.6; }
 /* 철가방(배달통) 뚜껑이 확 열리는 듯한 짧은 등장 연출 */
 @keyframes boxOpenPop {
   0% { transform: scale(0.75) rotateX(-35deg); opacity: 0; }
@@ -353,6 +365,19 @@ button.numkey.primary { border-color: var(--gold); color: var(--gold); backgroun
 }
 .adminOffline { text-align:center; padding: 40px 10px; color: var(--muted); }
 
+/* 관리자 화면 — 확정 전 실시간 선택(셋업 미리보기 / 미니게임 진행 중 선택)을 보여주는 영역 */
+.adminLive { border-color: var(--crimson-bright); }
+.adminLive h2 { color: var(--crimson-bright); font-size: 16px; }
+.adminLiveRow { display:flex; gap: 18px; flex-wrap: wrap; }
+.adminLiveCol { flex: 1 1 220px; }
+.adminLiveCol h3 { font-size: 13.5px; margin-bottom: 6px; display:flex; align-items:center; gap: 6px; }
+.adminGrid6small { max-width: 220px; gap: 3px; }
+.adminGrid6small .adminCell { background: #150c10; }
+.adminGrid6small .adminCell.selPreview { background: var(--crimson-bright); box-shadow: 0 0 6px rgba(209,66,90,0.8); }
+.adminDetailList { display:flex; flex-direction:column; gap: 6px; }
+.adminDetailRow { font-size: 13.5px; background: #1a0f14; border: 1px solid var(--border); border-radius: 2px; padding: 6px 10px; }
+.adminDetailRow b { color: var(--gold); }
+
 /* 전반적으로 글씨가 작다는 피드백 반영 — 자주 읽는 설명/버튼/뱃지 텍스트를 한 단계씩 키움 */
 .statusBar { font-size: 14.5px; }
 .mgBox .desc, .rewardBanner .desc { font-size: 14px; line-height: 1.55; }
@@ -362,4 +387,35 @@ button.ghost { font-size: 12.5px; padding: 6px 12px; }
 .badge { font-size: 12.5px; padding: 3px 12px; }
 .stat .l { font-size: 12px; }
 .bankColTitle { font-size: 13.5px; }
+
+/* 위 1차 조정 이후에도 "가독성이 너무 떨어진다"는 재확인 피드백 — 부분 수정이 아니라
+   전반적인 기준 크기·줄간격·명도 대비를 한 번 더, 더 크게 끌어올린다. */
+html, body { font-size: 16px; line-height: 1.6; }
+:root { --muted: #b9987a; } /* 어두운 배경 대비 명도를 높여 보조 텍스트 판독성 개선 */
+.panel h2 { font-size: 19px; }
+.mgBox h3 { font-size: 16px; }
+.mgBox .desc, .rewardBanner .desc { font-size: 15.5px; line-height: 1.65; }
+.hint { font-size: 13.5px; line-height: 1.5; }
+.badge { font-size: 13.5px; }
+button.action { font-size: 16px; padding: 12px 18px; }
+button.ghost { font-size: 13.5px; padding: 7px 14px; }
+button.iconBtn { font-size: 17px; }
+button.iconBtn span { font-size: 17px; }
+.stat .v { font-size: 24px; }
+.stat .l { font-size: 13px; }
+.bankColTitle { font-size: 14.5px; }
+.bankRow { font-size: 14px; padding: 7px 10px; }
+.memoryItem, button.memoryChoice { font-size: 14px; }
+.memoryItem span, button.memoryChoice span { font-size: 14px; }
+.itemCardTitle { font-size: 15px; }
+.itemCardDesc { font-size: 13px; line-height: 1.5; }
+.endBanner h2 { font-size: 34px; }
+.endBanner p { font-size: 15px; }
+.adminCard .adminSub { font-size: 13.5px; }
+.numpadDisplay { font-size: 24px; }
+button.numkey { font-size: 18px; }
+button.numkeyFn { font-size: 14.5px; }
+.clueResultBox { font-size: 13.5px; }
+.cell.opened { font-size: 24px; }
+.statgrid { gap: 8px; }
 .bankRow { font-size: 14px; }

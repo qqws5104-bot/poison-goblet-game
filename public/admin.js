@@ -52,11 +52,57 @@ function render(state) {
     return;
   }
 
+  // 요청사항: "관리자용 화면은 상대의 화면을 서로 볼 수 있도록" — 확정된 결과뿐 아니라
+  // 셋업 확정 전 실시간 미리보기, 미니게임 진행 중인 선택도 함께 보여준다.
+  if (state.phase === 'SETUP' && state.setupPreview) app.appendChild(renderSetupPreview(state.setupPreview));
+  if (state.phase === 'ROUND_MINIGAME' && state.minigame && state.minigame.detail) app.appendChild(renderMinigameDetail(state.minigame));
+
   const grid = el('div', 'adminGrid');
   state.players.forEach((p) => {
     grid.appendChild(renderPlayerCard(p));
   });
   app.appendChild(grid);
+}
+
+function renderSetupPreview(preview) {
+  const p = el('div', 'panel adminLive');
+  p.appendChild(el('h2', null, '🔴 실시간 설치 현황 (확정 전 미리보기 — 관리자 전용)'));
+  const row = el('div', 'adminLiveRow');
+  preview.forEach((entry) => {
+    const col = el('div', 'adminLiveCol');
+    col.appendChild(el('h3', null, `${entry.name} ${entry.confirmed ? '<span class="badge win">확정됨</span>' : '<span class="badge wait">선택 중...</span>'}`));
+    const grid6 = el('div', 'adminGrid6 adminGrid6small');
+    const cellSet = new Set((entry.cells || []).map((c) => c.row + '_' + c.col));
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const div = el('div', 'adminCell' + (cellSet.has(r + '_' + c) ? ' selPreview' : ''));
+        grid6.appendChild(div);
+      }
+    }
+    col.appendChild(grid6);
+    row.appendChild(col);
+  });
+  p.appendChild(row);
+  return p;
+}
+
+function renderMinigameDetail(minigame) {
+  const p = el('div', 'panel adminLive');
+  p.appendChild(el('h2', null, `🔴 미니게임 진행 상황 — ${minigame.name} (관리자 전용)`));
+  const list = el('div', 'adminDetailList');
+  Object.entries(minigame.detail || {}).forEach(([label, value]) => {
+    let valueText;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      valueText = Object.entries(value).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    } else if (Array.isArray(value)) {
+      valueText = value.join(', ');
+    } else {
+      valueText = String(value);
+    }
+    list.appendChild(el('div', 'adminDetailRow', `<b>${label}</b>: ${valueText}`));
+  });
+  p.appendChild(list);
+  return p;
 }
 
 function renderPlayerCard(p) {

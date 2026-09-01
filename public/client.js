@@ -18,6 +18,8 @@ let memoryTransitioned = false;
 let flashRoom = null; // 섬광 정찰 보상: 잠깐 전체 공개할 내 처소 타입 배열
 let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종류
 let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
+let lastRewardResult = null; // 보상으로 획득한 정찰 결과 텍스트 — #log(숨김)만으로는 안 보이므로 화면에 계속 띄워둔다
+let lastRewardResultRound = null;
 
 const CELL_NAME = { P: '독', G: '금', S: '은', A: '해독', E: '' };
 const CELL_EMOJI = { P: '☠️', G: '🥇', S: '🥈', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
@@ -86,20 +88,45 @@ function computeGuessCountScene(count) {
 }
 // 독배 채우기(NIM) 미니게임: 정확한 숫자 대신, 잔이 얼마나 차올랐는지를 술잔 안에 차오르는
 // 액체로 보여준다. ratio(0~1)만 받아서 그린다 — 정확한 누적/한계 수치는 서버가 아예 내려주지 않음.
-function nimGobletSVG(ratio) {
+const NIM_LIQUID_TOP_Y = 8.4, NIM_LIQUID_BOT_Y = 22;
+function nimLiquidGeom(ratio) {
   const r = Math.max(0, Math.min(1, ratio || 0));
-  const topY = 8.4, botY = 22, h = botY - topY;
-  const liquidTop = (botY - r * h).toFixed(2);
-  const liquidH = (botY - liquidTop).toFixed(2);
+  const h = NIM_LIQUID_BOT_Y - NIM_LIQUID_TOP_Y;
+  const liquidTop = NIM_LIQUID_BOT_Y - r * h;
+  return { liquidTop, liquidH: NIM_LIQUID_BOT_Y - liquidTop };
+}
+function nimGobletSVG(ratio) {
+  const { liquidTop, liquidH } = nimLiquidGeom(ratio);
+  // id="nimLiquidRect"를 고정해 두면, 전체 화면이 다시 그려져도(재렌더) 다음 애니메이션 프레임에서
+  // getElementById로 같은 엘리먼트를 다시 찾아 y/height를 직접 바꿀 수 있다 — "확확" 튀지 않고
+  // "찔끔찔끔" 부드럽게 차오르게 하기 위한 장치(자세한 애니메이션 루프는 startNimAnimLoop 참고).
   return `<svg viewBox="0 0 32 32" class="nimGoblet" aria-hidden="true">
     <defs><clipPath id="nimClip"><path d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/></clipPath></defs>
-    <rect class="liquid" x="0" y="${liquidTop}" width="32" height="${liquidH}" clip-path="url(#nimClip)"/>
+    <rect id="nimLiquidRect" class="liquid" x="0" y="${liquidTop.toFixed(2)}" width="32" height="${liquidH.toFixed(2)}" clip-path="url(#nimClip)"/>
     <ellipse class="rim" cx="16" cy="8" rx="11.6" ry="2.2"/>
     <path class="bowl" d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/>
     <path class="stem" d="M16,22 L16,26.8"/>
     <ellipse class="base" cx="16" cy="27.6" rx="6.2" ry="1.6"/>
   </svg>`;
 }
+// 술잔이 목표 눈금까지 한 번에 "확" 차오르는 대신 매 프레임 조금씩만 다가가도록(찔끔찔끔) 보간한다.
+// 전체 화면 재렌더와 무관하게 동작해야 하므로, DOM을 매번 getElementById로 새로 찾아 직접 수정한다.
+let nimDisplayedRatio = 0;
+let nimTargetRatio = 0;
+let nimRound = null;
+function nimAnimStep() {
+  if (Math.abs(nimTargetRatio - nimDisplayedRatio) > 0.0015) {
+    nimDisplayedRatio += (nimTargetRatio - nimDisplayedRatio) * 0.09;
+    const rect = document.getElementById('nimLiquidRect');
+    if (rect) {
+      const { liquidTop, liquidH } = nimLiquidGeom(nimDisplayedRatio);
+      rect.setAttribute('y', liquidTop.toFixed(2));
+      rect.setAttribute('height', liquidH.toFixed(2));
+    }
+  }
+  requestAnimationFrame(nimAnimStep);
+}
+requestAnimationFrame(nimAnimStep);
 
 // 폭탄 눈치 넘기기 / 안전핀 뽑기 배팅 버튼에 쓰는 일러스트풍 아이콘(기존 손그림 SVG와 같은 화법).
 function bombIconSVG() {
@@ -156,11 +183,17 @@ socket.on('rewardResult', (payload) => {
     return;
   }
   if (payload.kind === 'PEEK_CELL') {
-    addLog(`🔎 한 칸 정찰: 내 처소 (${payload.row + 1},${payload.col + 1}) = ${CELL_EMOJI[payload.type] || ''} ${CELL_NAME[payload.type] || ''}`);
+    const text = `🔎 한 칸 정찰 결과: 내 처소 (${payload.row + 1},${payload.col + 1}) = ${CELL_EMOJI[payload.type] || ''} ${CELL_NAME[payload.type] || ''}`;
+    addLog(text);
+    lastRewardResult = text;
+    lastRewardResultRound = lastState ? lastState.round : null;
   } else if (payload.kind === 'ROW_COUNT' || payload.kind === 'COL_COUNT') {
     const axisLabel = payload.kind === 'ROW_COUNT' ? '행' : '열';
     const catName = (lastState && lastState.clueCatNames && lastState.clueCatNames[payload.targetType]) || payload.targetType;
-    addLog(`🔎 정찰 결과: 내 처소 ${payload.index + 1}${axisLabel}에 ${catName}이(가) ${payload.count}개 있습니다.`);
+    const text = `🔎 정찰 결과: 내 처소 ${payload.index + 1}${axisLabel}에 ${catName}이(가) ${payload.count}개 있습니다.`;
+    addLog(text);
+    lastRewardResult = text;
+    lastRewardResultRound = lastState ? lastState.round : null;
   }
   render(lastState);
 });
@@ -182,6 +215,11 @@ socket.on('state', (state) => {
     memoryTransitioned = false;
     flashRoom = null;
     rewardChosenType = null;
+    lastRewardResult = null;
+    lastRewardResultRound = null;
+    nimDisplayedRatio = 0;
+    nimTargetRatio = 0;
+    nimRound = null;
   }
   lastState = state;
   render(state);
@@ -230,7 +268,6 @@ function numKeypad(opts) {
 }
 
 function render(state) {
-  if (flashRoom) return renderFlashOverlay(flashRoom);
   if (!state) return;
   renderStatusBar(state);
   app.innerHTML = '';
@@ -241,11 +278,11 @@ function render(state) {
 }
 
 // 섬광 정찰 보상 연출 — 옛날 예능의 "철가방(배달통)" 개그처럼, 뚜껑이 확 열렸다가 순식간에
-// 다시 닫히는 느낌으로 내 처소 전체를 아주 잠깐 보여준다.
+// 다시 닫히는 느낌. 페이지 전체를 갈아치우던 예전 방식 대신, "내 처소" 6×6 그리드가 있는
+// 자리 바로 위에 덮이는 오버레이로 뜨고, 시간이 지나면 사라져 원래 그리드가 다시 보인다.
 function renderFlashOverlay(room) {
-  app.innerHTML = '';
-  const p = el('div', 'panel flashOverlay boxOpenAnim');
-  p.appendChild(el('h2', null, '🍱 철가방 정찰 — 뚜껑이 열린 순간!'));
+  const p = el('div', 'flashOverlay boxOpenAnim');
+  p.appendChild(el('div', 'flashOverlayLabel', '🍱 철가방 정찰 — 뚜껑이 열린 순간!'));
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
@@ -253,7 +290,7 @@ function renderFlashOverlay(room) {
     }
   }
   p.appendChild(grid);
-  app.appendChild(p);
+  return p;
 }
 
 function renderStatusBar(state) {
@@ -291,6 +328,8 @@ function renderSetup(state) {
           const idx = setupSelection.findIndex((s) => s.row === r && s.col === c);
           if (idx >= 0) setupSelection.splice(idx, 1);
           else if (setupSelection.length < state.config.COUNTS.P) setupSelection.push({ row: r, col: c });
+          // 관리자 화면에서 실시간으로 "누가 어디를 찍고 있는지" 보이도록, 확정 전에도 매번 미리보기를 보낸다.
+          socket.emit('setup:preview', { cells: setupSelection });
           render(lastState);
         };
       }
@@ -328,12 +367,14 @@ function renderMain(state) {
   left.appendChild(renderMyRoomPanel(state));
   cols.appendChild(left);
 
-  // 오른쪽: 라운드 보상 안내 / 미니게임 / 액션 / 보상 사용 / 내 행동 기록
+  // 오른쪽: 라운드 보상 안내 / 미니게임 / 액션 / 보상 사용 / 정찰 결과
   const right = el('div', 'col');
   if (state.roundReward) right.appendChild(renderRoundRewardBanner(state));
   if (state.phase === 'ROUND_MINIGAME') right.appendChild(renderMinigamePanel(state));
   if (state.phase === 'ROUND_ACTION') right.appendChild(renderActionPanel(state));
   if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.used) right.appendChild(renderRewardPanel(state));
+  // 보상(정찰)으로 무엇을 알아냈는지는 숨겨진 #log에만 남던 것을 화면에 계속 보이게 한다.
+  if (lastRewardResult && lastRewardResultRound === state.round) right.appendChild(renderRewardResultPanel());
   cols.appendChild(right);
 
   app.appendChild(cols);
@@ -348,6 +389,14 @@ function renderRoundRewardBanner(state) {
   } else if (state.oppHasReward) {
     p.appendChild(el('div', 'hint', '⚠ 상대가 이 보상을 아직 가지고 있습니다.'));
   }
+  return p;
+}
+
+// 보상(정찰)으로 획득한 정보를 라운드가 끝날 때까지 계속 보이게 하는 패널.
+function renderRewardResultPanel() {
+  const p = el('div', 'panel rewardResultPanel');
+  p.appendChild(el('h2', null, '🔎 정찰 결과'));
+  p.appendChild(el('div', 'desc', lastRewardResult));
   return p;
 }
 
@@ -407,6 +456,9 @@ function renderMyRoomPanel(state) {
   const p = el('div', 'panel');
   p.appendChild(el('h2', null, '내 처소 (6×6)'));
   const pickMode = state.isMyTurn && state.opensRemaining > 0;
+  // 6×6 그리드를 감싸는 위치기준 컨테이너 — 섬광 정찰(철가방) 보상이 뜨면 이 컨테이너 안에
+  // 그리드와 같은 자리를 덮는 오버레이로 표시된다(페이지 전체를 갈아치우지 않는다).
+  const gridHolder = el('div', 'roomGridHolder');
   const grid = el('div', 'grid6');
   for (let r = 0; r < state.config.GRID; r++) {
     for (let c = 0; c < state.config.GRID; c++) {
@@ -426,7 +478,9 @@ function renderMyRoomPanel(state) {
       grid.appendChild(cell);
     }
   }
-  p.appendChild(grid);
+  gridHolder.appendChild(grid);
+  if (flashRoom) gridHolder.appendChild(renderFlashOverlay(flashRoom));
+  p.appendChild(gridHolder);
   if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   return p;
 }
@@ -440,9 +494,13 @@ function renderMinigamePanel(state) {
   const type = state.minigame.type;
 
   if (type === 'NIM') {
+    if (nimRound !== state.round) { nimRound = state.round; nimDisplayedRatio = 0; }
+    nimTargetRatio = mg.fillRatio;
     box.appendChild(el('div', 'desc', '번갈아 1~3만큼 독배를 채웁니다. 정확히 몇 번째에 넘치는지는 아무도 모릅니다 — 넘치게 만든 사람이 이번 미니게임에서 집니다.'));
     const gobletWrap = el('div', 'nimGobletWrap');
-    gobletWrap.innerHTML = nimGobletSVG(mg.fillRatio);
+    // 목표치(mg.fillRatio)가 아니라 지금까지 보간되어 온 nimDisplayedRatio로 그려서, 전체
+    // 화면이 다시 그려져도 액체가 갑자기 목표 눈금까지 튀지 않고 이어서 서서히 차오르게 한다.
+    gobletWrap.innerHTML = nimGobletSVG(nimDisplayedRatio);
     box.appendChild(gobletWrap);
     const row = el('div', 'btnRow');
     [1, 2, 3].forEach((n) => {
@@ -563,28 +621,26 @@ function renderMinigamePanel(state) {
     });
     box.appendChild(row);
   } else if (type === 'BANK') {
-    // 시스템이 금고 번호를 하나 정해두고, 두 사람이 순서 없이 동시에 계속 추리할 수 있다 —
-    // 먼저 정확히 맞히는 쪽이 승리.
+    // 하나의 금고를 공유하는 게 아니라, 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른 정답)를
+    // 갖고 동시에 독립적으로 숫자야구를 진행한다 — 자기 금고를 먼저 여는 쪽이 승리.
     if (bankRound !== state.round) { bankRound = state.round; bankEntry = ''; }
-    box.appendChild(el('div', 'desc', `숫자야구입니다. 시스템이 금고 번호(0~9 중 서로 다른 숫자 ${mg.digits}개)를 정해두었습니다. 두 사람이 동시에 추리할 수 있으니, 먼저 정확히 맞히는 쪽이 이깁니다. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
+    box.appendChild(el('div', 'desc', `숫자야구입니다. 나와 상대는 각자 서로 다른 자신만의 금고(0~9 중 서로 다른 숫자 ${mg.digits}개)를 갖고 있습니다 — 공유된 정답이 아니라 완전히 별개의 문제입니다. 자신의 금고를 먼저 여는 쪽이 이깁니다. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
 
     const outcomeLabel = (h) => (h.strikes === 0 && h.balls === 0 ? '아웃' : `⚡${h.strikes} ・${h.balls}`);
 
     const dual = el('div', 'bankDual');
     const mine = el('div', 'bankCol');
-    mine.appendChild(el('div', 'bankColTitle', '내 시도'));
+    mine.appendChild(el('div', 'bankColTitle', '내 금고 시도'));
     (mg.myGuesses || []).slice().reverse().forEach((h) => {
       mine.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
     });
     const theirs = el('div', 'bankCol');
-    theirs.appendChild(el('div', 'bankColTitle', '상대 시도'));
-    (mg.oppGuesses || []).slice().reverse().forEach((h) => {
-      theirs.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
-    });
+    theirs.appendChild(el('div', 'bankColTitle', '상대 금고 진행 상황'));
+    theirs.appendChild(el('div', 'bankRow hint', `상대는 자신의 금고를 지금까지 ${mg.oppAttempts || 0}번 시도했습니다. (서로 다른 금고라 세부 결과는 알 수 없습니다.)`));
     dual.appendChild(mine); dual.appendChild(theirs);
     box.appendChild(dual);
 
-    box.appendChild(el('div', 'hint', `금고 번호를 추리하세요 (서로 다른 숫자 ${mg.digits}개, 몇 번이든 시도 가능).`));
+    box.appendChild(el('div', 'hint', `내 금고 번호를 추리하세요 (서로 다른 숫자 ${mg.digits}개, 몇 번이든 시도 가능).`));
     box.appendChild(numKeypad({
       get: () => bankEntry,
       set: (v) => { bankEntry = v; },
@@ -602,20 +658,22 @@ function renderMinigamePanel(state) {
       },
     }));
   } else if (type === 'MEMORY') {
+    // "5개 중 안 보인 1개 고르기"는 처음 보는 항목이 눈에 띄어 너무 쉬웠다는 피드백을 반영해,
+    // 같은 4자리를 두 번 보여주되 그중 하나만 다른 유품으로 바뀌는 "틀린 그림 찾기" 방식으로 바꿨다.
     if (memoryRound !== state.round) { memoryRound = state.round; memoryRevealUntil = mg.revealUntil; memoryTransitioned = false; }
     const remaining = memoryRevealUntil - Date.now();
     if (remaining > 0 && !mg.myAnswered) {
-      box.appendChild(el('div', 'desc', '아래 유품들을 잘 봐두세요 — 잠시 후 하나가 사라진 채로 다시 보여드립니다.'));
+      box.appendChild(el('div', 'desc', '아래 유품 4개의 자리를 잘 봐두세요 — 잠시 후 그중 하나만 바뀐 모습을 다시 보여드립니다.'));
       const row = el('div', 'memoryRow');
-      mg.shown.forEach((key) => {
+      mg.before.forEach((key) => {
         row.appendChild(el('div', 'memoryItem', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`));
       });
       box.appendChild(row);
-      box.appendChild(el('div', 'hint', `${Math.max(1, Math.ceil(remaining / 1000))}초 후 가려집니다`));
+      box.appendChild(el('div', 'hint', `${Math.max(1, Math.ceil(remaining / 1000))}초 후 바뀐 모습으로 다시 보여드립니다`));
     } else if (!mg.myAnswered) {
-      box.appendChild(el('div', 'desc', '방금 보여드린 5개 중 없었던 유품 1개를 고르세요. 더 정확하고 빠르게 맞히는 쪽이 이깁니다.'));
+      box.appendChild(el('div', 'desc', '같은 4자리 중 하나가 다른 유품으로 바뀌었습니다. 바뀐 것을 고르세요. 더 정확하고 빠르게 맞히는 쪽이 이깁니다.'));
       const row = el('div', 'memoryRow');
-      mg.pool.forEach((key) => {
+      mg.after.forEach((key) => {
         const b = el('button', 'memoryChoice', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`);
         b.onclick = () => socket.emit('minigame:move', { choice: key });
         row.appendChild(b);

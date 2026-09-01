@@ -101,6 +101,7 @@ function freshMatch() {
     phase: 'LOBBY', // LOBBY, SETUP, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
+    setupPreview: {}, // 확정 전 실시간 선택 상태 — 관리자 화면 전용(상대 플레이어에게는 절대 내려주지 않음)
     round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
     roundRewardType: null, pendingReward: null,
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
@@ -128,6 +129,7 @@ function randomDistinctDigits(n) { return shuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 function startSetup() {
   match.phase = 'SETUP';
   match.setupSelections = {};
+  match.setupPreview = {};
   log('셋업 시작 — 상대 왕자의 처소에 독 술잔 3개를 몰래 지정하세요.');
   broadcastState();
 }
@@ -227,15 +229,21 @@ function initMinigame(type, roundNo) {
     return { ...base, oddPlayer: firstIsA ? a : b, evenPlayer: firstIsA ? b : a, picks: {} };
   }
   if (type === 'BANK') {
-    // 서버가 금고 번호(0~9 중 서로 다른 숫자 N개)를 하나 정해두고, 두 사람이 동시에(순서 제한 없이)
-    // 각자 추리한다 — 숫자야구(스트라이크/볼/아웃) 방식. 먼저 정확히 맞히는 쪽이 승리.
-    return { ...base, secret: randomDistinctDigits(CONFIG.BANK_DIGITS), history: { [a]: [], [b]: [] } };
+    // 하나의 금고를 공유하는 게 아니라, 두 사람이 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른
+    // 정답)를 갖고 동시에 독립적으로 숫자야구를 진행한다 — 자기 금고를 먼저 여는 쪽이 승리.
+    return { ...base, secrets: { [a]: randomDistinctDigits(CONFIG.BANK_DIGITS), [b]: randomDistinctDigits(CONFIG.BANK_DIGITS) }, history: { [a]: [], [b]: [] } };
   }
   if (type === 'MEMORY') {
-    // 유품 5개 중 4개를 잠깐 보여주고 감춘다. 두 사람 다 똑같은 걸 보므로 숨김정보가 없는 대신,
-    // 무엇이 안 보였는지 더 정확하고 빠르게 맞히는 쪽이 이긴다.
-    const pool = shuffle(MEMORY_POOL);
-    return { ...base, pool, shown: pool.slice(0, 4), missing: pool[4], revealUntil: Date.now() + 3000, answers: {} };
+    // "5개 중 안 보인 1개 고르기"는 처음 보는 5번째 항목이 눈에 띄어 너무 쉬웠다 — 진짜 기억력을
+    // 요구하도록 재설계: 유품 4개를 먼저 보여준 뒤, 같은 4자리에 그중 하나만 다른 유품으로
+    // 바꿔서 다시 보여주고 "무엇이 바뀌었는지" 맞히게 한다.
+    const pool = shuffle(MEMORY_POOL); // pool[0..3] = 처음 보여줄 4개, pool[4] = 나중에 등장할 대체 유품
+    const before = pool.slice(0, 4);
+    const swapIndex = randInt(0, 3);
+    const changedItem = pool[4];
+    const after = before.slice();
+    after[swapIndex] = changedItem;
+    return { ...base, before, after, changedItem, revealUntil: Date.now() + 3000, answers: {} };
   }
   return base;
 }
@@ -441,7 +449,7 @@ function isValidDigits(arr) {
 function handleBank(id, payload, mg) {
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
   if (!isValidDigits(guess)) return;
-  const secret = mg.secret;
+  const secret = mg.secrets[id]; // 각자 자신의 금고(정답)만 상대한다 — 공유 정답이 아니다.
   let strikes = 0, balls = 0;
   guess.forEach((d, i) => {
     if (secret[i] === d) strikes += 1;
@@ -449,34 +457,34 @@ function handleBank(id, payload, mg) {
   });
   mg.history[id].push({ guess: guess.slice(), strikes, balls });
   const outcome = strikes === 0 && balls === 0 ? '아웃' : `${strikes}스트라이크 ${balls}볼`;
-  log(`${match.players[id].name}: 금고에 ${guess.join('')} 시도 → ${outcome}`);
+  log(`${match.players[id].name}: 자신의 금고에 ${guess.join('')} 시도 → ${outcome}`);
   if (strikes === CONFIG.BANK_DIGITS) {
-    log(`${match.players[id].name}이 금고를 열었습니다! (번호: ${secret.join('')})`);
+    log(`${match.players[id].name}이 자신의 금고를 열었습니다! (번호: ${secret.join('')})`);
     broadcastState();
     return endMinigame(id);
   }
   broadcastState();
 }
 
-// 11) 사라진 유품 찾기 — 유품 5개 중 4개를 잠깐 보여주고, 안 보였던 1개를 맞힌다.
-// 둘 다 같은 것을 보므로 순수 기억력/속도 승부(숨김정보 없음). 정답+더 빠른 쪽이 승리,
-// 둘 다 틀리면 무작위로 승자를 정한다(드문 경우).
+// 11) 사라진 유품 찾기 — 유품 4개를 잠깐 보여준 뒤, 같은 4자리 중 하나만 다른 유품으로 바뀐
+// 모습을 다시 보여주고 "무엇이 바뀌었는지" 맞힌다. 둘 다 같은 것을 보므로 순수 기억력/속도
+// 승부(숨김정보 없음). 정답+더 빠른 쪽이 승리, 둘 다 틀리면 무작위로 승자를 정한다(드문 경우).
 function handleMemory(id, payload, mg) {
   if (mg.answers[id]) return; // 이미 답함
   const choice = payload && payload.choice;
-  if (!mg.pool.includes(choice)) return;
+  if (!mg.after.includes(choice)) return;
   mg.answers[id] = { choice, t: Date.now() };
-  log(`${match.players[id].name}이 "${MEMORY_NAMES_KR[choice]}"이(가) 없었다고 답했습니다.`);
+  log(`${match.players[id].name}이 "${MEMORY_NAMES_KR[choice]}"(으)로 바뀌었다고 답했습니다.`);
   const [a, b] = match.order;
   if (mg.answers[a] && mg.answers[b]) {
-    const correctA = mg.answers[a].choice === mg.missing;
-    const correctB = mg.answers[b].choice === mg.missing;
+    const correctA = mg.answers[a].choice === mg.changedItem;
+    const correctB = mg.answers[b].choice === mg.changedItem;
     let winner;
     if (correctA && correctB) winner = mg.answers[a].t <= mg.answers[b].t ? a : b;
     else if (correctA) winner = a;
     else if (correctB) winner = b;
     else winner = Math.random() < 0.5 ? a : b;
-    log(`정답 공개: 없었던 유품은 "${MEMORY_NAMES_KR[mg.missing]}"이었습니다.`);
+    log(`정답 공개: 바뀐 유품은 "${MEMORY_NAMES_KR[mg.changedItem]}"이었습니다.`);
     broadcastState();
     return endMinigame(winner);
   }
@@ -718,14 +726,16 @@ function publicMinigameView(mg, forId) {
     const oppId = otherId(forId);
     return {
       digits: CONFIG.BANK_DIGITS,
+      // 서로 다른 금고를 각자 푸는 방식이므로, 상대의 시도 횟수만 참고용으로 보여주고
+      // 상대의 스트라이크/볼 결과는(내 금고와 무관한 정보라) 굳이 내려줄 필요가 없다.
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
-      oppGuesses: (mg.history[oppId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
+      oppAttempts: (mg.history[oppId] || []).length,
     };
   }
   if (mg.type === 'MEMORY') {
-    // 정답(missing)은 절대 내려주지 않는다 — 둘 다 답하고 나서야 endMinigame으로 결과가 공개됨.
+    // 정답(changedItem)은 절대 내려주지 않는다 — 둘 다 답하고 나서야 endMinigame으로 결과가 공개됨.
     return {
-      pool: mg.pool, shown: mg.shown, revealUntil: mg.revealUntil,
+      before: mg.before, after: mg.after, revealUntil: mg.revealUntil,
       myAnswered: !!mg.answers[forId], oppAnswered: !!mg.answers[otherId(forId)],
     };
   }
@@ -739,14 +749,57 @@ function broadcastState() {
   broadcastAdminState();
 }
 
+// 관리자 화면 전용 — 진행 중인 미니게임의 숨김정보(정답, 각자의 선택 등)를 사람이 읽기 쉬운
+// 라벨(플레이어 이름 기준)로 풀어서 보여준다. "서로 어떤 걸 선택하고 있는지" 실시간으로 보이게
+// 하는 것이 관리자 화면의 목적이므로, 아직 공개되지 않은 진행 중 선택도 그대로 노출한다.
+function buildAdminMinigameSummary(mg) {
+  const nameOf = (id) => (id ? (match.players[id] ? match.players[id].name : id) : null);
+  const byName = (obj, mapVal) => {
+    const out = {};
+    for (const [id, v] of Object.entries(obj || {})) out[nameOf(id)] = mapVal ? mapVal(v) : v;
+    return out;
+  };
+  const type = mg.type;
+  if (type === 'NIM') return { 누적: mg.count, 목표: mg.limit, 현재차례: nameOf(mg.turn) };
+  if (type === 'HAND') return { 숨기는사람: nameOf(mg.hider), 맞히는사람: nameOf(mg.guesser), 숨긴손: mg.hiderPick, 지목한손: mg.guesserPick };
+  if (type === 'REFLEX') return { 신호발동여부: !!mg.goAt, 클릭기록: byName(mg.clicks, (v) => (v.early ? '성급하게 누름' : `${v.reactMs}ms`)) };
+  if (type === 'BOMB') return { 현재소지자: nameOf(mg.holder), 전달횟수: mg.passes };
+  if (type === 'PIN') return { 현재차례: nameOf(mg.turn), 뽑은횟수: mg.pulls, 터지는시점: mg.popAt };
+  if (type === 'SIGIL') return { 선택현황: byName(mg.picks) };
+  if (type === 'GUESS_COUNT') return { 실제개수: mg.trueCount, 추측현황: byName(mg.guesses) };
+  if (type === 'PARITY') return { 역할: { [nameOf(mg.oddPlayer)]: '홀', [nameOf(mg.evenPlayer)]: '짝' }, 선택현황: byName(mg.picks) };
+  if (type === 'BANK') return {
+    각자의정답: byName(mg.secrets, (v) => v.join('')),
+    시도횟수: byName(mg.history, (v) => v.length),
+  };
+  if (type === 'MEMORY') return {
+    처음보여준4개: (mg.before || []).map((k) => MEMORY_NAMES_KR[k]),
+    바뀐후4개: (mg.after || []).map((k) => MEMORY_NAMES_KR[k]),
+    실제로바뀐것: MEMORY_NAMES_KR[mg.changedItem],
+    답변현황: byName(mg.answers, (v) => MEMORY_NAMES_KR[v.choice]),
+  };
+  return {};
+}
+
 // 관리자(관전) 화면용 — 두 플레이어(장남/차남)의 처소를 전부(비공개 정보 포함) 그대로 보여준다.
 // 밸런스 테스트 관찰 용도이므로 플레이어에게는 숨기는 정보도 관리자에게는 그대로 내려준다.
+// 요청사항: "서로 어떤 걸 선택하고 있는지" 실시간으로 보여야 하므로, 이미 확정된 결과뿐 아니라
+// 설치 단계의 확정 전 미리보기(setupPreview)와 미니게임 진행 중 선택도 함께 내려준다.
 function buildAdminState() {
   return {
     phase: match.phase,
     round: match.round,
     roundsTotal: CONFIG.ROUNDS,
-    minigame: match.minigame ? { type: match.minigame.type, name: MINIGAME_NAMES[match.minigame.type] } : null,
+    minigame: match.minigame ? {
+      type: match.minigame.type,
+      name: MINIGAME_NAMES[match.minigame.type],
+      detail: buildAdminMinigameSummary(match.minigame),
+    } : null,
+    setupPreview: match.phase === 'SETUP' ? match.order.map((id) => ({
+      name: match.players[id].name,
+      confirmed: !!match.setupSelections[id],
+      cells: match.setupSelections[id] || match.setupPreview[id] || [],
+    })) : null,
     players: match.order.map((id) => {
       const p = match.players[id];
       return {
@@ -817,9 +870,20 @@ io.on('connection', (socket) => {
     }
     if (seen.size !== CONFIG.COUNTS.P) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
     match.setupSelections[socket.id] = cells;
+    delete match.setupPreview[socket.id];
     log(`${match.players[socket.id].name} 독 설치 완료`);
     broadcastState();
     if (match.order.every((id) => match.setupSelections[id])) finalizeSetup();
+  });
+
+  // 확정 전 실시간 미리보기 — 관리자 화면 전용. 상대 플레이어에게는 절대 내려주지 않으므로
+  // broadcastState()가 아니라 broadcastAdminState()만 호출한다.
+  socket.on('setup:preview', (payload) => {
+    if (match.phase !== 'SETUP') return;
+    const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
+    const valid = cells.filter((cell) => cell && cell.row >= 0 && cell.row < CONFIG.GRID && cell.col >= 0 && cell.col < CONFIG.GRID);
+    match.setupPreview[socket.id] = valid;
+    broadcastAdminState();
   });
 
   socket.on('minigame:move', (payload) => handleMinigameMove(socket.id, payload || {}));
