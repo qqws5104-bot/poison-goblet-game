@@ -133,6 +133,10 @@ function playMinigame(label, socket, s) {
       // 서버가 금고 번호를 하나 정해두고 두 사람이 순서 없이 동시에 계속 추리하는 방식으로 바뀌었다.
       // 순수 무작위 추측은 720개 순열 중 하나를 맞히는 데 평균 수백 번이 걸려 테스트가 느려지므로,
       // 스트라이크/볼 결과로 후보를 계속 좁혀나가는 간단한 추론 봇을 사용한다(실제 사람의 플레이를 근사).
+      // "훼방 놓기" 경로도 회귀 테스트로 한 번은 실제로 타 보도록, 낮은 확률로 무작위 시점에 사용한다.
+      if (mg.distractAvailable && Math.random() < 0.15) {
+        return socket.emit('minigame:move', { action: 'DISTRACT' });
+      }
       if (!bankCandidates[label]) bankCandidates[label] = allPermutations(mg.digits);
       if (mg.myGuesses.length) {
         const last = mg.myGuesses[mg.myGuesses.length - 1];

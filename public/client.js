@@ -173,6 +173,18 @@ socket.on('full', () => { app.innerHTML = '<div class="panel center"><p>이미 �
 // (방이 꽉 차서 막혀 있던 화면도 이걸로 확실히 풀린다.)
 socket.on('reload', () => { location.reload(); });
 
+// 금고 번호 맞추기(BANK)의 "훼방 놓기" — 상대가 나를 훼방 놓으면, 내 입력판을 잠깐 흔들어
+// 실제로 방해받는 느낌을 준다(입력 자체를 막지는 않음 — 순전히 견제/압박용 연출).
+socket.on('bankDistracted', () => {
+  addLog('😈 상대가 훼방을 놓았습니다 — 화면이 잠깐 흔들립니다!');
+  const wrap = document.getElementById('bankNumpadWrap');
+  if (wrap) {
+    wrap.classList.add('distracted');
+    const ms = (lastState && lastState.config && lastState.config.BANK_DISTRACT_MS) || 2500;
+    setTimeout(() => wrap.classList.remove('distracted'), ms);
+  }
+});
+
 socket.on('rewardResult', (payload) => {
   if (payload.kind === 'FLASH_ALL') {
     flashRoom = payload.room;
@@ -235,6 +247,7 @@ function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.
 // 저장하고 버튼 클릭으로만 값을 바꾸는 방식으로 바꿔서, 다시 그려져도 값이 유지되게 했다.
 function numKeypad(opts) {
   const wrap = el('div', 'numpadWrap');
+  if (opts.wrapId) wrap.id = opts.wrapId;
   const display = el('div', 'numpadDisplay', opts.get() || '&nbsp;');
   wrap.appendChild(display);
   const refreshDisplay = () => { display.textContent = opts.get() || ' '; };
@@ -623,6 +636,8 @@ function renderMinigamePanel(state) {
   } else if (type === 'BANK') {
     // 하나의 금고를 공유하는 게 아니라, 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른 정답)를
     // 갖고 동시에 독립적으로 숫자야구를 진행한다 — 자기 금고를 먼저 여는 쪽이 승리.
+    // 정답은 서로 달라도, 상대의 시도 내역은 내 정답을 전혀 노출하지 않으므로 그대로 보여준다 —
+    // "상대가 벌써 저기까지 좁혔다"는 실시간 압박감 + "훼방 놓기"로 직접 개입하는 상호작용을 더했다.
     if (bankRound !== state.round) { bankRound = state.round; bankEntry = ''; }
     box.appendChild(el('div', 'desc', `숫자야구입니다. 나와 상대는 각자 서로 다른 자신만의 금고(0~9 중 서로 다른 숫자 ${mg.digits}개)를 갖고 있습니다 — 공유된 정답이 아니라 완전히 별개의 문제입니다. 자신의 금고를 먼저 여는 쪽이 이깁니다. ⚡스트라이크=숫자·자리 모두 일치, ・볼=숫자만 일치, 아웃=둘 다 없음.`));
 
@@ -635,8 +650,13 @@ function renderMinigamePanel(state) {
       mine.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
     });
     const theirs = el('div', 'bankCol');
-    theirs.appendChild(el('div', 'bankColTitle', '상대 금고 진행 상황'));
-    theirs.appendChild(el('div', 'bankRow hint', `상대는 자신의 금고를 지금까지 ${mg.oppAttempts || 0}번 시도했습니다. (서로 다른 금고라 세부 결과는 알 수 없습니다.)`));
+    theirs.appendChild(el('div', 'bankColTitle', '상대 금고 시도 (실시간)'));
+    if ((mg.oppGuesses || []).length === 0) {
+      theirs.appendChild(el('div', 'bankRow hint', '상대는 아직 시도하지 않았습니다.'));
+    }
+    (mg.oppGuesses || []).slice().reverse().forEach((h) => {
+      theirs.appendChild(el('div', 'bankRow', `<b>${h.guess.join('')}</b> → ${outcomeLabel(h)}`));
+    });
     dual.appendChild(mine); dual.appendChild(theirs);
     box.appendChild(dual);
 
@@ -647,6 +667,7 @@ function renderMinigamePanel(state) {
       maxLen: mg.digits,
       allowDigit: (d, cur) => !cur.includes(d),
       submitLabel: '번호 불러보기',
+      wrapId: 'bankNumpadWrap',
       onSubmit: (entry) => {
         const digits = entry.split('').map((ch) => Number(ch));
         if (digits.length !== mg.digits || new Set(digits).size !== digits.length) {
@@ -657,6 +678,12 @@ function renderMinigamePanel(state) {
         return true;
       },
     }));
+
+    const distractBtn = el('button', 'action danger bankDistractBtn', mg.distractAvailable ? '😈 훼방 놓기 (1회, 이번 시도 포기)' : '훼방 놓기 사용함');
+    distractBtn.disabled = !mg.distractAvailable;
+    distractBtn.onclick = () => socket.emit('minigame:move', { action: 'DISTRACT' });
+    box.appendChild(distractBtn);
+    box.appendChild(el('div', 'hint', '훼방 놓기: 이번 라운드에 딱 한 번, 내 시도 대신 상대의 입력판을 잠깐 흔들어 방해할 수 있습니다.'));
   } else if (type === 'MEMORY') {
     // "5개 중 안 보인 1개 고르기"는 처음 보는 항목이 눈에 띄어 너무 쉬웠다는 피드백을 반영해,
     // 같은 4자리를 두 번 보여주되 그중 하나만 다른 유품으로 바뀌는 "틀린 그림 찾기" 방식으로 바꿨다.

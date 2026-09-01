@@ -321,6 +321,19 @@ button.memoryChoice:hover { border-color: var(--gold); background: #23151c; }
 
 /* 숫자 키패드 (촛불 개수 맞히기 / 금고 번호 맞추기) */
 .numpadWrap { max-width: 260px; margin-top: 8px; }
+/* 금고 번호 맞추기 "훼방 놓기"에 당했을 때 입력판이 흔들리는 연출 */
+@keyframes numpadShake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-6px) rotate(-1.5deg); }
+  30% { transform: translateX(6px) rotate(1.5deg); }
+  45% { transform: translateX(-5px) rotate(-1deg); }
+  60% { transform: translateX(5px) rotate(1deg); }
+  75% { transform: translateX(-3px); }
+  90% { transform: translateX(3px); }
+}
+.numpadWrap.distracted { animation: numpadShake 420ms ease-in-out 4; }
+.numpadWrap.distracted .numpadDisplay { border-color: var(--crimson-bright); box-shadow: 0 0 10px rgba(209,66,90,0.7); }
+.bankDistractBtn { margin-top: 10px; width: 100%; }
 .numpadDisplay {
   background: #0c0709; border: 1px solid var(--border); border-radius: 2px; color: var(--white);
   font-size: 22px; letter-spacing: 6px; text-align:center; padding: 10px; margin-bottom: 8px; min-height: 44px;

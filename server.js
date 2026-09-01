@@ -20,6 +20,7 @@ const CONFIG = {
   BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_POP_MIN: 3, PIN_POP_MAX: 8,
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
+  BANK_DISTRACT_MS: 2500, // 금고 번호 맞추기: "훼방 놓기" 사용 시 상대 화면이 흔들리는 시간(ms)
   REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 500, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms)
 };
@@ -231,7 +232,14 @@ function initMinigame(type, roundNo) {
   if (type === 'BANK') {
     // 하나의 금고를 공유하는 게 아니라, 두 사람이 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른
     // 정답)를 갖고 동시에 독립적으로 숫자야구를 진행한다 — 자기 금고를 먼저 여는 쪽이 승리.
-    return { ...base, secrets: { [a]: randomDistinctDigits(CONFIG.BANK_DIGITS), [b]: randomDistinctDigits(CONFIG.BANK_DIGITS) }, history: { [a]: [], [b]: [] } };
+    // 다만 서로 아예 안 부딪히면 상호작용이 없다는 피드백이 있어, 상대의 시도 내역을 실시간으로
+    // 그대로 보여주고(내 정답과는 무관하니 노출해도 안전) "훼방 놓기"로 서로 직접 개입할 수 있게 한다.
+    return {
+      ...base,
+      secrets: { [a]: randomDistinctDigits(CONFIG.BANK_DIGITS), [b]: randomDistinctDigits(CONFIG.BANK_DIGITS) },
+      history: { [a]: [], [b]: [] },
+      distractUsed: { [a]: false, [b]: false },
+    };
   }
   if (type === 'MEMORY') {
     // "5개 중 안 보인 1개 고르기"는 처음 보는 5번째 항목이 눈에 띄어 너무 쉬웠다 — 진짜 기억력을
@@ -446,7 +454,20 @@ function isValidDigits(arr) {
     && arr.every((d) => Number.isInteger(d) && d >= 0 && d <= 9)
     && new Set(arr).size === arr.length;
 }
+// 서로 상호작용이 전혀 없다는 피드백을 반영한 "훼방 놓기" — 매치당 1회, 이번 시도를 포기하는
+// 대신 상대의 화면을 잠깐 흔들어(입력 방해) 견제할 수 있다. 정답 자체는 절대 알려주지 않으므로
+// "각자 독립적인 금고" 원칙은 그대로 유지된다.
+function handleBankDistract(id, mg) {
+  if (mg.distractUsed[id]) return; // 매치당 1회만
+  mg.distractUsed[id] = true;
+  const oppId = otherId(id);
+  log(`${match.players[id].name}이 상대의 금고 풀이를 훼방 놓았습니다!`);
+  io.to(oppId).emit('bankDistracted', {});
+  broadcastState();
+}
+
 function handleBank(id, payload, mg) {
+  if (payload && payload.action === 'DISTRACT') return handleBankDistract(id, mg);
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
   if (!isValidDigits(guess)) return;
   const secret = mg.secrets[id]; // 각자 자신의 금고(정답)만 상대한다 — 공유 정답이 아니다.
@@ -726,10 +747,12 @@ function publicMinigameView(mg, forId) {
     const oppId = otherId(forId);
     return {
       digits: CONFIG.BANK_DIGITS,
-      // 서로 다른 금고를 각자 푸는 방식이므로, 상대의 시도 횟수만 참고용으로 보여주고
-      // 상대의 스트라이크/볼 결과는(내 금고와 무관한 정보라) 굳이 내려줄 필요가 없다.
+      // 서로 다른 금고를 각자 푸는 방식이라 상대의 시도 내역을 그대로 보여줘도 내 정답은 전혀
+      // 새지 않는다 — 오히려 "상대가 벌써 저만큼 좁혔다"는 실시간 압박감이 상호작용을 만들어준다.
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
-      oppAttempts: (mg.history[oppId] || []).length,
+      oppGuesses: (mg.history[oppId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
+      distractAvailable: !mg.distractUsed[forId],
+      oppDistractAvailable: !mg.distractUsed[oppId],
     };
   }
   if (mg.type === 'MEMORY') {
