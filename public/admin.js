@@ -120,13 +120,11 @@ function renderPlayerCard(p) {
       const cell = p.room[r][c];
       const wasOpened = prev[r] && prev[r][c];
       nowOpened[r].push(!!cell.opened);
-      // "서로 어떤 걸 선택했는지"만 보여주는 게 목적이므로, 아직 열지 않은(선택하지 않은) 칸은
-      // 종류를 전혀 드러내지 않고 빈 칸으로 둔다 — 실제로 연 칸만 눌린 것처럼 색이 채워지고 종류가 보인다.
-      const div = el('div', 'adminCell' + (cell.opened ? ` opened ${cell.type}` : '') + (cell.opened && !wasOpened ? ' justOpened' : ''));
-      div.title = cell.opened ? `(${r + 1},${c + 1}) ${CELL_NAMES[cell.type] || ''}` : `(${r + 1},${c + 1}) · 미선택`;
-      if (cell.opened && cell.type === 'E') div.innerHTML = '<span class="emptyMark">✕</span>';
-      else if (cell.opened) div.innerHTML = cellIconSVG(cell.type);
-      else div.innerHTML = '';
+      // "서로 어떤 걸 선택했는지"만 보여주는 게 목적 — 무엇인지(종류)는 알 필요 없고, 그저
+      // "이 칸을 선택했다"는 사실만 보이면 된다. 그래서 연 칸이라도 종류별 아이콘/색을 쓰지 않고,
+      // 전부 똑같은 모양의 "선택됨" 표시만 준다(안 연 칸은 계속 완전히 빈 칸).
+      const div = el('div', 'adminCell' + (cell.opened ? ' opened' : '') + (cell.opened && !wasOpened ? ' justOpened' : ''));
+      div.title = cell.opened ? `(${r + 1},${c + 1}) · 선택됨` : `(${r + 1},${c + 1}) · 미선택`;
       grid6.appendChild(div);
     }
   }

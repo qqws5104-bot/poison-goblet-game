@@ -354,11 +354,9 @@ button.numkey.primary { border-color: var(--gold); color: var(--gold); backgroun
   aspect-ratio: 1/1; background: #1a0f14; border: 1px solid var(--border);
   display:flex; align-items:center; justify-content:center; position: relative;
 }
-.adminCell.opened.P { background: linear-gradient(160deg, #2a0f16, #170a0e); }
-.adminCell.opened.G { background: linear-gradient(160deg, #2a2011, #1a130a); }
-.adminCell.opened.S { background: linear-gradient(160deg, #1c222e, #12151d); }
-.adminCell.opened.A { background: linear-gradient(160deg, #16261f, #0e1813); }
-.adminCell.opened.E { background: #1a1016; }
+/* 무엇인지는 숨기고 "선택했다"는 사실만 보여주므로, 종류별 색 구분 없이 전부 같은 표시를 쓴다
+   — 설치 단계 미리보기(.selPreview)와 같은 느낌으로 통일. */
+.adminCell.opened { background: var(--crimson-bright); box-shadow: 0 0 6px rgba(209,66,90,0.6); }
 .adminCell.justOpened { animation: adminFlash 900ms ease-out; }
 @keyframes adminFlash {
   0% { box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(201,162,75,0.9) inset; }
