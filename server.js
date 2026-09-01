@@ -20,7 +20,7 @@ const CONFIG = {
   BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_POP_MIN: 3, PIN_POP_MAX: 8,
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_MS: 30000,       // 섬광 정찰 보상: 이 시간(ms) 안의 무작위 순간에 자동 발동
+  REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 500, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms)
 };
 
@@ -257,7 +257,7 @@ function endMinigame(winnerId) {
     type: match.roundRewardType,
     winnerId,
     used: false,
-    expiresAt: match.roundRewardType === 'FLASH_ALL' ? Date.now() + CONFIG.REWARD_FLASH_MS : null,
+    expiresAt: match.roundRewardType === 'FLASH_ALL' ? Date.now() + CONFIG.REWARD_FLASH_MS_MAX : null,
   };
 
   // 본행동(칸 열기)은 더 이상 순서 교대가 아니라 두 사람이 동시에 독립적으로 진행한다.
@@ -265,12 +265,12 @@ function endMinigame(winnerId) {
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 보상 [${REWARD_NAMES[match.roundRewardType]}] 획득`);
 
-  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 정해진 시간(REWARD_FLASH_MS) 안의
+  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 획득 후 10~20초(REWARD_FLASH_MS_MIN~MAX) 사이의
   // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다.
   // (발동까지 남은 시간은 클라이언트에 알려주지 않는다 — 예측 가능해지면 보상 가치가 떨어짐.)
   if (match.pendingReward.expiresAt) {
     const roundAtGrant = match.round;
-    const fireDelay = randInt(0, CONFIG.REWARD_FLASH_MS);
+    const fireDelay = randInt(CONFIG.REWARD_FLASH_MS_MIN, CONFIG.REWARD_FLASH_MS_MAX);
     setTimeout(() => {
       if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === winnerId && !match.pendingReward.used) {
         match.pendingReward.used = true;
@@ -807,7 +807,9 @@ function buildAdminState() {
         connected: p.connected,
         poison: p.poison, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
         opens: match.actionOpens[id] || 0,
-        room: p.room.map((row) => row.map((cell) => ({ type: cell.type, opened: cell.opened }))),
+        // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
+        // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
+        room: p.room.map((row) => row.map((cell) => ({ type: cell.opened ? cell.type : null, opened: cell.opened }))),
       };
     }),
   };

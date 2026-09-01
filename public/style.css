@@ -295,16 +295,18 @@ button.memoryChoice:hover { border-color: var(--gold); background: #23151c; }
 .pickerGrid .cell { background: #150c10; }
 .pickerGrid .cell.pickable:hover { background: #241521; }
 
-/* "내 처소" 6×6 그리드가 있는 자리 위에 그대로 덮이는 오버레이 — 페이지 전체를 갈아치우지 않는다 */
+/* "내 처소" 6×6 그리드 자리에 정확히 겹쳐 "덮어쓰기"되는 오버레이. 라벨/여백/폭 변경을 전부 없애고
+   기본 .grid6 규칙(max-width 420px, margin auto)을 그대로 물려받게 해서, 오버레이의 칸이 그 밑에
+   깔린 원래 칸과 한 치의 오차 없이 같은 위치·크기로 겹치게 한다. */
 .roomGridHolder { position: relative; }
 .flashOverlay {
   position: absolute; inset: 0; z-index: 5;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  background: #150c10; border: 2px solid var(--gold); border-radius: 3px;
-  box-shadow: 0 0 24px rgba(201,162,75,0.5); padding: 8px;
+  background: #150c10;
 }
-.flashOverlayLabel { font-family: 'Nanum Myeongjo', serif; color: var(--gold); font-size: 15px; text-align: center; }
-.flashOverlay .grid6 { width: 100%; max-width: 100%; }
+/* position:absolute인 오버레이 안에서는 자식의 위아래 마진이 부모 밖으로 겹쳐 나가지(margin collapse)
+   않아, 기본 .grid6의 10px 위쪽 마진만큼 원본 그리드보다 아래로 밀려 보인다 — 세로 마진만 0으로
+   없애 원본 칸 위치와 픽셀 단위로 정확히 겹치게 한다(가로는 margin:auto로 그대로 중앙 정렬). */
+.flashOverlay .grid6 { margin: 0 auto; }
 
 /* 보상(정찰)으로 무엇을 알아냈는지 라운드 내내 계속 보이도록 하는 패널 */
 .rewardResultPanel { border: 1px solid var(--gold); }
@@ -357,7 +359,6 @@ button.numkey.primary { border-color: var(--gold); color: var(--gold); backgroun
 .adminCell.opened.S { background: linear-gradient(160deg, #1c222e, #12151d); }
 .adminCell.opened.A { background: linear-gradient(160deg, #16261f, #0e1813); }
 .adminCell.opened.E { background: #1a1016; }
-.adminCell:not(.opened) .cellIcon { opacity: 0.32; filter: grayscale(0.5) drop-shadow(none) !important; }
 .adminCell.justOpened { animation: adminFlash 900ms ease-out; }
 @keyframes adminFlash {
   0% { box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(201,162,75,0.9) inset; }

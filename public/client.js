@@ -278,11 +278,11 @@ function render(state) {
 }
 
 // 섬광 정찰 보상 연출 — 옛날 예능의 "철가방(배달통)" 개그처럼, 뚜껑이 확 열렸다가 순식간에
-// 다시 닫히는 느낌. 페이지 전체를 갈아치우던 예전 방식 대신, "내 처소" 6×6 그리드가 있는
-// 자리 바로 위에 덮이는 오버레이로 뜨고, 시간이 지나면 사라져 원래 그리드가 다시 보인다.
+// 다시 닫히는 느낌. "내 처소" 6×6 그리드가 있는 자리에 정확히 겹치는 오버레이로 뜬다 —
+// 라벨/여백 없이 그리드 그 자체가 원래 칸들 위에 그대로 "덮어쓰기"되도록, 위치·크기를 원본
+// 그리드와 동일하게 맞춘다. 시간이 지나면 사라져 원래 그리드가 다시 보인다.
 function renderFlashOverlay(room) {
   const p = el('div', 'flashOverlay boxOpenAnim');
-  p.appendChild(el('div', 'flashOverlayLabel', '🍱 철가방 정찰 — 뚜껑이 열린 순간!'));
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
