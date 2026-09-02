@@ -16,9 +16,11 @@ const CONFIG = {
   POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
   ROUNDS: 10,             // 총 라운드 수 (고정)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
+  ROUND_COUNTDOWN_MS: 3000, // 매 라운드 미니게임 시작 전 3-2-1 카운트다운 길이
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
-  PIN_POP_MIN: 3, PIN_POP_MAX: 8,
+  PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
+  GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
   BANK_DISTRACT_MS: 2500, // 금고 번호 맞추기: "훼방 놓기" 사용 시 상대 화면이 흔들리는 시간(ms)
   REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
@@ -27,11 +29,12 @@ const CONFIG = {
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
 // 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 9종을 섞은 뒤 하나를 무작위로 한 번 더 채운다(buildMinigameOrder).
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'PARITY', 'BANK', 'MEMORY'];
+// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로 제외 — 9종.
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'MEMORY'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
-  SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기', PARITY: '숫자 합 홀짝',
+  SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기',
   BANK: '금고 번호 맞추기', MEMORY: '사라진 유품 찾기',
 };
 // 사라진 유품 찾기(MEMORY): 5개 중 4개를 잠깐 보여준 뒤, 보이지 않았던 1개를 맞히는 기억력 게임.
@@ -99,12 +102,14 @@ function freshMatch() {
   matchSeq += 1;
   return {
     seq: matchSeq, // 새 매치(재대전 포함)마다 증가 — 클라이언트가 화면/입력 상태를 리셋하는 신호로 사용
-    phase: 'LOBBY', // LOBBY, SETUP, ROUND_MINIGAME, ROUND_ACTION, END
+    phase: 'LOBBY', // LOBBY, SETUP, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
     setupPreview: {}, // 확정 전 실시간 선택 상태 — 관리자 화면 전용(상대 플레이어에게는 절대 내려주지 않음)
     round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
-    roundRewardType: null, pendingReward: null,
+    countdownEndsAt: null, // ROUND_COUNTDOWN 동안 3-2-1이 몇 시에 끝나는지(클라이언트가 직접 카운트다운을 그리는 기준)
+    pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
+    actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     rematchReady: {},
     log: [], winner: null, endReason: null,
@@ -165,15 +170,30 @@ function finalizeSetup() {
 }
 
 // ------------------------------ 라운드 / 미니게임 ----------------------------
+// "게임이 무지성으로 시작된다"는 피드백에 따라, 미니게임을 곧장 시작하지 않고 먼저 3-2-1
+// 카운트다운(+ 다음 미니게임 이름 예고)을 보여준 뒤에야 실제로 시작한다. REFLEX의 무작위
+// 신호 지연이나 BOMB의 실시간 퓨즈처럼 initMinigame()이 걸어두는 setTimeout은 전부 "실제
+// 미니게임이 시작되는 시점"에만 걸려야 하므로, initMinigame() 호출 자체를 카운트다운이
+// 끝난 뒤로 미룬다 — 그래야 카운트다운을 보는 동안 몰래 시간이 깎이지 않는다.
 function startRound() {
   match.round += 1;
-  const type = match.minigameOrder[match.round - 1];
-  match.phase = 'ROUND_MINIGAME';
-  match.minigame = initMinigame(type, match.round);
+  match.phase = 'ROUND_COUNTDOWN';
+  match.minigame = null;
   match.pendingReward = null;
-  match.roundRewardType = REWARD_TYPES[randInt(0, REWARD_TYPES.length - 1)];
-  log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 : 미니게임 [${MINIGAME_NAMES[type]}] · 이번 라운드 보상: ${REWARD_NAMES[match.roundRewardType]} ---`);
+  match.countdownEndsAt = Date.now() + CONFIG.ROUND_COUNTDOWN_MS;
+  const type = match.minigameOrder[match.round - 1];
+  const roundAtCountdown = match.round;
+  log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 준비 : 미니게임 [${MINIGAME_NAMES[type]}] — 곧 시작합니다 ---`);
   broadcastState();
+  setTimeout(() => {
+    // 재대전 등으로 매치가 이미 다른 상태로 넘어갔다면 낡은 타이머이므로 무시한다.
+    if (match.phase !== 'ROUND_COUNTDOWN' || match.round !== roundAtCountdown) return;
+    match.phase = 'ROUND_MINIGAME';
+    match.countdownEndsAt = null;
+    match.minigame = initMinigame(type, match.round);
+    log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 시작 : 미니게임 [${MINIGAME_NAMES[type]}] ---`);
+    broadcastState();
+  }, CONFIG.ROUND_COUNTDOWN_MS);
 }
 
 function initMinigame(type, roundNo) {
@@ -202,10 +222,10 @@ function initMinigame(type, roundNo) {
     return mgReflex;
   }
   if (type === 'BOMB') {
-    // 더 이상 "넘긴 횟수"가 아니라 실시간(ms) 퓨즈로 터진다 — 정해진 시간이 다 되면
-    // 그 순간 폭탄을 들고 있는 사람이 진다. 넘기는 횟수는 표시용일 뿐, 승패에는 영향 없음.
-    const mgBomb = { ...base, holder: firstIsA ? a : b, passes: 0 };
+    // 실시간(ms) 퓨즈로 터진다 — 정해진 시간이 다 되면 그 순간 폭탄을 들고 있는 사람이 진다.
+    // 남은 시간을 화면에 그대로 보여주므로(expiresAt), 클라이언트가 직접 카운트다운을 계산한다.
     const delay = randInt(CONFIG.BOMB_FUSE_MS_MIN, CONFIG.BOMB_FUSE_MS_MAX);
+    const mgBomb = { ...base, holder: firstIsA ? a : b, passes: 0, expiresAt: Date.now() + delay };
     setTimeout(() => {
       if (match.minigame === mgBomb && match.phase === 'ROUND_MINIGAME') {
         const loser = mgBomb.holder;
@@ -217,17 +237,17 @@ function initMinigame(type, roundNo) {
     return mgBomb;
   }
   if (type === 'PIN') {
-    return { ...base, turn: firstIsA ? a : b, pulls: 0, popAt: randInt(CONFIG.PIN_POP_MIN, CONFIG.PIN_POP_MAX) };
+    // 숨겨진 확률(팝 포인트)이 아니라, 8~12개의 안전핀 중 하나가 미리 정해진 폭탄이고
+    // 두 사람이 번갈아 직접 핀을 하나씩 골라 뽑는 방식 — 폭탄을 뽑은 사람이 진다.
+    const pinCount = randInt(CONFIG.PIN_COUNT_MIN, CONFIG.PIN_COUNT_MAX);
+    return { ...base, turn: firstIsA ? a : b, pinCount, bombIndex: randInt(0, pinCount - 1), pulled: Array(pinCount).fill(false), pulls: 0 };
   }
   if (type === 'SIGIL') {
     return { ...base, picks: {} };
   }
   if (type === 'GUESS_COUNT') {
-    // 너무 쉽다는 피드백 반영: 촛불 개수 범위를 넓히고(눈으로 정확히 세기 어렵게) 노출 시간도 짧게 준다.
-    return { ...base, trueCount: randInt(9, 20), guesses: {}, guessOrder: [] };
-  }
-  if (type === 'PARITY') {
-    return { ...base, oddPlayer: firstIsA ? a : b, evenPlayer: firstIsA ? b : a, picks: {} };
+    // 너무 쉽다는 피드백 반영: 와인잔 개수 범위를 15~30으로 넓혀(눈으로 정확히 세기 어렵게) 노출 시간도 짧게 준다.
+    return { ...base, trueCount: randInt(CONFIG.GUESS_COUNT_MIN, CONFIG.GUESS_COUNT_MAX), guesses: {}, guessOrder: [] };
   }
   if (type === 'BANK') {
     // 하나의 금고를 공유하는 게 아니라, 두 사람이 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른
@@ -260,37 +280,63 @@ function endMinigame(winnerId) {
   const loserId = otherId(winnerId);
   match.minigame.result = winnerId;
 
-  // 보상은 라운드 시작 전에 이미 공개되어 있었고, 이번 라운드 미니게임 승자가 그 보상을 받는다.
+  // "보상은 승자가 직접 고르는 구조로" — 이제 라운드 시작 전 보상이 미리 하나로 고정되지 않고,
+  // 미니게임 승자가 후보 4종 중 하나를 스스로 골라야 종류(type)가 정해진다.
   match.pendingReward = {
-    type: match.roundRewardType,
     winnerId,
+    choices: shuffle(REWARD_TYPES),
+    type: null, // handleRewardChoose에서 채워짐
     used: false,
-    expiresAt: match.roundRewardType === 'FLASH_ALL' ? Date.now() + CONFIG.REWARD_FLASH_MS_MAX : null,
+    fireAt: null, // 섬광 정찰(FLASH_ALL)에서만 쓰는, 실제로 터지는 정확한 시각
   };
 
   // 본행동(칸 열기)은 더 이상 순서 교대가 아니라 두 사람이 동시에 독립적으로 진행한다.
   match.actionOpens = {};
   match.phase = 'ROUND_ACTION';
-  log(`미니게임 승리: ${match.players[winnerId].name} → 이번 라운드 보상 [${REWARD_NAMES[match.roundRewardType]}] 획득`);
+  log(`미니게임 승리: ${match.players[winnerId].name} → 보상을 직접 고릅니다.`);
+  broadcastState();
+}
 
-  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 획득 후 10~20초(REWARD_FLASH_MS_MIN~MAX) 사이의
+// 사라진 유품 찾기처럼 "둘 다 정답을 맞히지 못함" 같은 무승부가 나는 미니게임에서는, 승자를
+// 억지로 정해 보상까지 챙겨주지 않는다 — 이번 라운드는 그냥 보상 없이 본행동으로 넘어간다.
+function endMinigameDraw() {
+  match.minigame.result = 'DRAW';
+  match.pendingReward = null;
+  match.actionOpens = {};
+  match.phase = 'ROUND_ACTION';
+  log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
+  broadcastState();
+}
+
+// 미니게임 승자가 여러 보상 후보 중 하나를 직접 골라 확정한다.
+function handleRewardChoose(id, payload) {
+  const pr = match.pendingReward;
+  if (!pr || pr.winnerId !== id || pr.type) return; // 승자가 아니거나 이미 골랐으면 무시
+  const type = payload && payload.type;
+  if (!pr.choices.includes(type)) return;
+  pr.type = type;
+  log(`${match.players[id].name}이 보상으로 [${REWARD_NAMES[type]}]을(를) 선택했습니다.`);
+
+  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 고른 후 10~20초(REWARD_FLASH_MS_MIN~MAX) 사이의
   // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다.
-  // (발동까지 남은 시간은 클라이언트에 알려주지 않는다 — 예측 가능해지면 보상 가치가 떨어짐.)
-  if (match.pendingReward.expiresAt) {
+  // "보상을 획득하면 정확히 그 시간을 먼저 겪고 나서 처소에서 게임하도록" — 언제 터질지 이제는
+  // 감추지 않고 정확한 시각(fireAt)을 그대로 알려주며, doAction()에서 그 순간이 오기 전까지는
+  // 칸을 열 수 없게 막는다 — 미리 봐야 의미 있는 정보인데 칸부터 다 열어버리면 쓸모가 없어지기 때문.
+  if (type === 'FLASH_ALL') {
     const roundAtGrant = match.round;
     const fireDelay = randInt(CONFIG.REWARD_FLASH_MS_MIN, CONFIG.REWARD_FLASH_MS_MAX);
+    pr.fireAt = Date.now() + fireDelay;
     setTimeout(() => {
-      if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === winnerId && !match.pendingReward.used) {
+      if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === id && !match.pendingReward.used) {
         match.pendingReward.used = true;
-        const winner = match.players[winnerId];
+        const winner = match.players[id];
         const room = winner.room.map((r) => r.map((cell) => cell.type));
         actionLog(winner, `보상 발동 — 섬광 정찰로 내 처소 전체가 ${(CONFIG.REWARD_FLASH_REVEAL_MS / 1000).toFixed(1)}초간 드러났습니다.`);
-        io.to(winnerId).emit('rewardResult', { kind: 'FLASH_ALL', room, revealMs: CONFIG.REWARD_FLASH_REVEAL_MS });
+        io.to(id).emit('rewardResult', { kind: 'FLASH_ALL', room, revealMs: CONFIG.REWARD_FLASH_REVEAL_MS });
         broadcastState();
       }
     }, fireDelay);
   }
-
   broadcastState();
 }
 
@@ -305,7 +351,6 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'PIN') return handlePin(id, payload, mg);
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
-  if (mg.type === 'PARITY') return handleParity(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
   if (mg.type === 'MEMORY') return handleMemory(id, payload, mg);
 }
@@ -374,17 +419,20 @@ function handleBomb(id, payload, mg) {
   broadcastState();
 }
 
-// 5) 안전핀 뽑기 배팅 — 숨겨진 팝 포인트(순수 확률형)
+// 5) 안전핀 뽑기 배팅 — N개(8~12) 안전핀 중 하나가 폭탄, 번갈아 직접 하나씩 골라 뽑는다(순수 확률형)
 function handlePin(id, payload, mg) {
   if (mg.turn !== id) return;
-  if (payload.action !== 'PULL') return;
+  if (payload.action !== 'PICK') return;
+  const index = Number(payload.index);
+  if (!Number.isInteger(index) || index < 0 || index >= mg.pinCount || mg.pulled[index]) return;
+  mg.pulled[index] = true;
   mg.pulls += 1;
-  log(`${match.players[id].name}이 안전핀을 뽑았습니다. (${mg.pulls}번째)`);
-  if (mg.pulls >= mg.popAt) {
-    log('펑! 이번 핀에서 터졌습니다.');
+  if (index === mg.bombIndex) {
+    log(`펑! ${match.players[id].name}이 폭탄 안전핀을 뽑았습니다. (${mg.pulls}번째 핀)`);
     broadcastState();
     return endMinigame(otherId(id));
   }
+  log(`${match.players[id].name}이 안전핀을 뽑았습니다 — 무사합니다. (${mg.pulls}번째 핀)`);
   mg.turn = otherId(id);
   broadcastState();
 }
@@ -413,7 +461,7 @@ function handleSigil(id, payload, mg) {
 function handleGuessCount(id, payload, mg) {
   if (mg.guesses[id] != null) return;
   const g = Number(payload.guess);
-  if (!Number.isInteger(g) || g < 0 || g > 20) return;
+  if (!Number.isInteger(g) || g < 0 || g > CONFIG.GUESS_COUNT_MAX) return;
   mg.guesses[id] = g;
   mg.guessOrder.push(id);
   log(`${match.players[id].name}이 촛불 개수를 ${g}개로 추측했습니다.`);
@@ -425,23 +473,6 @@ function handleGuessCount(id, payload, mg) {
     broadcastState();
     const winner = da < db ? a : db < da ? b : mg.guessOrder[0];
     return endMinigame(winner);
-  }
-  broadcastState();
-}
-
-// 8) 숫자 합 홀짝 — 동시에 1~3을 선택, 합의 홀/짝으로 승부(계산+확률 혼합형)
-function handleParity(id, payload, mg) {
-  if (mg.picks[id]) return;
-  const n = Number(payload.n);
-  if (![1, 2, 3, 4].includes(n)) return;
-  mg.picks[id] = n;
-  const [a, b] = match.order;
-  if (mg.picks[a] && mg.picks[b]) {
-    const sum = mg.picks[a] + mg.picks[b];
-    const isEven = sum % 2 === 0;
-    log(`숫자 공개: ${match.players[a].name}=${mg.picks[a]}, ${match.players[b].name}=${mg.picks[b]} → 합 ${sum} (${isEven ? '짝' : '홀'})`);
-    broadcastState();
-    return endMinigame(isEven ? mg.evenPlayer : mg.oddPlayer);
   }
   broadcastState();
 }
@@ -471,12 +502,12 @@ function handleBank(id, payload, mg) {
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
   if (!isValidDigits(guess)) return;
   const secret = mg.secrets[id]; // 각자 자신의 금고(정답)만 상대한다 — 공유 정답이 아니다.
-  let strikes = 0, balls = 0;
-  guess.forEach((d, i) => {
-    if (secret[i] === d) strikes += 1;
-    else if (secret.includes(d)) balls += 1;
-  });
-  mg.history[id].push({ guess: guess.slice(), strikes, balls });
+  // 자릿수별 결과(marks)를 함께 저장해, 화면에서 칸 자체를 초록(스트라이크)/노랑(볼)/기본(미스)으로
+  // 바로 칠할 수 있게 한다 — 숫자로만 "2스트라이크 1볼"이라고 알려주는 것보다 한눈에 들어온다.
+  const marks = guess.map((d, i) => (secret[i] === d ? 'S' : secret.includes(d) ? 'B' : 'X'));
+  const strikes = marks.filter((m) => m === 'S').length;
+  const balls = marks.filter((m) => m === 'B').length;
+  mg.history[id].push({ guess: guess.slice(), strikes, balls, marks });
   const outcome = strikes === 0 && balls === 0 ? '아웃' : `${strikes}스트라이크 ${balls}볼`;
   log(`${match.players[id].name}: 자신의 금고에 ${guess.join('')} 시도 → ${outcome}`);
   if (strikes === CONFIG.BANK_DIGITS) {
@@ -504,10 +535,10 @@ function handleMemory(id, payload, mg) {
     if (correctA && correctB) winner = mg.answers[a].t <= mg.answers[b].t ? a : b;
     else if (correctA) winner = a;
     else if (correctB) winner = b;
-    else winner = Math.random() < 0.5 ? a : b;
+    else winner = null; // 둘 다 틀렸으면 승자를 억지로 정하지 않는다 — 무승부, 보상 없음
     log(`정답 공개: 바뀐 유품은 "${MEMORY_NAMES_KR[mg.changedItem]}"이었습니다.`);
     broadcastState();
-    return endMinigame(winner);
+    return winner ? endMinigame(winner) : endMinigameDraw();
   }
   broadcastState();
 }
@@ -518,6 +549,10 @@ function handleMemory(id, payload, mg) {
 function doAction(id, kind, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
   if (kind !== 'OPEN') return;
+  const pr = match.pendingReward;
+  // 섬광 정찰(FLASH_ALL)을 골랐다면, 실제로 번쩍여서 내 처소가 드러나는 그 순간을 먼저 겪은
+  // 뒤에야 칸을 열 수 있다 — 정보를 보기도 전에 칸부터 다 열어버리면 보상의 의미가 없어진다.
+  if (pr && pr.winnerId === id && pr.type === 'FLASH_ALL' && !pr.used) return;
   const opens = match.actionOpens[id] || 0;
   if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 몫을 다 열었음
   const player = match.players[id];
@@ -560,7 +595,7 @@ function checkNeutralize(player) {
 function handleRewardUse(id, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
   const pr = match.pendingReward;
-  if (!pr || pr.winnerId !== id || pr.used) return;
+  if (!pr || pr.winnerId !== id || pr.used || !pr.type) return; // 보상 종류를 아직 안 골랐으면 사용 불가
   const player = match.players[id];
   const opp = match.players[otherId(id)];
   if (!opp) return;
@@ -691,11 +726,26 @@ function buildClientState(forId) {
       name: MINIGAME_NAMES[match.minigame.type],
       // 클라이언트에 필요한 진행상황만 노출 (히든정보 보호)
       public: publicMinigameView(match.minigame, forId),
+      // 라운드가 끝난 뒤(ROUND_ACTION 동안)에도 match.minigame은 그대로 남아있으므로, 방금 끝난
+      // 미니게임의 승패를 결과 요약 배너에 쓸 수 있게 승/패/무승부만 알려준다(구체적 정답은 각
+      // 타입의 public 필드에서 이미 필요한 만큼만 공개됨).
+      result: match.minigame.result == null ? null : match.minigame.result === 'DRAW' ? 'draw' : (match.minigame.result === forId ? 'me' : 'opp'),
     },
-    roundReward: match.roundRewardType ? { type: match.roundRewardType, name: REWARD_NAMES[match.roundRewardType] } : null,
-    // FLASH_ALL은 언제 터질지 알려주면 보상의 의미가 없어지므로 expiresAt(발동 시한)은 내려주지 않는다.
-    myReward: pr && pr.winnerId === forId ? { type: pr.type, name: REWARD_NAMES[pr.type], used: pr.used } : null,
+    // 라운드 시작 전 3-2-1 카운트다운 — 몇 시에 끝나는지만 내려주고 클라이언트가 직접 숫자를 센다.
+    countdownEndsAt: match.phase === 'ROUND_COUNTDOWN' ? match.countdownEndsAt : null,
+    nextMinigameName: match.phase === 'ROUND_COUNTDOWN' ? MINIGAME_NAMES[match.minigameOrder[match.round - 1]] : null,
+    // 보상은 승자가 직접 고르는 구조 — type이 아직 null이면 choices 중 하나를 골라야 한다.
+    // FLASH_ALL은 이제 정확히 언제 터지는지(fireAt) 그대로 알려주고, 그 순간이 오기 전까지는
+    // doAction()에서 칸 열기를 막는다 — "그 시간을 먼저 겪고 나서 처소에서 게임"하도록.
+    myReward: pr && pr.winnerId === forId ? {
+      type: pr.type,
+      name: pr.type ? REWARD_NAMES[pr.type] : null,
+      used: pr.used,
+      fireAt: pr.type === 'FLASH_ALL' ? pr.fireAt : null,
+      choices: pr.type ? null : pr.choices.map((t) => ({ type: t, name: REWARD_NAMES[t] })),
+    } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
+    oppChoosingReward: !!(pr && pr.winnerId !== forId && !pr.type),
     // 처소 열기는 두 사람이 동시에 독립적으로 진행 — "내 턴"은 이제 "아직 이번 라운드 몫이 남았는가"를 뜻한다.
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
@@ -732,34 +782,38 @@ function publicMinigameView(mg, forId) {
   if (mg.type === 'REFLEX') {
     return { goFired: !!mg.goAt, myClicked: !!mg.clicks[forId], oppClicked: !!mg.clicks[otherId(forId)] };
   }
-  if (mg.type === 'BOMB') return { passes: mg.passes, myTurn: mg.holder === forId };
-  if (mg.type === 'PIN') return { pulls: mg.pulls, myTurn: mg.turn === forId };
+  if (mg.type === 'BOMB') {
+    // 몇 번 넘겼는지는 더 이상 보여주지 않는다 — 실시간 남은 시간(expiresAt)이 훨씬 중요한 정보다.
+    return { myTurn: mg.holder === forId, expiresAt: mg.expiresAt };
+  }
+  if (mg.type === 'PIN') {
+    // 안전핀 N개 중 아직 안 뽑힌 것/뽑힌 것만 알려주고, 폭탄 위치는 게임이 끝나야만(result가 있을 때) 공개한다.
+    return { pinCount: mg.pinCount, pulled: mg.pulled.slice(), myTurn: mg.turn === forId, bombIndex: mg.result != null ? mg.bombIndex : null };
+  }
   if (mg.type === 'SIGIL') {
     return { myPick: mg.picks[forId] || null, oppPicked: !!mg.picks[otherId(forId)], waitingForMe: !mg.picks[forId] };
   }
   if (mg.type === 'GUESS_COUNT') {
-    return { trueCount: mg.trueCount, myGuess: mg.guesses[forId] ?? null, oppGuessed: !!mg.guesses[otherId(forId)] && mg.guesses[otherId(forId)] !== undefined, waitingForMe: mg.guesses[forId] == null };
-  }
-  if (mg.type === 'PARITY') {
-    return { role: mg.oddPlayer === forId ? 'ODD' : 'EVEN', myPick: mg.picks[forId] || null, waitingForMe: !mg.picks[forId] };
+    const myGuess = mg.guesses[forId] ?? null;
+    // 상대의 추측값은 나도 이미 추측을 마친 뒤에만(라운드가 끝난 뒤 결과 확인용으로) 내려준다.
+    const oppGuess = myGuess != null ? (mg.guesses[otherId(forId)] ?? null) : null;
+    return { trueCount: mg.trueCount, myGuess, oppGuess, waitingForMe: mg.guesses[forId] == null };
   }
   if (mg.type === 'BANK') {
-    const oppId = otherId(forId);
+    // "상대 것은 볼 필요 없다"는 피드백으로, 더 이상 상대의 시도 내역을 보여주지 않는다 —
+    // 각자 자신의 금고만 붙잡고 푸는 순수 독립 문제로 되돌아간다. 상호작용은 "훼방 놓기"로만 남는다.
     return {
       digits: CONFIG.BANK_DIGITS,
-      // 서로 다른 금고를 각자 푸는 방식이라 상대의 시도 내역을 그대로 보여줘도 내 정답은 전혀
-      // 새지 않는다 — 오히려 "상대가 벌써 저만큼 좁혔다"는 실시간 압박감이 상호작용을 만들어준다.
-      myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
-      oppGuesses: (mg.history[oppId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls })),
+      myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls, marks: h.marks })),
       distractAvailable: !mg.distractUsed[forId],
-      oppDistractAvailable: !mg.distractUsed[oppId],
     };
   }
   if (mg.type === 'MEMORY') {
-    // 정답(changedItem)은 절대 내려주지 않는다 — 둘 다 답하고 나서야 endMinigame으로 결과가 공개됨.
+    // 정답(changedItem)은 라운드가 끝나기(result가 정해지기) 전까지는 절대 내려주지 않는다.
     return {
       before: mg.before, after: mg.after, revealUntil: mg.revealUntil,
       myAnswered: !!mg.answers[forId], oppAnswered: !!mg.answers[otherId(forId)],
+      changedItem: mg.result != null ? mg.changedItem : null,
     };
   }
   return {};
@@ -786,11 +840,10 @@ function buildAdminMinigameSummary(mg) {
   if (type === 'NIM') return { 누적: mg.count, 목표: mg.limit, 현재차례: nameOf(mg.turn) };
   if (type === 'HAND') return { 숨기는사람: nameOf(mg.hider), 맞히는사람: nameOf(mg.guesser), 숨긴손: mg.hiderPick, 지목한손: mg.guesserPick };
   if (type === 'REFLEX') return { 신호발동여부: !!mg.goAt, 클릭기록: byName(mg.clicks, (v) => (v.early ? '성급하게 누름' : `${v.reactMs}ms`)) };
-  if (type === 'BOMB') return { 현재소지자: nameOf(mg.holder), 전달횟수: mg.passes };
-  if (type === 'PIN') return { 현재차례: nameOf(mg.turn), 뽑은횟수: mg.pulls, 터지는시점: mg.popAt };
+  if (type === 'BOMB') return { 현재소지자: nameOf(mg.holder), 전달횟수: mg.passes, 남은시간초: Math.max(0, Math.round((mg.expiresAt - Date.now()) / 1000)) };
+  if (type === 'PIN') return { 현재차례: nameOf(mg.turn), 안전핀개수: mg.pinCount, 뽑은횟수: mg.pulls, 폭탄위치: mg.bombIndex };
   if (type === 'SIGIL') return { 선택현황: byName(mg.picks) };
   if (type === 'GUESS_COUNT') return { 실제개수: mg.trueCount, 추측현황: byName(mg.guesses) };
-  if (type === 'PARITY') return { 역할: { [nameOf(mg.oddPlayer)]: '홀', [nameOf(mg.evenPlayer)]: '짝' }, 선택현황: byName(mg.picks) };
   if (type === 'BANK') return {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
@@ -914,6 +967,7 @@ io.on('connection', (socket) => {
   socket.on('minigame:move', (payload) => handleMinigameMove(socket.id, payload || {}));
   socket.on('action:open', (p) => doAction(socket.id, 'OPEN', p || {}));
   socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
+  socket.on('reward:choose', (p) => handleRewardChoose(socket.id, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(socket.id));
 });
 

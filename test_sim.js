@@ -21,6 +21,7 @@ let setupSent = { A: false, B: false };
 let minigamesSeen = new Set();
 let rewardsSeen = new Set();
 let rewardUsed = { A: false, B: false };
+let rewardChosen = { A: false, B: false };
 let bankCandidates = { A: null, B: null };
 let bankRoundSeen = { A: null, B: null };
 
@@ -56,36 +57,51 @@ function onState(label, socket, s) {
     setTimeout(() => socket.emit('setup:confirm', { cells }), 50 + Math.random() * 100);
   }
 
-  if (s.roundReward) rewardsSeen.add(s.roundReward.type);
+  // 보상은 더 이상 라운드 시작 전에 자동 배정되지 않고, 미니게임 승자가 후보 중 하나를 직접
+  // 고른 뒤에야 종류(myReward.type)가 정해진다 — 그 시점에 관측된 종류를 집계한다.
+  if (s.myReward && s.myReward.type) rewardsSeen.add(s.myReward.type);
 
   if (s.phase === 'ROUND_MINIGAME' && s.minigame) {
     minigamesSeen.add(s.minigame.type);
     playMinigame(label, socket, s);
   }
 
+  if (s.phase === 'ROUND_ACTION' && s.myReward && !s.myReward.type && !s.myReward.used && !rewardChosen[label]) {
+    rewardChosen[label] = true;
+    setTimeout(() => chooseReward(label, socket, s), 30 + Math.random() * 40);
+  }
+  if (!(s.myReward && !s.myReward.type)) rewardChosen[label] = false;
+
   if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
     setTimeout(() => doRandomAction(label, socket, s), 30);
   }
 
-  if (s.phase === 'ROUND_ACTION' && s.myReward && !s.myReward.used && !rewardUsed[label]) {
+  if (s.phase === 'ROUND_ACTION' && s.myReward && s.myReward.type && !s.myReward.used && !rewardUsed[label]) {
     rewardUsed[label] = true; // 라운드당 한 번만 시도(중복 emit 방지용 플래그, state 갱신시 아래에서 리셋)
     setTimeout(() => useReward(label, socket, s), 40 + Math.random() * 80);
   }
-  if (s.phase !== 'ROUND_ACTION' || !s.myReward) rewardUsed[label] = false;
+  if (s.phase !== 'ROUND_ACTION' || !s.myReward || !s.myReward.type) rewardUsed[label] = false;
 
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10)`);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9)`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore });
     setTimeout(() => process.exit(0), 200);
   }
 }
 
+function chooseReward(label, socket, s) {
+  const r = s.myReward;
+  if (!r || r.type || !r.choices || !r.choices.length) return;
+  const pick = r.choices[Math.floor(Math.random() * r.choices.length)];
+  socket.emit('reward:choose', { type: pick.type });
+}
+
 function useReward(label, socket, s) {
   const r = s.myReward;
-  if (!r || r.used) return;
+  if (!r || !r.type || r.used) return;
   if (r.type === 'FLASH_ALL') return socket.emit('reward:use', {});
   if (r.type === 'PEEK_CELL') return socket.emit('reward:use', { row: Math.floor(Math.random() * 6), col: Math.floor(Math.random() * 6) });
   if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
@@ -112,7 +128,15 @@ function playMinigame(label, socket, s) {
     }
     if (type === 'REFLEX' && !mg.myClicked && mg.goFired) socket.emit('minigame:move', { action: 'CLICK' });
     if (type === 'BOMB' && mg.myTurn) socket.emit('minigame:move', { action: 'PASS' });
-    if (type === 'PIN' && mg.myTurn) socket.emit('minigame:move', { action: 'PULL' });
+    if (type === 'PIN' && mg.myTurn) {
+      // 안전핀 뽑기가 "숨겨진 팝 포인트까지 그냥 PULL"에서 "N개 안전핀 중 직접 하나를 고르는" 방식으로
+      // 바뀌었으므로, 봇도 아직 뽑히지 않은 핀 중 하나를 무작위로 클릭해야 한다.
+      const remaining = mg.pulled.map((p, i) => (p ? null : i)).filter((i) => i != null);
+      if (remaining.length) {
+        const index = remaining[Math.floor(Math.random() * remaining.length)];
+        socket.emit('minigame:move', { action: 'PICK', index });
+      }
+    }
     if (type === 'SIGIL' && mg.waitingForMe) {
       const opts = ['SWORD', 'POISON', 'SHIELD'];
       socket.emit('minigame:move', { pick: opts[Math.floor(Math.random() * opts.length)] });
@@ -120,9 +144,6 @@ function playMinigame(label, socket, s) {
     if (type === 'GUESS_COUNT' && mg.myGuess == null) {
       const offset = Math.floor(Math.random() * 3) - 1;
       socket.emit('minigame:move', { guess: Math.max(0, mg.trueCount + offset) });
-    }
-    if (type === 'PARITY' && mg.waitingForMe) {
-      socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 4) });
     }
     if (type === 'MEMORY' && !mg.myAnswered) {
       // 테스트 봇은 진짜 기억력을 시험할 필요가 없으므로, 공개된 before/after를 비교해 바뀐 항목을 바로 계산해 제출한다.
@@ -149,7 +170,12 @@ function playMinigame(label, socket, s) {
       const guess = pool[Math.floor(Math.random() * pool.length)];
       socket.emit('minigame:move', { guess });
     }
-  }, 20 + Math.random() * 60);
+    // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른
+    // 미니게임과 같은 20~80ms 간격으로 스팸처럼 넘기면 초당 십수 번씩 왕복 메시지가 오가며
+    // 실제 사람이라면 절대 하지 않을 부하를 만들어 테스트 전체를 느리게 만든다(실측상 수백~
+    // 천 회 왕복). 사람다운 속도(약 250~700ms 간격)로 넘기게 해서 테스트가 실제 판단 시간과
+    // 비슷한 리듬으로 진행되게 한다.
+  }, type === 'BOMB' ? 250 + Math.random() * 450 : 20 + Math.random() * 60);
 }
 
 function randomUniqueDigits(n, avoidSet) {
@@ -184,7 +210,7 @@ setTimeout(() => connectPlayer('B'), 100);
 
 setTimeout(() => {
   if (!done) {
-    console.error('TIMEOUT: 게임이 180초 내에 끝나지 않았습니다. 마지막 상태:', JSON.stringify({ A: states.A && states.A.phase, B: states.B && states.B.phase }));
+    console.error('TIMEOUT: 게임이 300초 내에 끝나지 않았습니다. 마지막 상태:', JSON.stringify({ A: states.A && states.A.phase, B: states.B && states.B.phase }));
     process.exit(1);
   }
-}, 180000);
+}, 300000);
