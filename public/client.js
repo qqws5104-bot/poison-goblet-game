@@ -20,6 +20,8 @@ let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종�
 let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
 let lastRewardResult = null; // 보상으로 획득한 정찰 결과 텍스트 — #log(숨김)만으로는 안 보이므로 화면에 계속 띄워둔다
 let lastRewardResultRound = null;
+let activeTab = 'GAME'; // '게임 화면'(미니게임/본행동/보상)과 '6×6 화면'(내 처소)을 탭으로 분리 — 'GAME' | 'ROOM'
+let lastPhaseForTab = null; // 페이즈가 "바뀌는 순간"에만 자동으로 알맞은 탭으로 전환하기 위한 추적값
 
 const CELL_NAME = { P: '독', G: '금', S: '은', A: '해독', E: '' };
 const CELL_EMOJI = { P: '☠️', G: '🥇', S: '🥈', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
@@ -232,6 +234,8 @@ socket.on('state', (state) => {
     nimDisplayedRatio = 0;
     nimTargetRatio = 0;
     nimRound = null;
+    activeTab = 'GAME';
+    lastPhaseForTab = null;
   }
   lastState = state;
   render(state);
@@ -371,26 +375,54 @@ function renderSetup(state) {
 }
 
 // ---------------------------- MAIN (미니게임 + 액션) ----------------------------
+// "게임 화면"(미니게임/본행동/보상)과 "6×6 화면"(내 처소)이 한 화면에 좌우로 같이 떠 있으면
+// 복잡하다는 피드백에 따라, 탭으로 오가며 한 번에 하나만 보도록 분리했다. 통계 패널만은
+// 두 화면 어디서든 자주 확인하고 싶은 요약 정보라 탭 밖에 항상 고정해 둔다.
 function renderMain(state) {
-  const cols = el('div', 'cols');
+  // 페이즈가 "바뀌는 순간"에만 자동으로 알맞은 탭으로 전환한다 — 매번 다시 그릴 때마다
+  // 강제로 되돌리면 플레이어가 일부러 다른 탭을 보고 있어도 자꾸 튕겨나가 버리기 때문에,
+  // phase 전환 자체를 감지했을 때만 한 번 전환한다.
+  if (state.phase !== lastPhaseForTab) {
+    lastPhaseForTab = state.phase;
+    if (state.phase === 'ROUND_MINIGAME') activeTab = 'GAME';
+    else if (state.phase === 'ROUND_ACTION') activeTab = 'ROOM';
+  }
 
-  // 왼쪽: 내 방 + 통계
-  const left = el('div', 'col');
-  left.appendChild(renderStatsPanel(state));
-  left.appendChild(renderMyRoomPanel(state));
-  cols.appendChild(left);
+  const wrap = el('div', 'mainView');
+  wrap.appendChild(renderStatsPanel(state));
+  wrap.appendChild(renderTabBar(state));
 
-  // 오른쪽: 라운드 보상 안내 / 미니게임 / 액션 / 보상 사용 / 정찰 결과
-  const right = el('div', 'col');
-  if (state.roundReward) right.appendChild(renderRoundRewardBanner(state));
-  if (state.phase === 'ROUND_MINIGAME') right.appendChild(renderMinigamePanel(state));
-  if (state.phase === 'ROUND_ACTION') right.appendChild(renderActionPanel(state));
-  if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.used) right.appendChild(renderRewardPanel(state));
-  // 보상(정찰)으로 무엇을 알아냈는지는 숨겨진 #log에만 남던 것을 화면에 계속 보이게 한다.
-  if (lastRewardResult && lastRewardResultRound === state.round) right.appendChild(renderRewardResultPanel());
-  cols.appendChild(right);
+  if (activeTab === 'ROOM') {
+    wrap.appendChild(renderMyRoomPanel(state));
+  } else {
+    if (state.roundReward) wrap.appendChild(renderRoundRewardBanner(state));
+    if (state.phase === 'ROUND_MINIGAME') wrap.appendChild(renderMinigamePanel(state));
+    if (state.phase === 'ROUND_ACTION') wrap.appendChild(renderActionPanel(state));
+    if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.used) wrap.appendChild(renderRewardPanel(state));
+    // 보상(정찰)으로 무엇을 알아냈는지는 숨겨진 #log에만 남던 것을 화면에 계속 보이게 한다.
+    if (lastRewardResult && lastRewardResultRound === state.round) wrap.appendChild(renderRewardResultPanel());
+  }
 
-  app.appendChild(cols);
+  app.appendChild(wrap);
+}
+
+function renderTabBar(state) {
+  const bar = el('div', 'tabBar');
+  // 지금 당장 뭔가 할 일이 있는데 다른 탭을 보고 있으면 놓치기 쉬우므로, 그럴 때만 점 표시를 띄운다.
+  const needsGame = state.phase === 'ROUND_MINIGAME';
+  const needsRoom = state.phase === 'ROUND_ACTION' && state.isMyTurn && state.opensRemaining > 0;
+
+  const gameBtn = el('button', 'tabBtn' + (activeTab === 'GAME' ? ' active' : ''),
+    '🎲 미니게임 · 행동' + (needsGame && activeTab !== 'GAME' ? '<span class="tabDot"></span>' : ''));
+  gameBtn.onclick = () => { activeTab = 'GAME'; render(lastState); };
+  bar.appendChild(gameBtn);
+
+  const roomBtn = el('button', 'tabBtn' + (activeTab === 'ROOM' ? ' active' : ''),
+    '🚪 내 처소 (6×6)' + (needsRoom && activeTab !== 'ROOM' ? '<span class="tabDot"></span>' : ''));
+  roomBtn.onclick = () => { activeTab = 'ROOM'; render(lastState); };
+  bar.appendChild(roomBtn);
+
+  return bar;
 }
 
 function renderRoundRewardBanner(state) {
