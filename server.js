@@ -22,7 +22,6 @@ const CONFIG = {
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  BANK_DISTRACT_MS: 2500, // 금고 번호 맞추기: "훼방 놓기" 사용 시 상대 화면이 흔들리는 시간(ms)
   REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 500, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms)
 };
@@ -77,6 +76,17 @@ for (const key of Object.keys(CONFIG)) {
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+// 4대 분리 모드 전용 고정 주소 — 컴퓨터마다 이 중 하나를 북마크해두고 접속하면 된다.
+// /game/A, /game/B: 셋업·미니게임·보상 등 처소 열기를 뺀 나머지 전부.
+// /pick/A, /pick/B: 장남·차남 처소 6×6을 나란히 보여주고 본인 처소만 클릭해 여는 전용 화면.
+// 실제 화면 분기는 client.js가 location.pathname을 보고 처리하므로, 서버는 그냥 같은
+// index.html을 내려주기만 하면 된다.
+app.get('/game/:slot(A|B)', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/pick/:slot(A|B)', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// 4대 분리 모드로 접속할 주소를 직접 타이핑하지 않아도 되도록, 큰 버튼 4개로 안내하는 시작
+// 페이지. 소켓 연결을 만들지 않으므로(순수 링크 모음) 이 페이지를 열어도 플레이어 자리를
+// 차지하지 않는다 — 아무 기기에서나 먼저 열어보고 눌러도 안전하다.
+app.get('/start', (req, res) => res.sendFile(path.join(__dirname, 'public', 'start.html')));
 const server = http.createServer(app);
 const io = new Server(server);
 
@@ -110,12 +120,22 @@ function freshMatch() {
     countdownEndsAt: null, // ROUND_COUNTDOWN 동안 3-2-1이 몇 시에 끝나는지(클라이언트가 직접 카운트다운을 그리는 기준)
     pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
-    actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
+    streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
     rematchReady: {},
     log: [], winner: null, endReason: null,
+    // 4대 분리 모드(/game/A, /pick/A, /game/B, /pick/B로 접속) 여부 — 이 모드일 때만 처소 열기
+    // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
+    // 남아 있어 히든정보 규칙이 그대로 유지된다.
+    splitMode: false,
   };
 }
 let match = freshMatch();
+// 소켓ID → 슬롯('A'/'B') 매핑, 그리고 슬롯별로 지금 연결된 소켓ID 집합.
+// "게임용" 기기와 "고르기용" 기기가 같은 슬롯(같은 플레이어)을 공유할 수 있으므로,
+// 슬롯 하나에 소켓이 여러 개 붙을 수 있다 — 연결이 끊길 때는 그 슬롯의 소켓이 전부 사라졌을 때만
+// "연결 끊김"으로 표시한다.
+const socketSlot = {};
+const slotSockets = { A: new Set(), B: new Set() };
 
 function otherId(id) { return match.order.find((x) => x !== id); }
 function log(msg) { match.log.push({ t: Date.now(), msg }); if (match.log.length > 300) match.log.shift(); io.emit('log', { msg }); }
@@ -252,13 +272,10 @@ function initMinigame(type, roundNo) {
   if (type === 'BANK') {
     // 하나의 금고를 공유하는 게 아니라, 두 사람이 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른
     // 정답)를 갖고 동시에 독립적으로 숫자야구를 진행한다 — 자기 금고를 먼저 여는 쪽이 승리.
-    // 다만 서로 아예 안 부딪히면 상호작용이 없다는 피드백이 있어, 상대의 시도 내역을 실시간으로
-    // 그대로 보여주고(내 정답과는 무관하니 노출해도 안전) "훼방 놓기"로 서로 직접 개입할 수 있게 한다.
     return {
       ...base,
       secrets: { [a]: randomDistinctDigits(CONFIG.BANK_DIGITS), [b]: randomDistinctDigits(CONFIG.BANK_DIGITS) },
       history: { [a]: [], [b]: [] },
-      distractUsed: { [a]: false, [b]: false },
     };
   }
   if (type === 'MEMORY') {
@@ -279,6 +296,10 @@ function initMinigame(type, roundNo) {
 function endMinigame(winnerId) {
   const loserId = otherId(winnerId);
   match.minigame.result = winnerId;
+
+  // 연승 스트릭 — 같은 사람이 계속 이기면 카운트 증가, 승자가 바뀌면 1로 리셋.
+  if (match.streak.winnerId === winnerId) match.streak.count += 1;
+  else match.streak = { winnerId, count: 1 };
 
   // "보상은 승자가 직접 고르는 구조로" — 이제 라운드 시작 전 보상이 미리 하나로 고정되지 않고,
   // 미니게임 승자가 후보 4종 중 하나를 스스로 골라야 종류(type)가 정해진다.
@@ -304,6 +325,7 @@ function endMinigameDraw() {
   match.pendingReward = null;
   match.actionOpens = {};
   match.phase = 'ROUND_ACTION';
+  match.streak = { winnerId: null, count: 0 }; // 무승부는 스트릭을 끊는다
   log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
   broadcastState();
 }
@@ -485,20 +507,7 @@ function isValidDigits(arr) {
     && arr.every((d) => Number.isInteger(d) && d >= 0 && d <= 9)
     && new Set(arr).size === arr.length;
 }
-// 서로 상호작용이 전혀 없다는 피드백을 반영한 "훼방 놓기" — 매치당 1회, 이번 시도를 포기하는
-// 대신 상대의 화면을 잠깐 흔들어(입력 방해) 견제할 수 있다. 정답 자체는 절대 알려주지 않으므로
-// "각자 독립적인 금고" 원칙은 그대로 유지된다.
-function handleBankDistract(id, mg) {
-  if (mg.distractUsed[id]) return; // 매치당 1회만
-  mg.distractUsed[id] = true;
-  const oppId = otherId(id);
-  log(`${match.players[id].name}이 상대의 금고 풀이를 훼방 놓았습니다!`);
-  io.to(oppId).emit('bankDistracted', {});
-  broadcastState();
-}
-
 function handleBank(id, payload, mg) {
-  if (payload && payload.action === 'DISTRACT') return handleBankDistract(id, mg);
   const guess = Array.isArray(payload.guess) ? payload.guess.map(Number) : null;
   if (!isValidDigits(guess)) return;
   const secret = mg.secrets[id]; // 각자 자신의 금고(정답)만 상대한다 — 공유 정답이 아니다.
@@ -746,6 +755,9 @@ function buildClientState(forId) {
     } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
     oppChoosingReward: !!(pr && pr.winnerId !== forId && !pr.type),
+    // 미니게임 연승 스트릭 — 긴장감 연출(콤보 배지)용. 누구 스트릭인지와 몇 연승인지만 알려준다.
+    streakOwner: match.streak.winnerId == null ? null : (match.streak.winnerId === forId ? 'me' : 'opp'),
+    streakCount: match.streak.count,
     // 처소 열기는 두 사람이 동시에 독립적으로 진행 — "내 턴"은 이제 "아직 이번 라운드 몫이 남았는가"를 뜻한다.
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
@@ -756,9 +768,15 @@ function buildClientState(forId) {
       history: me.history || [],
     },
     // 상대의 점수/독/해독제는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다(콘솔로 훔쳐보기 방지).
+    // 4대 분리 모드(splitMode)에서는 "고르기" 화면에서 두 처소를 나란히 보여주며 열린 칸의
+    // 결과를 서로 바로 공개하기로 했으므로, 이때만 예외적으로 opp.room을 내려준다(단, 아직
+    // 안 연 칸은 그대로 숨김 — sanitizeRoom의 revealAll=false와 동일하게, 열린 칸만 보임).
+    // 점수·독·해독제 개수는 이 모드에서도 게임이 끝나기 전까지 계속 비공개다.
     opp: opp && (match.phase === 'END'
       ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
-      : { name: opp.name, connected: opp.connected, room: null }),
+      : match.splitMode
+        ? { name: opp.name, connected: opp.connected, room: sanitizeRoom(opp.room, false) }
+        : { name: opp.name, connected: opp.connected, room: null }),
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
@@ -801,11 +819,10 @@ function publicMinigameView(mg, forId) {
   }
   if (mg.type === 'BANK') {
     // "상대 것은 볼 필요 없다"는 피드백으로, 더 이상 상대의 시도 내역을 보여주지 않는다 —
-    // 각자 자신의 금고만 붙잡고 푸는 순수 독립 문제로 되돌아간다. 상호작용은 "훼방 놓기"로만 남는다.
+    // 각자 자신의 금고만 붙잡고 푸는 순수 독립 문제다.
     return {
       digits: CONFIG.BANK_DIGITS,
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls, marks: h.marks })),
-      distractAvailable: !mg.distractUsed[forId],
     };
   }
   if (mg.type === 'MEMORY') {
@@ -912,26 +929,44 @@ io.on('connection', (socket) => {
     broadcastAdminState();
   });
 
-  if (match.order.length >= 2 && !match.order.includes(socket.id)) {
+  // 슬롯 결정: /game/A, /pick/A, /game/B, /pick/B로 접속하면 handshake 쿼리에 slot='A'|'B'가
+  // 명시적으로 실려온다 — 이때는 4대 분리 모드로 표시하고, 같은 슬롯에 이미 다른 기기(게임용/
+  // 고르기용)가 붙어 있어도 그냥 슬롯을 공유해 같은 상태 방송을 함께 받는다. slot이 없으면(예전
+  // 방식으로 주소 하나에 접속한 경우) 소켓ID 자체를 슬롯으로 써서 기존 2인 모드 동작을 그대로 둔다.
+  const queriedSlot = socket.handshake.query && socket.handshake.query.slot;
+  const slot = (queriedSlot === 'A' || queriedSlot === 'B') ? queriedSlot : socket.id;
+  if (queriedSlot === 'A' || queriedSlot === 'B') match.splitMode = true;
+
+  if (match.order.length >= 2 && !match.order.includes(slot)) {
     socket.emit('full');
     return;
   }
-  const isNew = !match.order.includes(socket.id);
+  const isNew = !match.order.includes(slot);
   if (isNew) {
     const name = match.order.length === 0 ? '장남' : '차남';
-    match.players[socket.id] = newPlayer(socket.id, name);
-    match.order.push(socket.id);
-    socket.join(socket.id);
+    match.players[slot] = newPlayer(slot, name);
+    match.order.push(slot);
     log(`${name}(이)가 궁에 입장했습니다.`);
+  } else if (match.players[slot]) {
+    match.players[slot].connected = true; // 같은 슬롯에 기기가 추가로(또는 다시) 연결됨
   }
+  socket.join(slot);
+  socketSlot[socket.id] = slot;
+  if (!slotSockets[slot]) slotSockets[slot] = new Set();
+  slotSockets[slot].add(socket.id);
   broadcastState();
 
   if (match.order.length === 2 && match.phase === 'LOBBY') startSetup();
 
   socket.on('disconnect', () => {
-    if (match.players[socket.id]) {
-      match.players[socket.id].connected = false;
-      log(`${match.players[socket.id].name} 연결 끊김`);
+    const s = socketSlot[socket.id];
+    delete socketSlot[socket.id];
+    if (!s || !slotSockets[s]) return;
+    slotSockets[s].delete(socket.id);
+    // 같은 슬롯을 공유하는 다른 기기(게임용/고르기용)가 아직 붙어있으면 "연결 끊김" 처리하지 않는다.
+    if (slotSockets[s].size === 0 && match.players[s]) {
+      match.players[s].connected = false;
+      log(`${match.players[s].name} 연결 끊김`);
       broadcastState();
     }
   });
@@ -947,9 +982,9 @@ io.on('connection', (socket) => {
       seen.add(cell.row + '_' + cell.col);
     }
     if (seen.size !== CONFIG.COUNTS.P) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
-    match.setupSelections[socket.id] = cells;
-    delete match.setupPreview[socket.id];
-    log(`${match.players[socket.id].name} 독 설치 완료`);
+    match.setupSelections[slot] = cells;
+    delete match.setupPreview[slot];
+    log(`${match.players[slot].name} 독 설치 완료`);
     broadcastState();
     if (match.order.every((id) => match.setupSelections[id])) finalizeSetup();
   });
@@ -960,15 +995,15 @@ io.on('connection', (socket) => {
     if (match.phase !== 'SETUP') return;
     const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
     const valid = cells.filter((cell) => cell && cell.row >= 0 && cell.row < CONFIG.GRID && cell.col >= 0 && cell.col < CONFIG.GRID);
-    match.setupPreview[socket.id] = valid;
+    match.setupPreview[slot] = valid;
     broadcastAdminState();
   });
 
-  socket.on('minigame:move', (payload) => handleMinigameMove(socket.id, payload || {}));
-  socket.on('action:open', (p) => doAction(socket.id, 'OPEN', p || {}));
-  socket.on('reward:use', (p) => handleRewardUse(socket.id, p || {}));
-  socket.on('reward:choose', (p) => handleRewardChoose(socket.id, p || {}));
-  socket.on('rematch:ready', () => handleRematchReady(socket.id));
+  socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));
+  socket.on('action:open', (p) => doAction(slot, 'OPEN', p || {}));
+  socket.on('reward:use', (p) => handleRewardUse(slot, p || {}));
+  socket.on('reward:choose', (p) => handleRewardChoose(slot, p || {}));
+  socket.on('rematch:ready', () => handleRematchReady(slot));
 });
 
 const PORT = process.env.PORT || 3000;

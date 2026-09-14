@@ -1,4 +1,10 @@
-const socket = io();
+// 4대 분리 모드: /game/A, /pick/A, /game/B, /pick/B 같은 고정 주소로 접속하면 여기서
+// 역할(APP_ROLE: 'game'|'pick')과 슬롯(APP_SLOT: 'A'|'B')을 읽어낸다. 그 외 주소('/'로 접속한
+// 기존 방식)는 APP_ROLE이 null로 남아 예전 동작(2인 단일화면)을 한 글자도 안 건드리고 그대로 쓴다.
+const ROUTE_MATCH = location.pathname.match(/^\/(game|pick)\/([AB])\/?$/);
+const APP_ROLE = ROUTE_MATCH ? ROUTE_MATCH[1] : null; // 'game' | 'pick' | null
+const APP_SLOT = ROUTE_MATCH ? ROUTE_MATCH[2] : null; // 'A' | 'B' | null
+const socket = APP_SLOT ? io({ query: { slot: APP_SLOT } }) : io();
 const app = document.getElementById('app');
 const statusBar = document.getElementById('statusBar');
 const logBox = document.getElementById('log');
@@ -25,6 +31,43 @@ let lastRewardResult = null; // 보상으로 획득한 정찰 결과 텍스트 �
 let lastRewardResultRound = null;
 let activeTab = 'GAME'; // '게임 화면'(미니게임/본행동/보상)과 '6×6 화면'(내 처소)을 탭으로 분리 — 'GAME' | 'ROOM'
 let lastPhaseForTab = null; // 페이즈가 "바뀌는 순간"에만 자동으로 알맞은 탭으로 전환하기 위한 추적값
+// 미니게임 모달이 "이미 떠 있던 채로" 다시 그려지는 것인지 추적 — render()는 상대의 움직임이나
+// 내 입력 하나하나에도 화면 전체를 다시 그리므로, 매번 모달을 새로 마운트하면 등장 애니메이션이
+// (본인이 만든 변화가 아니어도) 계속 재생되어 화면이 깜빡이는 것처럼 보인다. 직전 프레임에도
+// 모달이 열려 있었다면 이번엔 애니메이션 없이 조용히 갱신한다.
+let modalOpenPrev = false;
+
+// ---------------------------- 임팩트 연출(화면 셰이크/플래시) ----------------------------
+// "아케이드감이 덜 산다"는 피드백에 따라 추가한 순수 시각 연출 레이어. 사운드 없이, 지금의
+// 어둡고 묵직한 톤(금색/진홍) 안에서 승패·위험 순간에만 화면이 반응하도록 짧고 절제된 효과만 쓴다.
+let shakeTimer = null;
+function screenShake(strength = 'md') {
+  const target = document.body;
+  target.classList.remove('shake-sm', 'shake-md', 'shake-lg');
+  // 같은 프레임에 다시 트리거해도 애니메이션이 재시작되도록 강제로 리플로우시킨다.
+  void target.offsetWidth;
+  target.classList.add(`shake-${strength}`);
+  clearTimeout(shakeTimer);
+  shakeTimer = setTimeout(() => target.classList.remove(`shake-${strength}`), 420);
+}
+function flashScreen(kind = 'neutral') {
+  const el2 = document.createElement('div');
+  el2.className = `screenFlash screenFlash-${kind}`;
+  document.body.appendChild(el2);
+  el2.addEventListener('animationend', () => el2.remove());
+  // 혹시 animationend가 안 걸리는 브라우저 대비 안전망
+  setTimeout(() => el2.remove(), 900);
+}
+// 승패/처소 오픈 결과에 따른 임팩트를 한 곳에서 관리 — 무슨 일이 있었는지에 맞는 조합(플래시+셰이크 강도)을 고른다.
+function impactFor(kind) {
+  if (kind === 'win') { flashScreen('gold'); }
+  else if (kind === 'lose') { flashScreen('crimson'); screenShake('md'); }
+  else if (kind === 'lose-strong') { flashScreen('crimson'); screenShake('lg'); }
+  else if (kind === 'draw') { flashScreen('neutral'); }
+  else if (kind === 'poison') { flashScreen('crimson'); screenShake('sm'); }
+  else if (kind === 'antidote') { flashScreen('teal'); }
+  else if (kind === 'treasure') { flashScreen('gold'); }
+}
 
 const CELL_NAME = { P: '독', G: '금', S: '은', A: '해독', E: '' };
 const CELL_EMOJI = { P: '☠️', G: '🥇', S: '🥈', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
@@ -173,22 +216,16 @@ function addLog(msg) {
 
 socket.on('log', ({ msg }) => addLog(msg));
 socket.on('error', ({ message }) => addLog('⚠ ' + message));
-socket.on('full', () => { app.innerHTML = '<div class="panel center"><p>이미 두 명이 접속해 있습니다. 이 프로토타입은 2인 전용입니다.</p></div>'; });
+// "이미 자리가 찼다"는 메시지는 대부분 예전 접속(테스트 중 남은 연결 등)이 장남/차남 자리를
+// 차지하고 있어서 뜬다 — 실제 정원 초과가 아니라 자리 정리가 필요한 경우가 대부분이므로,
+// 화면 아래 "게임 재시작" 버튼(이 화면 안에도 계속 남아있음)으로 바로 풀 수 있다는 걸 안내한다.
+socket.on('full', () => {
+  app.innerHTML = '<div class="panel center"><p>이미 장남·차남 자리가 모두 차 있습니다.</p>'
+    + '<p class="hint">예전 접속이 자리를 차지하고 있는 경우가 많습니다 — 아래(화면 하단) "게임 재시작" 버튼을 누르면 모두 새로 접속한 것처럼 정리됩니다.</p></div>';
+});
 // 누군가 "게임 재시작"을 누르면 서버가 완전히 새 상태로 초기화하고 모든 접속자에게 새로고침을 지시한다.
 // (방이 꽉 차서 막혀 있던 화면도 이걸로 확실히 풀린다.)
 socket.on('reload', () => { location.reload(); });
-
-// 금고 번호 맞추기(BANK)의 "훼방 놓기" — 상대가 나를 훼방 놓으면, 내 입력판을 잠깐 흔들어
-// 실제로 방해받는 느낌을 준다(입력 자체를 막지는 않음 — 순전히 견제/압박용 연출).
-socket.on('bankDistracted', () => {
-  addLog('😈 상대가 훼방을 놓았습니다 — 화면이 잠깐 흔들립니다!');
-  const wrap = document.getElementById('bankNumpadWrap');
-  if (wrap) {
-    wrap.classList.add('distracted');
-    const ms = (lastState && lastState.config && lastState.config.BANK_DISTRACT_MS) || 2500;
-    setTimeout(() => wrap.classList.remove('distracted'), ms);
-  }
-});
 
 socket.on('rewardResult', (payload) => {
   if (payload.kind === 'FLASH_ALL') {
@@ -215,6 +252,38 @@ socket.on('rewardResult', (payload) => {
   render(lastState);
 });
 
+// 이전 프레임과 diff해서 "방금 막 일어난 일"을 감지하고 그에 맞는 임팩트 연출을 트리거한다.
+// 서버는 결과가 이미 반영된 최종 상태만 내려주므로, 클라이언트가 직접 "null→값이 생김"
+// 전환 순간을 잡아야 한다. 새 매치가 막 시작된 프레임(prev==null 또는 seq가 바뀐 경우)에는
+// 절대 트리거하지 않는다 — 안 그러면 접속하자마자 이전 판의 잔상으로 오작동한다.
+function detectImpacts(prev, next) {
+  if (!prev) return;
+  const prevResult = prev.minigame && prev.minigame.result;
+  const nextResult = next.minigame && next.minigame.result;
+  if (!prevResult && nextResult) {
+    if (nextResult === 'me') impactFor('win');
+    else if (nextResult === 'opp') impactFor(next.minigame.type === 'BOMB' ? 'lose-strong' : 'lose');
+    else if (nextResult === 'draw') impactFor('draw');
+  }
+  if (prev.me && next.me && Array.isArray(prev.me.room) && Array.isArray(next.me.room)) {
+    let revealed = null; // 우선순위: 독 > 해독제 > 금/은
+    for (let r = 0; r < next.me.room.length; r++) {
+      for (let c = 0; c < next.me.room[r].length; c++) {
+        const before = prev.me.room[r] && prev.me.room[r][c];
+        const after = next.me.room[r][c];
+        if (before && !before.opened && after.opened) {
+          if (after.type === 'P') revealed = 'P';
+          else if (after.type === 'A' && revealed !== 'P') revealed = 'A';
+          else if ((after.type === 'G' || after.type === 'S') && !revealed) revealed = 'GS';
+        }
+      }
+    }
+    if (revealed === 'P') impactFor('poison');
+    else if (revealed === 'A') impactFor('antidote');
+    else if (revealed === 'GS') impactFor('treasure');
+  }
+}
+
 socket.on('state', (state) => {
   if (state.seq !== seenSeq) {
     // 새 매치 시작(최초 접속 또는 재대전) — 지난 판에서 남은 화면/입력 상태를 전부 초기화
@@ -240,7 +309,11 @@ socket.on('state', (state) => {
     nimRound = null;
     activeTab = 'GAME';
     lastPhaseForTab = null;
+    lastState = state; // 새 매치 프레임은 diff 기준으로 삼지 않는다
+    render(state);
+    return;
   }
+  detectImpacts(lastState, state);
   lastState = state;
   render(state);
 });
@@ -290,17 +363,26 @@ function numKeypad(opts) {
 
 // 금고 번호 맞추기 전용 — "이어붙여 입력"이 아니라 자릿수별 칸을 하나씩 채우는 입력판.
 // 칸을 직접 클릭해 옮겨갈 수도 있고, 숫자를 누르면 자동으로 다음 빈 칸으로 넘어간다.
+// 숫자를 누를 때마다 화면 전체(render(lastState))를 다시 그리면, 미니게임이 팝업 모달로 떠
+// 있는 동안 그 모달의 등장 애니메이션(페이드인+팝인)이 매번 처음부터 재생되어 화면이 깜빡이는
+// 것처럼 보인다 — 숫자 입력 자체는 서버와 무관한 순수 로컬 UI이므로, 이 칸들만 제자리에서
+// 다시 그린다(전체 화면 재렌더 없이).
 function digitCellsInput(opts) {
   const wrap = el('div', 'digitCellsWrap');
   if (opts.wrapId) wrap.id = opts.wrapId;
   const cellsRow = el('div', 'digitCellsRow');
-  const digits = opts.digits();
-  for (let i = 0; i < opts.len; i++) {
-    const cell = el('div', 'digitCell input' + (opts.focusIndex() === i ? ' focused' : ''), digits[i] != null ? String(digits[i]) : '');
-    cell.onclick = () => { opts.setFocusIndex(i); render(lastState); };
-    cellsRow.appendChild(cell);
-  }
   wrap.appendChild(cellsRow);
+
+  const renderCells = () => {
+    cellsRow.innerHTML = '';
+    const digits = opts.digits();
+    for (let i = 0; i < opts.len; i++) {
+      const cell = el('div', 'digitCell input' + (opts.focusIndex() === i ? ' focused' : ''), digits[i] != null ? String(digits[i]) : '');
+      cell.onclick = () => { opts.setFocusIndex(i); renderCells(); };
+      cellsRow.appendChild(cell);
+    }
+  };
+  renderCells();
 
   const appendDigit = (d) => {
     const cur = opts.digits();
@@ -311,7 +393,7 @@ function digitCellsInput(opts) {
     opts.setDigits(next);
     const nextEmpty = next.findIndex((v, i2) => i2 > idx && v == null);
     opts.setFocusIndex(nextEmpty >= 0 ? nextEmpty : Math.min(idx + 1, opts.len - 1));
-    render(lastState);
+    renderCells();
   };
   const pad = el('div', 'numpad');
   for (let n = 1; n <= 9; n++) {
@@ -330,7 +412,7 @@ function digitCellsInput(opts) {
       opts.setDigits(cur);
       opts.setFocusIndex(prevIdx);
     }
-    render(lastState);
+    renderCells();
   };
   pad.appendChild(back);
   const zero = el('button', 'numkey', '0');
@@ -341,7 +423,9 @@ function digitCellsInput(opts) {
     const cur = opts.digits();
     if (cur.some((v) => v == null)) { addLog('⚠ 모든 칸을 채워주세요.'); return; }
     const ok = opts.onSubmit(cur.slice());
-    if (ok !== false) { opts.setDigits(Array(opts.len).fill(null)); opts.setFocusIndex(0); render(lastState); }
+    // 제출은 서버로 실제 시도를 보내는 진짜 상태 변화라서, 서버가 새 state를 내려주면 그때
+    // 화면 전체가 자연히 다시 그려진다 — 여기서는 로컬 입력칸만 비워 다음 시도를 준비한다.
+    if (ok !== false) { opts.setDigits(Array(opts.len).fill(null)); opts.setFocusIndex(0); renderCells(); }
   };
   pad.appendChild(submit);
   wrap.appendChild(pad);
@@ -372,7 +456,12 @@ function formatCountdownClock(ms) {
 function tickBombTimer() {
   if (!lastState || lastState.phase !== 'ROUND_MINIGAME' || !lastState.minigame || lastState.minigame.type !== 'BOMB') { bombTicking = false; return; }
   const timerEl = document.getElementById('bombTimer');
-  if (timerEl) timerEl.textContent = formatCountdownClock(lastState.minigame.public.expiresAt - Date.now());
+  const remaining = lastState.minigame.public.expiresAt - Date.now();
+  if (timerEl) {
+    timerEl.textContent = formatCountdownClock(remaining);
+    // 남은시간 5초 이하 — 위험구간 펄스로 긴장감을 끌어올린다.
+    timerEl.classList.toggle('bombDanger', remaining <= 5000 && remaining > 0);
+  }
   requestAnimationFrame(tickBombTimer);
 }
 function tickFlashTimer() {
@@ -412,9 +501,18 @@ function render(state) {
   renderStatusBar(state);
   app.innerHTML = '';
   if (state.phase === 'LOBBY') return renderLobby(state);
-  if (state.phase === 'SETUP') return renderSetup(state);
   if (state.phase === 'ROUND_COUNTDOWN') return renderCountdown(state);
   if (state.phase === 'END') return renderEnd(state);
+  // "고르기" 화면(APP_ROLE === 'pick')은 4대 분리 모드 전용 — 이 화면이 담당하는 건 오직
+  // "라운드 중 6×6 처소 칸 열기"뿐이다. SETUP(독 설치)과 미니게임은 여전히 "게임" 화면에서
+  // 진행하므로, 그 두 단계에서는 안내 문구만 보여주고 실제 UI는 게임 화면 쪽에만 그린다.
+  if (APP_ROLE === 'pick') {
+    if (state.phase === 'SETUP') return renderPickWaiting('🧪 독 설치는 게임 화면에서 진행합니다.');
+    if (state.phase === 'ROUND_MINIGAME') return renderPickWaiting('🎲 미니게임이 게임 화면에서 진행 중입니다...');
+    if (state.phase === 'ROUND_ACTION') return renderPickView(state);
+    return renderPickWaiting('대기 중...');
+  }
+  if (state.phase === 'SETUP') return renderSetup(state);
   return renderMain(state);
 }
 
@@ -433,7 +531,10 @@ function tickCountdown() {
   requestAnimationFrame(tickCountdown);
 }
 function renderCountdown(state) {
-  const p = el('section', 'panel center countdownPanel');
+  // 마지막 라운드는 "결전"이라는 걸 시각적으로 확실히 차별화한다 — 승부처라는 긴장감.
+  const isFinal = state.round === state.roundsTotal;
+  const p = el('section', 'panel center countdownPanel' + (isFinal ? ' finalRound' : ''));
+  if (isFinal) p.appendChild(el('div', 'finalRoundBanner', '⚔ 마지막 라운드 — 결전'));
   p.appendChild(el('h2', null, `${state.round} / ${state.roundsTotal} 라운드 준비`));
   if (state.nextMinigameName) p.appendChild(el('div', 'countdownNext', `다음 미니게임: <b>${state.nextMinigameName}</b>`));
   const numEl = el('div', 'countdownNum', '3');
@@ -461,10 +562,20 @@ function renderFlashOverlay(room) {
 }
 
 function renderStatusBar(state) {
+  // 미니게임 2연승 이상일 때만 배지를 띄운다 — 1승은 아직 "스트릭"이라 부를 정도가 아니라서.
+  let streakHtml = '';
+  if (state.streakOwner && state.streakCount >= 2) {
+    streakHtml = state.streakOwner === 'me'
+      ? `<span class="streakBadge mine">🔥 ${state.streakCount}연승</span>`
+      : `<span class="streakBadge opp">⚠ 상대 ${state.streakCount}연승</span>`;
+  }
+  // 4대 분리 모드에서 지금 이 화면이 "게임"용인지 "고르기"용인지 한눈에 알 수 있도록 배지를 단다.
+  const roleHtml = APP_ROLE ? `<span class="roleBadge">${APP_ROLE === 'game' ? '🎲 게임 화면' : '🚪 고르기 화면'} · ${APP_SLOT}</span>` : '';
   statusBar.innerHTML = `
+    ${roleHtml}
     <span>나: <b>${state.me ? state.me.name : '-'}</b></span>
     <span>상대: <b>${state.opp ? state.opp.name : '대기 중'}</b></span>
-    <span>라운드: <b>${state.round || 0} / ${state.roundsTotal || '-'}</b></span>
+    <span>라운드: <b>${state.round || 0} / ${state.roundsTotal || '-'}</b>${streakHtml}</span>
   `;
 }
 
@@ -566,7 +677,14 @@ function renderMain(state) {
   // "미니게임은 팝업처럼 열리도록" — 어느 탭을 보고 있든 놓치지 않도록, 화면 전체를 덮는
   // 모달로 띄운다. 탭 안쪽 내용과는 별개로 항상 최상단에 뜬다.
   if (state.phase === 'ROUND_MINIGAME' && state.minigame) {
-    app.appendChild(renderMinigameModal(state));
+    const modal = renderMinigameModal(state);
+    // 직전 프레임에도 모달이 열려 있었다면(예: 상대가 방금 움직여서 다시 그려진 것뿐이라면)
+    // 등장 애니메이션을 또 재생하지 않는다 — 진짜로 "새로 열릴 때"만 팝인/페이드인을 보여준다.
+    if (modalOpenPrev) modal.classList.add('modalNoAnim');
+    app.appendChild(modal);
+    modalOpenPrev = true;
+  } else {
+    modalOpenPrev = false;
   }
 }
 
@@ -660,32 +778,30 @@ function renderStatsPanel(state) {
 
 function statGrid(p) {
   const g = el('div', 'statgrid');
-  g.appendChild(statBox('poison', p.poison, `독 (종료 시 -${lastState.config.POISON_PENALTY}점/개)`));
+  // 독이 2개 이상 쌓이면(종료 시 -3점/개라 승부에 크게 영향) 위험하다는 긴장감을 시각적으로 준다.
+  g.appendChild(statBox('poison', p.poison, `독 (종료 시 -${lastState.config.POISON_PENALTY}점/개)`, p.poison >= 2));
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
   return g;
 }
-function statBox(cls, v, label) {
-  const d = el('div', 'stat ' + cls);
+function statBox(cls, v, label, danger) {
+  const d = el('div', 'stat ' + cls + (danger ? ' dangerPulse' : ''));
   d.appendChild(el('div', 'v', v));
   d.appendChild(el('div', 'l', label));
   return d;
 }
 
-function renderMyRoomPanel(state) {
-  const p = el('div', 'panel');
-  p.appendChild(el('h2', null, '내 처소 (6×6)'));
-  // 섬광 정찰(FLASH_ALL)을 골랐다면 실제로 번쩍이는 순간을 먼저 겪어야 칸을 열 수 있다 —
-  // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
-  const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
-  const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
-  // 6×6 그리드를 감싸는 위치기준 컨테이너 — 섬광 정찰(철가방) 보상이 뜨면 이 컨테이너 안에
-  // 그리드와 같은 자리를 덮는 오버레이로 표시된다(페이지 전체를 갈아치우지 않는다).
+// 6×6 그리드 하나를 그린다 — "내 처소"(게임 화면·고르기 화면 모두)와 고르기 화면의
+// "상대 처소"(보기 전용) 양쪽에서 재사용하는 공용 빌더.
+// opts.pickMode: 안 연 칸을 클릭 가능하게 할지. opts.onOpen(row,col): 클릭 시 호출.
+// opts.flashRoom: 섬광 정찰(철가방) 오버레이용 배열(내 처소에서만 쓰임).
+function buildRoomGrid(room, opts) {
+  opts = opts || {};
   const gridHolder = el('div', 'roomGridHolder');
   const grid = el('div', 'grid6');
-  for (let r = 0; r < state.config.GRID; r++) {
-    for (let c = 0; c < state.config.GRID; c++) {
-      const data = state.me.room[r][c];
+  for (let r = 0; r < room.length; r++) {
+    for (let c = 0; c < room[r].length; c++) {
+      const data = room[r][c];
       const cell = el('div', 'cell');
       if (data.opened) {
         cell.classList.add('opened', data.type);
@@ -694,19 +810,79 @@ function renderMyRoomPanel(state) {
       } else {
         cell.textContent = '';
       }
-      if (pickMode && !data.opened) {
+      if (opts.pickMode && !data.opened) {
         cell.classList.add('pickable');
-        cell.onclick = () => socket.emit('action:open', { row: r, col: c });
+        cell.onclick = () => opts.onOpen(r, c);
       }
       grid.appendChild(cell);
     }
   }
   gridHolder.appendChild(grid);
-  if (flashRoom) gridHolder.appendChild(renderFlashOverlay(flashRoom));
-  p.appendChild(gridHolder);
+  if (opts.flashRoom) gridHolder.appendChild(renderFlashOverlay(opts.flashRoom));
+  return gridHolder;
+}
+
+function renderMyRoomPanel(state) {
+  const p = el('div', 'panel');
+  p.appendChild(el('h2', null, '내 처소 (6×6)'));
+  // 4대 분리 모드의 "게임" 화면에서는 실제 칸 열기가 "고르기" 화면으로 옮겨갔으므로,
+  // 여기서는 클릭을 받지 않고 참고용으로만 현재 상태를 보여준다.
+  if (APP_ROLE === 'game') {
+    p.appendChild(buildRoomGrid(state.me.room, { flashRoom }));
+    p.appendChild(el('p', 'hint', '👉 칸 열기는 "고르기" 화면에서 진행하세요. (여기서는 참고용으로만 표시됩니다)'));
+    return p;
+  }
+  // 섬광 정찰(FLASH_ALL)을 골랐다면 실제로 번쩍이는 순간을 먼저 겪어야 칸을 열 수 있다 —
+  // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
+  const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
+  const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
+  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom }));
   if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) p.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
   return p;
+}
+
+// ---------------------------- 고르기 화면(APP_ROLE === 'pick') ----------------------------
+// 4대 분리 모드 전용 — 라운드 중(ROUND_ACTION) 오직 "6×6 처소 칸 열기"만 담당한다.
+// 양쪽 처소를 나란히 보여주되, 내 처소만 클릭 가능하고 상대 처소는 보기 전용이다.
+// 상대 처소의 열린 칸 결과는 서버가 match.splitMode일 때만 opp.room으로 내려주는 값을 그대로 쓴다.
+function renderPickWaiting(msg) {
+  const p = el('section', 'panel center');
+  p.appendChild(el('p', 'hint', msg));
+  app.appendChild(p);
+}
+
+function renderPickView(state) {
+  // "게임" 화면의 mainView(560px 폭 제한)를 그대로 쓰면 6×6 그리드 두 개가 나란히 들어갈
+  // 자리가 없어 세로로 쌓여버린다 — 고르기 화면은 #app 전체 폭(최대 1200px)을 그대로 쓴다.
+  const wrap = el('div', 'pickMainView');
+
+  const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
+  const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
+
+  const cols = el('div', 'cols pickCols');
+
+  const mine = el('div', 'col');
+  mine.appendChild(el('h3', null, `내 처소 (${state.me.name})`));
+  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom }));
+  if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
+  else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
+  else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
+  cols.appendChild(mine);
+
+  if (state.opp) {
+    const opp = el('div', 'col');
+    opp.appendChild(el('h3', null, `상대 처소 (${state.opp.name})` + (state.opp.connected ? '' : ' <span class="hint">(연결 끊김)</span>')));
+    if (state.opp.room) {
+      opp.appendChild(buildRoomGrid(state.opp.room, {}));
+      opp.appendChild(el('p', 'hint', '상대가 연 칸의 결과가 실시간으로 여기 표시됩니다. (이 칸은 보기 전용입니다)'));
+    } else {
+      opp.appendChild(el('p', 'hint', '상대 처소 정보를 불러오는 중...'));
+    }
+    cols.appendChild(opp);
+  }
+  wrap.appendChild(cols);
+  app.appendChild(wrap);
 }
 
 // -------- 미니게임 UI --------
@@ -848,8 +1024,8 @@ function renderMinigamePanel(state) {
   } else if (type === 'BANK') {
     // 각자 자신만의 금고(컴퓨터가 무작위로 정한 서로 다른 정답)를 갖고 독립적으로 숫자야구를 진행한다.
     // "상대 것은 볼 필요 없다"는 피드백에 따라 더 이상 상대의 시도 내역은 보여주지 않고 내 금고에만
-    // 집중한다 — 상호작용은 "훼방 놓기"로만 남긴다. 입력도 한 번에 이어붙이던 키패드 대신, 자릿수별
-    // 칸을 하나씩 채우고 그 칸 자체를 스트라이크(초록)/볼(노랑)로 물들여 가시성을 높였다.
+    // 집중한다. 입력도 한 번에 이어붙이던 키패드 대신, 자릿수별 칸을 하나씩 채우고 그 칸 자체를
+    // 스트라이크(초록)/볼(노랑)로 물들여 가시성을 높였다.
     if (bankRound !== state.round) { bankRound = state.round; bankDigits = Array(mg.digits).fill(null); bankFocusIndex = 0; }
     box.appendChild(el('div', 'desc', `숫자야구입니다. 나만의 금고(0~9 중 서로 다른 숫자 ${mg.digits}개)를 추리하세요. 칸이 <span class="strikeText">초록</span>이면 스트라이크(숫자·자리 모두 일치), <span class="ballText">노랑</span>이면 볼(숫자만 일치)입니다.`));
 
@@ -876,12 +1052,6 @@ function renderMinigamePanel(state) {
         return true;
       },
     }));
-
-    const distractBtn = el('button', 'action danger bankDistractBtn', mg.distractAvailable ? '😈 훼방 놓기 (1회, 이번 시도 포기)' : '훼방 놓기 사용함');
-    distractBtn.disabled = !mg.distractAvailable;
-    distractBtn.onclick = () => socket.emit('minigame:move', { action: 'DISTRACT' });
-    box.appendChild(distractBtn);
-    box.appendChild(el('div', 'hint', '훼방 놓기: 이번 라운드에 딱 한 번, 상대의 입력판을 잠깐 흔들어 방해할 수 있습니다.'));
   } else if (type === 'MEMORY') {
     // "5개 중 안 보인 1개 고르기"는 처음 보는 항목이 눈에 띄어 너무 쉬웠다는 피드백을 반영해,
     // 같은 4자리를 두 번 보여주되 그중 하나만 다른 유품으로 바뀌는 "틀린 그림 찾기" 방식으로 바꿨다.

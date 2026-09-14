@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>당신의 술잔에 독배를 — 4대 분리 모드 시작</title>
+<link rel="stylesheet" href="/style.css" />
+<style>
+  html, body { overflow: auto; }
+  #startWrap { max-width: 900px; margin: 0 auto; padding: 24px; }
+  .startIntro { margin-bottom: 22px; }
+  .startIntro p { line-height: 1.6; }
+  .startGroup { margin-bottom: 26px; }
+  .startGroup h3 { color: var(--gold); margin-bottom: 10px; }
+  .startBtnRow { display: flex; gap: 14px; flex-wrap: wrap; }
+  .startBtn {
+    flex: 1 1 220px; display: block; text-align: center; text-decoration: none;
+    padding: 22px 16px; border-radius: 4px; font-size: 18px; font-weight: 700;
+    border: 1px solid var(--border); color: var(--text); background: var(--panel);
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .startBtn:hover { border-color: var(--gold); color: var(--gold); }
+  .startBtn .startBtnSub { display:block; margin-top: 6px; font-size: 12.5px; font-weight: 400; color: var(--muted); }
+  .startBtn.gameKind { border-color: #6b4a2a; }
+  .startBtn.pickKind { border-color: #5f8f77; }
+  .legacyRow { margin-top: 6px; }
+  .legacyRow a { color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+  <header class="topbar">
+    <h1><span class="titleGlow">당신의 술잔에 독배를</span><span class="ver"> — 4대 분리 모드 시작 화면</span></h1>
+  </header>
+  <main id="startWrap">
+    <section class="panel startIntro">
+      <h2>이 페이지는 무엇인가요</h2>
+      <p>
+        4대의 컴퓨터/태블릿에서 각자 아래 버튼 중 <b>본인 자리에 맞는 것 하나만</b> 눌러 접속하면 됩니다.
+        이 페이지 자체는 그냥 링크 모음이라, 이 화면을 열어보는 것만으로는 게임 자리(장남/차남)를 차지하지 않습니다 —
+        마음 편히 아무 기기에서나 먼저 열어 확인해보셔도 됩니다.
+      </p>
+      <p class="hint">
+        총 4대가 필요합니다: <b>게임 화면</b> 2대(장남용/차남용) — 독 설치·미니게임·보상을 진행합니다.
+        <b>고르기 화면</b> 2대(장남용/차남용) — 라운드마다 처소 6×6 칸을 여는 화면이며, 양쪽 처소를 나란히 보여줍니다.
+      </p>
+    </section>
+
+    <section class="startGroup">
+      <h3>1) 장남 쪽 두 기기</h3>
+      <div class="startBtnRow">
+        <a class="startBtn gameKind" href="/game/A">🎲 게임 화면 · 장남(A)<span class="startBtnSub">셋업 · 미니게임 · 보상</span></a>
+        <a class="startBtn pickKind" href="/pick/A">🚪 고르기 화면 · 장남(A)<span class="startBtnSub">6×6 처소 칸 열기</span></a>
+      </div>
+    </section>
+
+    <section class="startGroup">
+      <h3>2) 차남 쪽 두 기기</h3>
+      <div class="startBtnRow">
+        <a class="startBtn gameKind" href="/game/B">🎲 게임 화면 · 차남(B)<span class="startBtnSub">셋업 · 미니게임 · 보상</span></a>
+        <a class="startBtn pickKind" href="/pick/B">🚪 고르기 화면 · 차남(B)<span class="startBtnSub">6×6 처소 칸 열기</span></a>
+      </div>
+    </section>
+
+    <section class="panel startGroup">
+      <h3>문제가 있을 때</h3>
+      <p class="hint">
+        화면에 "이미 두 명이 접속해 있습니다"라는 문구가 뜬다면, 예전 접속이 자리를 차지하고 있는 것입니다.
+        아무 화면에서나 하단의 <b>"게임 재시작"</b> 버튼을 누르면 모두 새로 접속한 것처럼 깨끗하게 초기화됩니다.
+      </p>
+      <div class="legacyRow">
+        기존 방식(컴퓨터 2대, 화면 하나 공유)으로 하시려면 → <a href="/">여기</a>로 접속하세요.
+        진행 상황만 지켜보려면(자리를 차지하지 않음) → <a href="/admin">관리자 화면</a>.
+      </div>
+    </section>
+  </main>
+</body>
+</html>
