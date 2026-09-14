@@ -105,14 +105,9 @@ button { font-family: inherit; cursor: pointer; }
 .cols { display:flex; gap: 16px; flex-wrap: wrap; }
 .col { flex: 1 1 320px; }
 
-/* "게임 화면"(미니게임/행동)과 "6×6 화면"(내 처소)을 탭으로 오가는 단일 화면 레이아웃 */
+/* "게임 화면"(미니게임/행동)과 "6×6 화면"(내 처소)을 탭으로 오가는 단일 화면 레이아웃 —
+   4대 분리 모드의 "고르기" 화면(내 처소 하나만 보여줌)도 폭이 같아 이 클래스를 함께 쓴다. */
 .mainView { max-width: 560px; margin: 0 auto; }
-
-/* 4대 분리 모드의 "고르기" 화면 — 내 처소·상대 처소 6×6 그리드 두 개가 나란히 들어가야
-   하므로 mainView보다 훨씬 넓게 잡는다(#app 자체 최대폭인 1200px까지 그대로 사용). */
-.pickMainView { max-width: 1100px; margin: 0 auto; }
-.pickCols { align-items: flex-start; }
-.pickCols > .col { flex: 1 1 420px; }
 .tabBar { display: flex; gap: 8px; margin-bottom: 16px; }
 .tabBtn {
   flex: 1 1 0; position: relative;
@@ -249,6 +244,16 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
   text-align:center; font-family: 'Noto Sans KR', monospace; font-weight: 700; font-size: 32px;
   color: #ffdca0; letter-spacing: 1px; margin: 6px 0 12px;
   text-shadow: 0 0 8px rgba(255,180,80,0.6);
+}
+/* 막판 10초 — 정확한 초를 감추고 대신 흔들리는 경고 문구를 보여줄 때 */
+.bombTimer.bombHidden {
+  font-size: 20px; color: var(--crimson-bright);
+  animation: bombHiddenShake 900ms ease-in-out infinite;
+}
+@keyframes bombHiddenShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
 }
 
 /* 안전핀 뽑기 — N개의 안전핀 중 하나가 폭탄, 직접 하나씩 클릭해서 뽑는다 */
@@ -429,7 +434,7 @@ button.memoryChoice:hover { border-color: var(--gold); background: #23151c; }
   55% { transform: scale(1.04) rotateX(4deg); opacity: 1; }
   100% { transform: scale(1) rotateX(0deg); opacity: 1; }
 }
-.boxOpenAnim { animation: boxOpenPop 220ms ease-out; transform-origin: top center; }
+.boxOpenAnim { animation: boxOpenPop 150ms ease-out; transform-origin: top center; }
 
 /* 숫자 키패드 (촛불 개수 맞히기 / 금고 번호 맞추기) */
 .numpadWrap { max-width: 260px; margin-top: 8px; }

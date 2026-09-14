@@ -453,12 +453,19 @@ function formatCountdownClock(ms) {
   const pad2 = (n) => String(n).padStart(2, '0');
   return `${pad2(mm)}:${pad2(ss)}.${pad2(cc)}`;
 }
+// 남은 시간이 10초 이하로 들어가면 정확히 몇 초 남았는지 감춘다 — "정확히 언제 터질지 모른다"는
+// 긴장감을 주기 위해, 시계 숫자 대신 흔들리는 경고 문구만 보여준다.
+function bombTimerText(ms) {
+  if (ms > 0 && ms <= 10000) return '💣 곧 터집니다...';
+  return formatCountdownClock(ms);
+}
 function tickBombTimer() {
   if (!lastState || lastState.phase !== 'ROUND_MINIGAME' || !lastState.minigame || lastState.minigame.type !== 'BOMB') { bombTicking = false; return; }
   const timerEl = document.getElementById('bombTimer');
   const remaining = lastState.minigame.public.expiresAt - Date.now();
   if (timerEl) {
-    timerEl.textContent = formatCountdownClock(remaining);
+    timerEl.textContent = bombTimerText(remaining);
+    timerEl.classList.toggle('bombHidden', remaining <= 10000 && remaining > 0);
     // 남은시간 5초 이하 — 위험구간 펄스로 긴장감을 끌어올린다.
     timerEl.classList.toggle('bombDanger', remaining <= 5000 && remaining > 0);
   }
@@ -653,18 +660,12 @@ function renderMain(state) {
   wrap.appendChild(renderStatsPanel(state));
   wrap.appendChild(renderTabBar(state));
 
-  // 보상 선택/사용, 라운드 리캡은 "내 처소" 탭이 기본으로 뜨는 ROUND_ACTION 시작 시점부터
-  // 곧장 보여줘야 할 정보라서, 탭 전환과 무관하게 항상 노출한다. 예전에는 이 패널들이 "게임"
-  // 탭 안에만 있어서, ROUND_ACTION에 들어가자마자 자동으로 "내 처소" 탭으로 넘어가 버리면
-  // 보상을 고를 기회나 방금 끝난 미니게임의 결과(예: 정확한 와인잔 개수)를 탭을 직접 눌러보기
-  // 전까진 놓치는 문제가 있었다 — "실패 숫자가 정확하게 보이게" 요구사항에 어긋나므로 고쳤다.
-  if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.type) wrap.appendChild(renderRewardChoicePanel(state));
-  if (state.phase === 'ROUND_ACTION' && state.myReward && state.myReward.type && !state.myReward.used) wrap.appendChild(renderRewardPanel(state));
-  if (state.phase === 'ROUND_ACTION' && state.oppChoosingReward) wrap.appendChild(el('div', 'panel hint', '⚠ 상대가 미니게임에서 이겨 보상을 고르는 중입니다...'));
+  // 4대 분리 모드의 "게임" 화면에서는 보상(=내 처소를 들여다보는 정찰) 관련 패널을 전혀
+  // 띄우지 않는다 — 각 처소 상황은 이제 전부 "고르기" 화면에서 보고 진행한다. 레거시
+  // (단일 화면 2인 모드) 모드에서는 예전처럼 그대로 이 자리에 보여준다.
+  if (APP_ROLE !== 'game') appendRewardPanels(wrap, state);
   const recap = state.phase === 'ROUND_ACTION' ? renderLastMinigameRecap(state) : null;
   if (recap) wrap.appendChild(recap);
-  // 보상(정찰)으로 무엇을 알아냈는지는 숨겨진 #log에만 남던 것을 화면에 계속 보이게 한다.
-  if (lastRewardResult && lastRewardResultRound === state.round) wrap.appendChild(renderRewardResultPanel());
 
   if (activeTab === 'ROOM') {
     wrap.appendChild(renderMyRoomPanel(state));
@@ -713,6 +714,19 @@ function renderTabBar(state) {
   bar.appendChild(roomBtn);
 
   return bar;
+}
+
+// 보상 선택/사용/결과 패널 + "상대가 고르는 중" 안내를 한데 모아 붙이는 헬퍼.
+// 레거시(단일 화면) 모드와 4대 분리 모드의 "고르기" 화면이 공유해서 쓴다 — "내 처소를
+// 들여다보는" 행위는 전부 이 화면들에서만 이뤄지고, 4대 분리 모드의 "게임" 화면에는 아예
+// 나타나지 않는다.
+function appendRewardPanels(wrap, state) {
+  // 보상 선택/사용은 "내 처소" 관련 진행 상황이 곧장 보여야 하므로, 탭 전환과 무관하게 항상 노출한다.
+  if (state.phase === 'ROUND_ACTION' && state.myReward && !state.myReward.type) wrap.appendChild(renderRewardChoicePanel(state));
+  if (state.phase === 'ROUND_ACTION' && state.myReward && state.myReward.type && !state.myReward.used) wrap.appendChild(renderRewardPanel(state));
+  if (state.phase === 'ROUND_ACTION' && state.oppChoosingReward) wrap.appendChild(el('div', 'panel hint', '⚠ 상대가 미니게임에서 이겨 보상을 고르는 중입니다...'));
+  // 보상(정찰)으로 무엇을 알아냈는지는 숨겨진 #log에만 남던 것을 화면에 계속 보이게 한다.
+  if (lastRewardResult && lastRewardResultRound === state.round) wrap.appendChild(renderRewardResultPanel());
 }
 
 // 미니게임 승자에게 보상 후보 중 하나를 직접 고르게 하는 패널.
@@ -825,11 +839,10 @@ function buildRoomGrid(room, opts) {
 function renderMyRoomPanel(state) {
   const p = el('div', 'panel');
   p.appendChild(el('h2', null, '내 처소 (6×6)'));
-  // 4대 분리 모드의 "게임" 화면에서는 실제 칸 열기가 "고르기" 화면으로 옮겨갔으므로,
-  // 여기서는 클릭을 받지 않고 참고용으로만 현재 상태를 보여준다.
+  // 4대 분리 모드의 "게임" 화면에서는 각 처소의 실제 상황(그리드·보상 결과 등)을 전혀
+  // 보여주지 않는다 — 전부 "고르기" 화면에서만 확인·진행한다.
   if (APP_ROLE === 'game') {
-    p.appendChild(buildRoomGrid(state.me.room, { flashRoom }));
-    p.appendChild(el('p', 'hint', '👉 칸 열기는 "고르기" 화면에서 진행하세요. (여기서는 참고용으로만 표시됩니다)'));
+    p.appendChild(el('p', 'hint', '👉 칸 열기와 보상(정찰) 확인은 모두 "고르기" 화면에서 진행하세요.'));
     return p;
   }
   // 섬광 정찰(FLASH_ALL)을 골랐다면 실제로 번쩍이는 순간을 먼저 겪어야 칸을 열 수 있다 —
@@ -843,9 +856,9 @@ function renderMyRoomPanel(state) {
 }
 
 // ---------------------------- 고르기 화면(APP_ROLE === 'pick') ----------------------------
-// 4대 분리 모드 전용 — 라운드 중(ROUND_ACTION) 오직 "6×6 처소 칸 열기"만 담당한다.
-// 양쪽 처소를 나란히 보여주되, 내 처소만 클릭 가능하고 상대 처소는 보기 전용이다.
-// 상대 처소의 열린 칸 결과는 서버가 match.splitMode일 때만 opp.room으로 내려주는 값을 그대로 쓴다.
+// 4대 분리 모드 전용 — "내 처소"와 관련된 모든 것(칸 열기 + 보상 선택/사용/결과)을 이 화면
+// 하나에서 담당한다. 상대 처소는 보여주지 않는다 — 서로 무엇을 골랐는지는 컴퓨터를 마주보게
+// 배치해 직접 보도록 한 물리적 배치의 몫으로 남겨둔다(소프트웨어로 합쳐 보여주지 않는다).
 function renderPickWaiting(msg) {
   const p = el('section', 'panel center');
   p.appendChild(el('p', 'hint', msg));
@@ -853,35 +866,21 @@ function renderPickWaiting(msg) {
 }
 
 function renderPickView(state) {
-  // "게임" 화면의 mainView(560px 폭 제한)를 그대로 쓰면 6×6 그리드 두 개가 나란히 들어갈
-  // 자리가 없어 세로로 쌓여버린다 — 고르기 화면은 #app 전체 폭(최대 1200px)을 그대로 쓴다.
-  const wrap = el('div', 'pickMainView');
+  const wrap = el('div', 'mainView');
+
+  appendRewardPanels(wrap, state);
 
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
 
-  const cols = el('div', 'cols pickCols');
-
-  const mine = el('div', 'col');
-  mine.appendChild(el('h3', null, `내 처소 (${state.me.name})`));
+  const mine = el('div', 'panel');
+  mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
   mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom }));
   if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
   else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
-  cols.appendChild(mine);
+  wrap.appendChild(mine);
 
-  if (state.opp) {
-    const opp = el('div', 'col');
-    opp.appendChild(el('h3', null, `상대 처소 (${state.opp.name})` + (state.opp.connected ? '' : ' <span class="hint">(연결 끊김)</span>')));
-    if (state.opp.room) {
-      opp.appendChild(buildRoomGrid(state.opp.room, {}));
-      opp.appendChild(el('p', 'hint', '상대가 연 칸의 결과가 실시간으로 여기 표시됩니다. (이 칸은 보기 전용입니다)'));
-    } else {
-      opp.appendChild(el('p', 'hint', '상대 처소 정보를 불러오는 중...'));
-    }
-    cols.appendChild(opp);
-  }
-  wrap.appendChild(cols);
   app.appendChild(wrap);
 }
 
@@ -947,8 +946,9 @@ function renderMinigamePanel(state) {
     box.appendChild(stage);
     if (mg.myClicked) box.appendChild(el('div', 'hint', '상대의 반응을 기다리는 중...'));
   } else if (type === 'BOMB') {
-    box.appendChild(el('div', 'desc', '정해진 시간이 다 되면 터집니다. 터지는 순간 들고 있으면 집니다.'));
-    const timerEl = el('div', 'bombTimer', formatCountdownClock(mg.expiresAt - Date.now()));
+    box.appendChild(el('div', 'desc', '정해진 시간이 다 되면 터집니다. 터지는 순간 들고 있으면 집니다. (막판 10초부터는 정확히 언제 터질지 감춰집니다)'));
+    const bombRemainingNow = mg.expiresAt - Date.now();
+    const timerEl = el('div', 'bombTimer' + (bombRemainingNow <= 10000 && bombRemainingNow > 0 ? ' bombHidden' : ''), bombTimerText(bombRemainingNow));
     timerEl.id = 'bombTimer';
     box.appendChild(timerEl);
     if (!bombTicking) { bombTicking = true; requestAnimationFrame(tickBombTimer); }
@@ -958,7 +958,7 @@ function renderMinigamePanel(state) {
     box.appendChild(b);
     box.appendChild(turnBadge(mg.myTurn, '지금 내가 들고 있음'));
   } else if (type === 'PIN') {
-    box.appendChild(el('div', 'desc', `안전핀 ${mg.pinCount}개 중 하나가 몰래 정해진 폭탄입니다. 번갈아 하나씩 직접 골라 뽑으세요 — 폭탄을 뽑은 사람이 집니다.`));
+    box.appendChild(el('div', 'desc', `안전핀 ${mg.pinCount}개 중 하나는 폭탄 — 번갈아 하나씩 뽑으세요.<br/>폭탄을 뽑으면 그 사람이 집니다.`));
     const grid = el('div', 'pinGrid');
     for (let i = 0; i < mg.pinCount; i++) {
       const pulled = mg.pulled[i];

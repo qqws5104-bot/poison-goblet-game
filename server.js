@@ -23,7 +23,7 @@ const CONFIG = {
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
   REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
-  REWARD_FLASH_REVEAL_MS: 500, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms)
+  REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
@@ -767,16 +767,13 @@ function buildClientState(forId) {
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
-    // 상대의 점수/독/해독제는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다(콘솔로 훔쳐보기 방지).
-    // 4대 분리 모드(splitMode)에서는 "고르기" 화면에서 두 처소를 나란히 보여주며 열린 칸의
-    // 결과를 서로 바로 공개하기로 했으므로, 이때만 예외적으로 opp.room을 내려준다(단, 아직
-    // 안 연 칸은 그대로 숨김 — sanitizeRoom의 revealAll=false와 동일하게, 열린 칸만 보임).
-    // 점수·독·해독제 개수는 이 모드에서도 게임이 끝나기 전까지 계속 비공개다.
+    // 상대의 점수/독/해독제/처소는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다
+    // (콘솔로 훔쳐보기 방지). 4대 분리 모드에서도 "고르기" 화면은 이제 본인 처소만 보여주므로,
+    // 레거시 2인 모드와 동일하게 상대 처소는 계속 비공개다 — "서로 뭘 골랐는지"는 화면을
+    // 소프트웨어로 합쳐 보여주는 대신, 컴퓨터를 마주보게 배치하는 물리적 방식으로 해결한다.
     opp: opp && (match.phase === 'END'
       ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
-      : match.splitMode
-        ? { name: opp.name, connected: opp.connected, room: sanitizeRoom(opp.room, false) }
-        : { name: opp.name, connected: opp.connected, room: null }),
+      : { name: opp.name, connected: opp.connected, room: null }),
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
