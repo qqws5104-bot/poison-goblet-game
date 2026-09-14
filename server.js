@@ -27,18 +27,15 @@ const CONFIG = {
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
-// 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 9종을 섞은 뒤 하나를 무작위로 한 번 더 채운다(buildMinigameOrder).
-// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로 제외 — 9종.
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'MEMORY'];
+// 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 8종을 섞은 뒤 둘을 무작위로 한 번 더 채운다(buildMinigameOrder).
+// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미 피드백으로 제외 — 8종.
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
   SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기',
-  BANK: '금고 번호 맞추기', MEMORY: '사라진 유품 찾기',
+  BANK: '금고 번호 맞추기',
 };
-// 사라진 유품 찾기(MEMORY): 5개 중 4개를 잠깐 보여준 뒤, 보이지 않았던 1개를 맞히는 기억력 게임.
-const MEMORY_POOL = ['CROWN', 'SCROLL', 'DAGGER', 'RING', 'KEY'];
-const MEMORY_NAMES_KR = { CROWN: '왕관', SCROLL: '밀서', DAGGER: '단검', RING: '인장 반지', KEY: '열쇠' };
 function buildMinigameOrder() {
   const order = shuffle(MINIGAME_SEQUENCE);
   while (order.length < CONFIG.ROUNDS) {
@@ -278,18 +275,6 @@ function initMinigame(type, roundNo) {
       history: { [a]: [], [b]: [] },
     };
   }
-  if (type === 'MEMORY') {
-    // "5개 중 안 보인 1개 고르기"는 처음 보는 5번째 항목이 눈에 띄어 너무 쉬웠다 — 진짜 기억력을
-    // 요구하도록 재설계: 유품 4개를 먼저 보여준 뒤, 같은 4자리에 그중 하나만 다른 유품으로
-    // 바꿔서 다시 보여주고 "무엇이 바뀌었는지" 맞히게 한다.
-    const pool = shuffle(MEMORY_POOL); // pool[0..3] = 처음 보여줄 4개, pool[4] = 나중에 등장할 대체 유품
-    const before = pool.slice(0, 4);
-    const swapIndex = randInt(0, 3);
-    const changedItem = pool[4];
-    const after = before.slice();
-    after[swapIndex] = changedItem;
-    return { ...base, before, after, changedItem, revealUntil: Date.now() + 3000, answers: {} };
-  }
   return base;
 }
 
@@ -318,8 +303,10 @@ function endMinigame(winnerId) {
   broadcastState();
 }
 
-// 사라진 유품 찾기처럼 "둘 다 정답을 맞히지 못함" 같은 무승부가 나는 미니게임에서는, 승자를
-// 억지로 정해 보상까지 챙겨주지 않는다 — 이번 라운드는 그냥 보상 없이 본행동으로 넘어간다.
+// "둘 다 정답을 맞히지 못함" 같은 무승부가 나는 미니게임을 위한 범용 처리 — 승자를 억지로
+// 정해 보상까지 챙겨주지 않고, 이번 라운드는 그냥 보상 없이 본행동으로 넘어간다. (현재 남아있는
+// 8종 미니게임 중에는 실제로 무승부가 나는 종류가 없어 당장은 호출되지 않지만, 이후 무승부가
+// 가능한 미니게임을 추가할 때 재사용할 수 있도록 남겨둔다.)
 function endMinigameDraw() {
   match.minigame.result = 'DRAW';
   match.pendingReward = null;
@@ -374,7 +361,6 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
-  if (mg.type === 'MEMORY') return handleMemory(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -523,31 +509,6 @@ function handleBank(id, payload, mg) {
     log(`${match.players[id].name}이 자신의 금고를 열었습니다! (번호: ${secret.join('')})`);
     broadcastState();
     return endMinigame(id);
-  }
-  broadcastState();
-}
-
-// 11) 사라진 유품 찾기 — 유품 4개를 잠깐 보여준 뒤, 같은 4자리 중 하나만 다른 유품으로 바뀐
-// 모습을 다시 보여주고 "무엇이 바뀌었는지" 맞힌다. 둘 다 같은 것을 보므로 순수 기억력/속도
-// 승부(숨김정보 없음). 정답+더 빠른 쪽이 승리, 둘 다 틀리면 무작위로 승자를 정한다(드문 경우).
-function handleMemory(id, payload, mg) {
-  if (mg.answers[id]) return; // 이미 답함
-  const choice = payload && payload.choice;
-  if (!mg.after.includes(choice)) return;
-  mg.answers[id] = { choice, t: Date.now() };
-  log(`${match.players[id].name}이 "${MEMORY_NAMES_KR[choice]}"(으)로 바뀌었다고 답했습니다.`);
-  const [a, b] = match.order;
-  if (mg.answers[a] && mg.answers[b]) {
-    const correctA = mg.answers[a].choice === mg.changedItem;
-    const correctB = mg.answers[b].choice === mg.changedItem;
-    let winner;
-    if (correctA && correctB) winner = mg.answers[a].t <= mg.answers[b].t ? a : b;
-    else if (correctA) winner = a;
-    else if (correctB) winner = b;
-    else winner = null; // 둘 다 틀렸으면 승자를 억지로 정하지 않는다 — 무승부, 보상 없음
-    log(`정답 공개: 바뀐 유품은 "${MEMORY_NAMES_KR[mg.changedItem]}"이었습니다.`);
-    broadcastState();
-    return winner ? endMinigame(winner) : endMinigameDraw();
   }
   broadcastState();
 }
@@ -822,14 +783,6 @@ function publicMinigameView(mg, forId) {
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls, marks: h.marks })),
     };
   }
-  if (mg.type === 'MEMORY') {
-    // 정답(changedItem)은 라운드가 끝나기(result가 정해지기) 전까지는 절대 내려주지 않는다.
-    return {
-      before: mg.before, after: mg.after, revealUntil: mg.revealUntil,
-      myAnswered: !!mg.answers[forId], oppAnswered: !!mg.answers[otherId(forId)],
-      changedItem: mg.result != null ? mg.changedItem : null,
-    };
-  }
   return {};
 }
 
@@ -861,12 +814,6 @@ function buildAdminMinigameSummary(mg) {
   if (type === 'BANK') return {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
-  };
-  if (type === 'MEMORY') return {
-    처음보여준4개: (mg.before || []).map((k) => MEMORY_NAMES_KR[k]),
-    바뀐후4개: (mg.after || []).map((k) => MEMORY_NAMES_KR[k]),
-    실제로바뀐것: MEMORY_NAMES_KR[mg.changedItem],
-    답변현황: byName(mg.answers, (v) => MEMORY_NAMES_KR[v.choice]),
   };
   return {};
 }

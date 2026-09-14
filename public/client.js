@@ -21,9 +21,6 @@ let bankFocusIndex = 0; // 지금 숫자를 채울 칸(자동으로 다음 빈 �
 let bankRound = null;
 let bombTicking = false; // 폭탄 눈치 넘기기: 실시간 남은시간 표시용 rAF 루프가 이미 돌고 있는지
 let flashTicking = false; // 철가방(섬광) 정찰 보상: 발동까지 남은시간 표시용 rAF 루프가 이미 돌고 있는지
-let memoryRound = null;
-let memoryRevealUntil = 0;
-let memoryTransitioned = false;
 let flashRoom = null; // 섬광 정찰 보상: 잠깐 전체 공개할 내 처소 타입 배열
 let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종류
 let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
@@ -194,19 +191,6 @@ function pinIconSVG() {
   </svg>`;
 }
 
-// 사라진 유품 찾기(MEMORY) 미니게임에서 쓰는 5가지 유품 아이콘 — 기존 손그림 SVG와 같은 화법.
-const MEMORY_NAMES_KR = { CROWN: '왕관', SCROLL: '밀서', DAGGER: '단검', RING: '인장 반지', KEY: '열쇠' };
-function memoryIconSVG(key) {
-  const paths = {
-    CROWN: `<path class="ln" d="M5,22 L7,11 L12,16 L16,9 L20,16 L25,11 L27,22 Z"/><path class="ln" d="M5,22 L27,22 L27,25 L5,25 Z"/>`,
-    SCROLL: `<rect class="ln" x="7" y="8" width="18" height="16" rx="1.5"/><circle class="rod" cx="7" cy="8" r="2.4"/><circle class="rod" cx="7" cy="24" r="2.4"/><circle class="rod" cx="25" cy="8" r="2.4"/><circle class="rod" cx="25" cy="24" r="2.4"/><path class="ln2" d="M11,13 L21,13 M11,17 L21,17 M11,21 L18,21"/>`,
-    DAGGER: `<path class="ln" d="M16,4 L19,17 L16,20 L13,17 Z"/><path class="ln2" d="M9,17 L23,17"/><path class="ln" d="M13.5,17 L13.5,22 L16,25 L18.5,22 L18.5,17"/>`,
-    RING: `<circle class="ln" cx="16" cy="20" r="7"/><path class="ln" d="M11,13 L16,5 L21,13 Z"/><circle class="gem" cx="16" cy="10.5" r="2"/>`,
-    KEY: `<circle class="ln" cx="10" cy="11" r="5.5"/><path class="ln2" d="M14,15 L25,26 M20,21 L24,17 M23,24 L27,20"/>`,
-  };
-  return `<svg viewBox="0 0 32 32" class="memIcon memIcon-${key}" aria-hidden="true">${paths[key] || ''}</svg>`;
-}
-
 function addLog(msg) {
   const div = document.createElement('div');
   div.textContent = msg;
@@ -297,9 +281,6 @@ socket.on('state', (state) => {
     bankDigits = [];
     bankFocusIndex = 0;
     bankRound = null;
-    memoryRound = null;
-    memoryRevealUntil = 0;
-    memoryTransitioned = false;
     flashRoom = null;
     rewardChosenType = null;
     lastRewardResult = null;
@@ -496,9 +477,6 @@ function renderLastMinigameRecap(state) {
   }
   if (mg.type === 'PIN' && mg.public && mg.public.bombIndex != null) {
     p.appendChild(el('div', 'hint', `폭탄은 <b>${mg.public.bombIndex + 1}번째</b> 안전핀이었습니다.`));
-  }
-  if (mg.type === 'MEMORY' && mg.public && mg.public.changedItem) {
-    p.appendChild(el('div', 'hint', `바뀐 유품은 <b>${MEMORY_NAMES_KR[mg.public.changedItem]}</b>이었습니다.`));
   }
   return p;
 }
@@ -1052,32 +1030,6 @@ function renderMinigamePanel(state) {
         return true;
       },
     }));
-  } else if (type === 'MEMORY') {
-    // "5개 중 안 보인 1개 고르기"는 처음 보는 항목이 눈에 띄어 너무 쉬웠다는 피드백을 반영해,
-    // 같은 4자리를 두 번 보여주되 그중 하나만 다른 유품으로 바뀌는 "틀린 그림 찾기" 방식으로 바꿨다.
-    if (memoryRound !== state.round) { memoryRound = state.round; memoryRevealUntil = mg.revealUntil; memoryTransitioned = false; }
-    const remaining = memoryRevealUntil - Date.now();
-    if (remaining > 0 && !mg.myAnswered) {
-      box.appendChild(el('div', 'desc', '아래 유품 4개의 자리를 잘 봐두세요 — 잠시 후 그중 하나만 바뀐 모습을 다시 보여드립니다.'));
-      const row = el('div', 'memoryRow');
-      mg.before.forEach((key) => {
-        row.appendChild(el('div', 'memoryItem', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`));
-      });
-      box.appendChild(row);
-      box.appendChild(el('div', 'hint', `${Math.max(1, Math.ceil(remaining / 1000))}초 후 바뀐 모습으로 다시 보여드립니다`));
-    } else if (!mg.myAnswered) {
-      box.appendChild(el('div', 'desc', '같은 4자리 중 하나가 다른 유품으로 바뀌었습니다. 바뀐 것을 고르세요. 더 정확하고 빠르게 맞히는 쪽이 이깁니다.'));
-      const row = el('div', 'memoryRow');
-      mg.after.forEach((key) => {
-        const b = el('button', 'memoryChoice', `${memoryIconSVG(key)}<span>${MEMORY_NAMES_KR[key]}</span>`);
-        b.onclick = () => socket.emit('minigame:move', { choice: key });
-        row.appendChild(b);
-      });
-      box.appendChild(row);
-    } else {
-      box.appendChild(el('div', 'desc', '답을 제출했습니다 — 상대의 답을 기다리는 중...'));
-      box.appendChild(el('div', 'hint', mg.oppAnswered ? '결과 공개 중...' : '상대는 아직 고르는 중입니다...'));
-    }
   }
   p.appendChild(box);
   return p;
@@ -1222,12 +1174,6 @@ setInterval(() => {
   if (!guessCountTransitioned && lastState.phase === 'ROUND_MINIGAME' && lastState.minigame && lastState.minigame.type === 'GUESS_COUNT'
       && lastState.minigame.public.myGuess == null && guessCountRevealUntil && Date.now() >= guessCountRevealUntil) {
     guessCountTransitioned = true;
-    render(lastState);
-  }
-  // 사라진 유품 찾기: 공개 시간이 지나면 새 서버 상태 없이도 "선택" 화면으로 딱 한 번 전환한다.
-  if (!memoryTransitioned && lastState.phase === 'ROUND_MINIGAME' && lastState.minigame && lastState.minigame.type === 'MEMORY'
-      && !lastState.minigame.public.myAnswered && memoryRevealUntil && Date.now() >= memoryRevealUntil) {
-    memoryTransitioned = true;
     render(lastState);
   }
 }, 300);

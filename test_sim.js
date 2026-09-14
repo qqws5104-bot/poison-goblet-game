@@ -85,7 +85,7 @@ function onState(label, socket, s) {
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9)`);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/8)`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore });
     setTimeout(() => process.exit(0), 200);
@@ -144,11 +144,6 @@ function playMinigame(label, socket, s) {
     if (type === 'GUESS_COUNT' && mg.myGuess == null) {
       const offset = Math.floor(Math.random() * 3) - 1;
       socket.emit('minigame:move', { guess: Math.max(0, mg.trueCount + offset) });
-    }
-    if (type === 'MEMORY' && !mg.myAnswered) {
-      // 테스트 봇은 진짜 기억력을 시험할 필요가 없으므로, 공개된 before/after를 비교해 바뀐 항목을 바로 계산해 제출한다.
-      const changed = mg.after.find((k) => !mg.before.includes(k));
-      socket.emit('minigame:move', { choice: changed });
     }
     if (type === 'BANK') {
       // 서버가 금고 번호를 하나 정해두고 두 사람이 순서 없이 동시에 계속 추리하는 방식으로 바뀌었다.

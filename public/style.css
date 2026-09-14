@@ -374,20 +374,6 @@ button.iconBtn .mgIcon { width: 40px; height: 40px; flex: none; }
 .mgIcon-pin .ring { fill:none; stroke: var(--gold); stroke-width: 2.2; }
 .mgIcon-pin .shaft, .mgIcon-pin .leg1, .mgIcon-pin .leg2 { fill:none; stroke: var(--crimson-bright); stroke-width: 2.2; stroke-linecap: round; }
 
-/* 사라진 유품 찾기(MEMORY) */
-.memoryRow { display:flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
-.memoryItem, button.memoryChoice {
-  display:flex; flex-direction: column; align-items:center; gap: 6px; width: 84px; padding: 12px 6px;
-  background: #1a0f14; border: 1px solid var(--border); border-radius: 4px; font-size: 12.5px; color: var(--text);
-}
-button.memoryChoice { cursor: pointer; transition: border-color .15s, background .15s; }
-button.memoryChoice:hover { border-color: var(--gold); background: #23151c; }
-.memIcon { width: 40px; height: 40px; }
-.memIcon .ln { fill: none; stroke: var(--gold); stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
-.memIcon .ln2 { fill: none; stroke: var(--gold); stroke-width: 1.3; stroke-linecap: round; }
-.memIcon .rod { fill: #2c1c0f; stroke: var(--gold); stroke-width: 1.3; }
-.memIcon .gem { fill: var(--crimson-bright); }
-.memIcon { filter: drop-shadow(0 0 3px rgba(201,162,75,0.6)); }
 
 .bankHistory { display:flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; margin-bottom: 10px; }
 .strikeText { color: #6bd08a; font-weight: 700; }
@@ -521,8 +507,6 @@ button.iconBtn span { font-size: 17px; }
 .stat .l { font-size: 13px; }
 .bankColTitle { font-size: 14.5px; }
 .bankRow { font-size: 14px; padding: 7px 10px; }
-.memoryItem, button.memoryChoice { font-size: 14px; }
-.memoryItem span, button.memoryChoice span { font-size: 14px; }
 .itemCardTitle { font-size: 15px; }
 .itemCardDesc { font-size: 13px; line-height: 1.5; }
 .endBanner h2 { font-size: 34px; }
