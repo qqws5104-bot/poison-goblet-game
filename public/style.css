@@ -148,6 +148,15 @@ button { font-family: inherit; cursor: pointer; }
 .cell.opened.A { background: linear-gradient(160deg, #16261f, #0e1813); }
 .cell.opened.E { background: #1a1016; }
 .emptyMark { font-size: 28px; font-weight: bold; color: var(--muted); opacity: 0.6; line-height: 1; }
+
+/* 한 칸 정찰 보상: 실제로 열리는 건 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
+   꺼지는 느낌을 준다 — 밝게 켜진 상태에서 시작해 원래의 어두운(안 연) 모습으로 페이드된다. */
+.cell.peekLit { font-size: 22px; animation: peekLitFade 1.4s ease-in forwards; }
+@keyframes peekLitFade {
+  0% { background: #3a2a10; box-shadow: 0 0 16px 2px rgba(255, 210, 120, 0.85); opacity: 1; }
+  55% { background: #3a2a10; box-shadow: 0 0 16px 2px rgba(255, 210, 120, 0.85); opacity: 1; }
+  100% { background: #1a0f14; box-shadow: none; opacity: 0.15; }
+}
 .cell.clued { border: 2px dashed var(--gold); font-size: 20px; position: relative; }
 
 .cellIcon { width: 26px; height: 26px; display:block; overflow: visible; }
@@ -161,13 +170,13 @@ button { font-family: inherit; cursor: pointer; }
 .cellIcon-P .drip { stroke: none; }
 .cellIcon-P { filter: drop-shadow(0 0 3px rgba(209,66,90,0.9)) drop-shadow(0 0 7px rgba(209,66,90,0.55)); }
 
-.cellIcon-G .rim, .cellIcon-G .bowl, .cellIcon-G .stem, .cellIcon-G .base { stroke: var(--gold); }
-.cellIcon-G .glyph { fill: var(--gold); }
-.cellIcon-G { filter: drop-shadow(0 0 3px rgba(201,162,75,0.9)) drop-shadow(0 0 7px rgba(201,162,75,0.55)); }
+.cellIcon-GEM .rim, .cellIcon-GEM .bowl, .cellIcon-GEM .stem, .cellIcon-GEM .base { stroke: var(--gold); }
+.cellIcon-GEM .glyph { fill: var(--gold); }
+.cellIcon-GEM { filter: drop-shadow(0 0 3px rgba(201,162,75,0.9)) drop-shadow(0 0 7px rgba(201,162,75,0.55)); }
 
-.cellIcon-S .rim, .cellIcon-S .bowl, .cellIcon-S .stem, .cellIcon-S .base { stroke: var(--silver); }
-.cellIcon-S .glyph { fill: var(--silver); }
-.cellIcon-S { filter: drop-shadow(0 0 3px rgba(201,211,234,0.9)) drop-shadow(0 0 7px rgba(201,211,234,0.55)); }
+.cellIcon-C .bowl { fill: none; stroke: #b98be0; stroke-width: 1.6; stroke-linejoin: round; }
+.cellIcon-C .glyph { fill: #b98be0; }
+.cellIcon-C { filter: drop-shadow(0 0 3px rgba(185,139,224,0.9)) drop-shadow(0 0 7px rgba(185,139,224,0.55)); }
 
 .cellIcon-A .bowl, .cellIcon-A .neck, .cellIcon-A .cork, .cellIcon-A .leaf {
   fill: none; stroke: var(--jade); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round;
@@ -183,13 +192,18 @@ button { font-family: inherit; cursor: pointer; }
 .cell.hint-area.clued { outline-color: var(--gold); }
 .cell .note { position:absolute; bottom:1px; font-size: 9px; color: var(--muted); }
 
-.statgrid { display:grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align:center; margin-bottom: 10px; }
+.statgrid { display:grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align:center; margin-bottom: 10px; }
 .stat { background: #1a0f14; border: 1px solid var(--border); border-radius: 3px; padding: 9px 4px; }
 .stat .v { font-size: 21px; font-weight:bold; font-family: 'Nanum Myeongjo', serif; }
 .stat .l { font-size: 11px; color: var(--muted); }
 .stat.poison .v { color: var(--crimson-bright); }
 .stat.antidote .v { color: var(--jade); }
 .stat.score .v { color: var(--gold); }
+.stat.crest .v { color: #b98be0; font-size: 17px; }
+
+/* 가문의 문장 자리 — 아직 열지 않았어도 위치 자체는 공개 정보이므로 은은하게 표시한다 */
+.cell.crestSpot { outline: 1.5px solid rgba(185,139,224,0.55); outline-offset: -1.5px; }
+.crestMark { font-size: 16px; opacity: 0.65; }
 
 .btnRow { display:flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 button.action {

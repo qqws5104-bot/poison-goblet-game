@@ -53,7 +53,8 @@ function onState(label, socket, s) {
   }
   if (s.phase === 'SETUP' && !setupSent[label]) {
     setupSent[label] = true;
-    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 2, col: 2 }] : [{ row: 5, col: 5 }, { row: 4, col: 4 }, { row: 3, col: 3 }];
+    // 가문의 문장(row 2~4 & col 2~4)에는 독을 심을 수 없으므로, 그 블록을 피한 좌표를 쓴다.
+    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 5, col: 0 }] : [{ row: 5, col: 5 }, { row: 0, col: 5 }, { row: 5, col: 1 }];
     setTimeout(() => socket.emit('setup:confirm', { cells }), 50 + Math.random() * 100);
   }
 
@@ -85,7 +86,9 @@ function onState(label, socket, s) {
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/8)`);
+    // 미니게임이 8종→11종으로 늘었지만 ROUNDS(10)가 그대로라, 한 매치에 11종이 다 나오는 건
+    // 애초에 불가능하다(최대 10개까지만 뽑힘) — 그래도 매치마다 다른 조합이 섞여 나온다.
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/11, max possible per match = min(11,ROUNDS))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore });
     setTimeout(() => process.exit(0), 200);
@@ -105,9 +108,10 @@ function useReward(label, socket, s) {
   if (r.type === 'FLASH_ALL') return socket.emit('reward:use', {});
   if (r.type === 'PEEK_CELL') return socket.emit('reward:use', { row: Math.floor(Math.random() * 6), col: Math.floor(Math.random() * 6) });
   if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
+    // 이제 줄 번호는 고르지 않고 종류만 고르면 6개 줄 전부의 개수를 한 번에 알려준다.
     const cats = Object.keys(s.clueCatNames);
     const cat = cats[Math.floor(Math.random() * cats.length)];
-    return socket.emit('reward:use', { index: Math.floor(Math.random() * 6), targetType: cat });
+    return socket.emit('reward:use', { targetType: cat });
   }
 }
 
@@ -161,6 +165,12 @@ function playMinigame(label, socket, s) {
       const guess = pool[Math.floor(Math.random() * pool.length)];
       socket.emit('minigame:move', { guess });
     }
+    if (type === 'BLUFF' && mg.waitingForMe) socket.emit('minigame:move', { stake: 1 + Math.floor(Math.random() * 3) });
+    if (type === 'LIAR_DIE') {
+      if (mg.role === 'declarer' && mg.claim == null) socket.emit('minigame:move', { claim: Math.random() < 0.5 ? 'HIGH' : 'LOW' });
+      if (mg.role === 'responder' && mg.waitingForMe) socket.emit('minigame:move', { decision: Math.random() < 0.5 ? 'TRUST' : 'DOUBT' });
+    }
+    if (type === 'GAMBIT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'PUSH' : 'YIELD' });
     // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른
     // 미니게임과 같은 20~80ms 간격으로 스팸처럼 넘기면 초당 십수 번씩 왕복 메시지가 오가며
     // 실제 사람이라면 절대 하지 않을 부하를 만들어 테스트 전체를 느리게 만든다(실측상 수백~

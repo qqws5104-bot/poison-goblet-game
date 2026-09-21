@@ -9,36 +9,45 @@ const { Server } = require('socket.io');
 
 const CONFIG = {
   GRID: 6,
-  COUNTS: { P: 3, G: 4, S: 5, A: 6, E: 18 }, // 독/금/은/해독제/빈칸
-  GOLD_PTS: 2,
-  SILVER_PTS: 1,
+  // 금/은 두 등급이던 보석을 "보석(GEM) 1종 1점"으로 통합하고, 가문의 문장(CREST) 9칸을
+  // 새로 추가했다 — 문장 칸은 CREST_CELLS 좌표에 고정 배치되며 이 COUNTS 풀에는 포함되지 않는다.
+  COUNTS: { P: 3, GEM: 6, A: 6, E: 12 }, // 독/보석/해독제/빈칸 — 36칸 중 문장 9칸+독 3칸을 뺀 24칸에 배치
+  GEM_PTS: 1,
+  CREST_PTS: 2,           // 문장 칸 1칸을 열 때마다 획득하는 점수
+  CREST_BONUS: 3,         // 문장 9칸을 전부 열어 완성하면 추가로 받는 보너스 점수
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
   ROUNDS: 10,             // 총 라운드 수 (고정)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
   ROUND_COUNTDOWN_MS: 3000, // 매 라운드 미니게임 시작 전 3-2-1 카운트다운 길이
   SETUP_DONE_MS: 5000, // 양쪽 다 독배 설치를 마친 직후, 본게임(1라운드 3-2-1 카운트다운)으로 넘어가기 전 대기 시간
+  ROUND_DONE_MS: 5000, // 매 라운드 양쪽 다 칸을 다 연 직후, 다음 라운드 3-2-1 카운트다운으로 넘어가기 전 대기 시간
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
-  BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
+  BOMB_FUSE_MS_MIN: 12000, BOMB_FUSE_MS_MAX: 20000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
   REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 10000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
+  REWARD_USE_LIMIT: 3, // 보상 종류별로 한 사람이 실제로 사용할 수 있는 최대 횟수
 };
 
-// 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외 — 9종만 남았다.
-// 그래도 ROUNDS(10)는 유지하기로 했으므로, 매치마다 8종을 섞은 뒤 둘을 무작위로 한 번 더 채운다(buildMinigameOrder).
-// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미 피드백으로 제외 — 8종.
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK'];
+// 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
+// "심리싸움 하는 느낌이 살면 좋겠다"는 최종 피드백에 따라, 운/대박 요소는 유지하면서도 상대를
+// 읽어야 이기는 3종(BLUFF/LIAR_DIE/GAMBIT)을 추가했다 — 총 11종. ROUNDS(10) < 11종이라
+// 한 매치에 11종이 전부 나오진 않지만(그중 10개를 무작위로 섞어 사용), 그 편이 매치마다
+// 다른 조합을 보게 되어 오히려 반복감이 줄어든다.
+// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미 피드백으로 제외.
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'BLUFF', 'LIAR_DIE', 'GAMBIT'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
   SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기',
   BANK: '금고 번호 맞추기',
+  BLUFF: '허세 배팅', LIAR_DIE: '라이어 주사위', GAMBIT: '황금 잔 허세 대결',
 };
 function buildMinigameOrder() {
-  const order = shuffle(MINIGAME_SEQUENCE);
+  const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS);
   while (order.length < CONFIG.ROUNDS) {
     let pick = MINIGAME_SEQUENCE[randInt(0, MINIGAME_SEQUENCE.length - 1)];
     if (pick === order[order.length - 1]) {
@@ -50,16 +59,22 @@ function buildMinigameOrder() {
 }
 const SIGIL_BEATS = { SWORD: 'POISON', POISON: 'SHIELD', SHIELD: 'SWORD' };
 const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
-const CLUE_CATS = ['P', 'G', 'S', 'A'];
-const CLUE_CAT_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제' };
-const CELL_NAMES = { P: '독 술잔', G: '금 술잔', S: '은 술잔', A: '해독제', E: '빈 칸' };
+// 가문의 문장(9칸) — 6×6 처소 정중앙 3×3 블록에 고정 배치된다(양쪽 처소 동일 위치).
+// 위치는 두 사람 모두에게 공개된 정보이므로 buildClientState에서 그대로 내려준다.
+const CREST_CELLS = [];
+for (let r = 2; r <= 4; r++) for (let c = 2; c <= 4; c++) CREST_CELLS.push({ row: r, col: c });
+const CREST_SET = new Set(CREST_CELLS.map((p) => p.row + '_' + p.col));
+function isCrestCell(row, col) { return CREST_SET.has(row + '_' + col); }
+const CLUE_CATS = ['P', 'GEM', 'A'];
+const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제' };
+const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸', C: '가문의 문장' };
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
   FLASH_ALL: '철가방 정찰 — 무작위 순간, 내 처소 전체가 뚜껑처럼 확 열렸다가 저절로 잠깐 드러남',
   PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
-  ROW_COUNT: '행 정찰 — 내 처소 원하는 행에서 지정한 술잔 개수 확인',
-  COL_COUNT: '열 정찰 — 내 처소 원하는 열에서 지정한 술잔 개수 확인',
+  ROW_COUNT: '가로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 가로줄 전부에 몇 개씩 있는지 확인',
+  COL_COUNT: '세로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 세로줄 전부에 몇 개씩 있는지 확인',
 };
 
 // 밸런스 테스트 편의를 위해 환경변수로 숫자 설정값을 덮어쓸 수 있게 함
@@ -102,7 +117,11 @@ function newPlayer(id, name) {
   return {
     id, name, room: makeRoom(),
     poison: 0, antidote: 0, score: 0, finalScore: null,
+    crestOpened: 0, // 자기 처소에서 연 문장 칸 개수(0~9) — 9가 되면 즉시 승리
     connected: true,
+    // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
+    // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
+    rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
   };
 }
 let matchSeq = 0;
@@ -110,7 +129,7 @@ function freshMatch() {
   matchSeq += 1;
   return {
     seq: matchSeq, // 새 매치(재대전 포함)마다 증가 — 클라이언트가 화면/입력 상태를 리셋하는 신호로 사용
-    phase: 'LOBBY', // LOBBY, SETUP, SETUP_DONE, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, END
+    phase: 'LOBBY', // LOBBY, SETUP, SETUP_DONE, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, ROUND_DONE, END
     players: {}, order: [],
     setupSelections: {},
     setupPreview: {}, // 확정 전 실시간 선택 상태 — 관리자 화면 전용(상대 플레이어에게는 절대 내려주지 않음)
@@ -160,19 +179,23 @@ function startSetup() {
 }
 
 function finalizeSetup() {
-  // setupSelections[id] = 그 플레이어가 "상대방" 방에 지정한 독 좌표 3개
+  // 가문의 문장(9칸)은 양쪽 처소 모두 정중앙에 고정 배치 — 독 배치보다 먼저 채워둔다.
+  for (const id of match.order) {
+    const room = match.players[id].room;
+    for (const { row, col } of CREST_CELLS) room[row][col].type = 'C';
+  }
+  // setupSelections[id] = 그 플레이어가 "상대방" 방에 지정한 독 좌표 3개(문장 칸은 이미 제외됨)
   for (const id of match.order) {
     const victim = otherId(id);
     const poisonCells = match.setupSelections[id];
     const room = match.players[victim].room;
     for (const { row, col } of poisonCells) room[row][col].type = 'P';
   }
-  // 나머지 33칸에 금4·은5·해독제6·빈칸18 랜덤 배치
+  // 나머지 24칸(문장 9·독 3을 뺀 칸)에 보석6·해독제6·빈칸12 랜덤 배치
   for (const id of match.order) {
     const room = match.players[id].room;
     const pool = shuffle([
-      ...Array(CONFIG.COUNTS.G).fill('G'),
-      ...Array(CONFIG.COUNTS.S).fill('S'),
+      ...Array(CONFIG.COUNTS.GEM).fill('GEM'),
       ...Array(CONFIG.COUNTS.A).fill('A'),
       ...Array(CONFIG.COUNTS.E).fill('E'),
     ]);
@@ -288,6 +311,24 @@ function initMinigame(type, roundNo) {
       history: { [a]: [], [b]: [] },
     };
   }
+  if (type === 'BLUFF') {
+    // 허세 배팅 — 동시에 몰래 1~3 중 하나를 "배팅"하고 공개. 더 큰 숫자를 낸 쪽이 승리.
+    // 같은 숫자를 내면 정면충돌로 둘 다 허탕(무승부) — 재입력 없이 그대로 다음 라운드로 넘어간다.
+    return { ...base, picks: {} };
+  }
+  if (type === 'LIAR_DIE') {
+    // 라이어 주사위 — 선언자만 몰래 주사위(1~6)를 굴려 자신만 확인하고, 그 숫자가 "높다(4~6)"인지
+    // "낮다(1~3)"인지를 선언한다(진실/거짓 가능). 상대는 그 선언을 믿을지(그대로 선언자 승리) 의심할지
+    // (실제 주사위를 공개해 진위 판정) 고른다 — 표정/패턴을 읽는 심리전 + 주사위 자체의 운.
+    return { ...base, declarer: firstIsA ? a : b, responder: firstIsA ? b : a, roll: randInt(1, 6), claim: null, decision: null };
+  }
+  if (type === 'GAMBIT') {
+    // 황금 잔 허세 대결 — 각자 몰래 GOLD(강함)/GLASS(약함) 패를 받는다(각자 독립 50/50).
+    // 동시에 PUSH(밀어붙인다)/YIELD(물러난다)를 고른다: 둘 다 YIELD면 무승부, 하나만 PUSH면
+    // PUSH가 자동 승리, 둘 다 PUSH면 카드를 공개해 GOLD가 GLASS를 이긴다(같은 패면 무승부).
+    // 내 패가 약해도 밀어붙이면 상대가 물러날 수 있다는 점이 허세/블러핑의 핵심.
+    return { ...base, cards: { [a]: Math.random() < 0.5 ? 'GOLD' : 'GLASS', [b]: Math.random() < 0.5 ? 'GOLD' : 'GLASS' }, actions: {} };
+  }
   return base;
 }
 
@@ -300,10 +341,16 @@ function endMinigame(winnerId) {
   else match.streak = { winnerId, count: 1 };
 
   // "보상은 승자가 직접 고르는 구조로" — 이제 라운드 시작 전 보상이 미리 하나로 고정되지 않고,
-  // 미니게임 승자가 후보 4종 중 하나를 스스로 골라야 종류(type)가 정해진다.
+  // 미니게임 승자가 후보 중 하나를 스스로 골라야 종류(type)가 정해진다. 단, 종류별로 이미
+  // REWARD_USE_LIMIT(3)번을 다 쓴 종류는 후보에서 빠진다 — 한 종류만 무한정 우려먹지 못하게.
+  const winner = match.players[winnerId];
+  let availableTypes = REWARD_TYPES.filter((t) => (winner.rewardUses[t] || 0) < CONFIG.REWARD_USE_LIMIT);
+  // 네 종류를 전부 다 써버린 극단적인 경우(이론상 라운드 수가 아주 많아야 가능)에는 선택지가
+  // 텅 비는 것보다는, 그냥 모든 종류를 다시 후보로 열어주는 쪽이 안전하다.
+  if (availableTypes.length === 0) availableTypes = REWARD_TYPES.slice();
   match.pendingReward = {
     winnerId,
-    choices: shuffle(REWARD_TYPES),
+    choices: shuffle(availableTypes),
     type: null, // handleRewardChoose에서 채워짐
     used: false,
     fireAt: null, // 섬광 정찰(FLASH_ALL)에서만 쓰는, 실제로 터지는 정확한 시각
@@ -351,6 +398,7 @@ function handleRewardChoose(id, payload) {
       if (match.round === roundAtGrant && match.pendingReward && match.pendingReward.winnerId === id && !match.pendingReward.used) {
         match.pendingReward.used = true;
         const winner = match.players[id];
+        winner.rewardUses.FLASH_ALL = (winner.rewardUses.FLASH_ALL || 0) + 1;
         const room = winner.room.map((r) => r.map((cell) => cell.type));
         actionLog(winner, `보상 발동 — 섬광 정찰로 내 처소 전체가 ${(CONFIG.REWARD_FLASH_REVEAL_MS / 1000).toFixed(1)}초간 드러났습니다.`);
         io.to(id).emit('rewardResult', { kind: 'FLASH_ALL', room, revealMs: CONFIG.REWARD_FLASH_REVEAL_MS });
@@ -373,6 +421,9 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
+  if (mg.type === 'BLUFF') return handleBluff(id, payload, mg);
+  if (mg.type === 'LIAR_DIE') return handleLiarDie(id, payload, mg);
+  if (mg.type === 'GAMBIT') return handleGambit(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -525,6 +576,76 @@ function handleBank(id, payload, mg) {
   broadcastState();
 }
 
+// 11) 허세 배팅 — 동시에 몰래 1~3 배팅, 큰 쪽 승리, 동수는 무승부(심리+대박형)
+function handleBluff(id, payload, mg) {
+  if (mg.picks[id]) return;
+  const stake = Number(payload && payload.stake);
+  if (![1, 2, 3].includes(stake)) return;
+  mg.picks[id] = stake;
+  const [a, b] = match.order;
+  if (mg.picks[a] != null && mg.picks[b] != null) {
+    log(`허세 배팅 공개: ${match.players[a].name}=${mg.picks[a]} vs ${match.players[b].name}=${mg.picks[b]}`);
+    if (mg.picks[a] === mg.picks[b]) {
+      broadcastState();
+      log('정면충돌! 같은 배팅 — 둘 다 허탕입니다.');
+      return endMinigameDraw();
+    }
+    broadcastState();
+    return endMinigame(mg.picks[a] > mg.picks[b] ? a : b);
+  }
+  broadcastState();
+}
+
+// 12) 라이어 주사위 — 선언자의 "높다/낮다" 선언을 믿을지 의심할지(심리) + 실제 주사위(운)
+function handleLiarDie(id, payload, mg) {
+  if (id === mg.declarer && mg.claim == null) {
+    if (!['HIGH', 'LOW'].includes(payload && payload.claim)) return;
+    mg.claim = payload.claim;
+    log(`${match.players[mg.declarer].name}이 "내 주사위는 ${mg.claim === 'HIGH' ? '높다(4~6)' : '낮다(1~3)'}"라고 선언했습니다.`);
+    broadcastState();
+    return;
+  }
+  if (id === mg.responder && mg.claim != null && mg.decision == null) {
+    if (!['TRUST', 'DOUBT'].includes(payload && payload.decision)) return;
+    mg.decision = payload.decision;
+    if (mg.decision === 'TRUST') {
+      log(`${match.players[mg.responder].name}이 선언을 그대로 믿었습니다 — 진실은 아무도 모른 채 넘어갑니다.`);
+      broadcastState();
+      return endMinigame(mg.declarer);
+    }
+    const actualRange = mg.roll >= 4 ? 'HIGH' : 'LOW';
+    const wasTrue = actualRange === mg.claim;
+    log(`${match.players[mg.responder].name}이 의심했습니다 — 실제 주사위는 ${mg.roll}이었습니다 (선언은 ${wasTrue ? '진실' : '거짓'}).`);
+    broadcastState();
+    return endMinigame(wasTrue ? mg.declarer : mg.responder);
+  }
+}
+
+// 13) 황금 잔 허세 대결 — 몰래 받은 패(강/약)를 숨긴 채 밀어붙일지 물러날지 동시에 결정(블러핑형)
+function handleGambit(id, payload, mg) {
+  if (mg.actions[id]) return;
+  if (!['PUSH', 'YIELD'].includes(payload && payload.action)) return;
+  mg.actions[id] = payload.action;
+  const [a, b] = match.order;
+  if (mg.actions[a] && mg.actions[b]) {
+    log(`대결 공개: ${match.players[a].name}=${mg.cards[a]}/${mg.actions[a]} vs ${match.players[b].name}=${mg.cards[b]}/${mg.actions[b]}`);
+    broadcastState();
+    if (mg.actions[a] === 'YIELD' && mg.actions[b] === 'YIELD') {
+      log('둘 다 물러났습니다 — 무승부.');
+      return endMinigameDraw();
+    }
+    if (mg.actions[a] === 'PUSH' && mg.actions[b] === 'YIELD') return endMinigame(a);
+    if (mg.actions[b] === 'PUSH' && mg.actions[a] === 'YIELD') return endMinigame(b);
+    // 둘 다 PUSH — 카드로 승부(같은 패면 무승부)
+    if (mg.cards[a] === mg.cards[b]) {
+      log('둘 다 밀어붙였지만 같은 패 — 무승부.');
+      return endMinigameDraw();
+    }
+    return endMinigame(mg.cards[a] === 'GOLD' ? a : b);
+  }
+  broadcastState();
+}
+
 // ------------------------------ 본행동(액션) ---------------------------------
 // 본행동: 내 턴이 되면 내 처소에서 술잔 CONFIG.OPENS_PER_TURN(기본 2)개를 직접 골라 연다.
 // (아이템/단서 획득 같은 별도 행동 선택 없이, 정찰은 미니게임 보상으로만 얻는다.)
@@ -544,6 +665,10 @@ function doAction(id, kind, payload) {
   if (cell.opened) return;
   resolveOpen(player, row, col, cell);
   match.actionOpens[id] = opens + 1;
+  // 문장 9칸을 전부 열어 완성했다면 그 즉시 왕위를 차지한다 — 라운드 진행 중이어도 즉시 종료.
+  if (player.crestOpened >= CREST_CELLS.length) {
+    return endMatch(`${player.name}이(가) 가문의 문장을 완성하여 왕위를 차지했습니다!`, player.id);
+  }
   checkRoundActionDone();
 }
 
@@ -555,13 +680,19 @@ function resolveOpen(player, row, col, cell) {
     player.poison += 1;
     actionLog(player, `독배를 마셨습니다... (해독하지 못하면 게임 종료 시 -${CONFIG.POISON_PENALTY}점)`);
     checkNeutralize(player);
-  } else if (t === 'G') {
-    player.score += CONFIG.GOLD_PTS;
-  } else if (t === 'S') {
-    player.score += CONFIG.SILVER_PTS;
+  } else if (t === 'GEM') {
+    player.score += CONFIG.GEM_PTS;
   } else if (t === 'A') {
     player.antidote += 1;
     checkNeutralize(player);
+  } else if (t === 'C') {
+    player.crestOpened += 1;
+    player.score += CONFIG.CREST_PTS;
+    actionLog(player, `가문의 문장 한 조각 획득! (${player.crestOpened}/${CREST_CELLS.length})`);
+    if (player.crestOpened >= CREST_CELLS.length) {
+      player.score += CONFIG.CREST_BONUS;
+      actionLog(player, `문장 완성 보너스 +${CONFIG.CREST_BONUS}점!`);
+    }
   }
 }
 
@@ -590,6 +721,7 @@ function handleRewardUse(id, payload) {
     const row = Number(payload.row), col = Number(payload.col);
     if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
     pr.used = true;
+    player.rewardUses.PEEK_CELL = (player.rewardUses.PEEK_CELL || 0) + 1;
     const type = player.room[row][col].type;
     actionLog(player, `보상 사용 — 내 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
     io.to(id).emit('rewardResult', { kind: 'PEEK_CELL', row, col, type });
@@ -597,20 +729,25 @@ function handleRewardUse(id, payload) {
     return;
   }
   if (pr.type === 'ROW_COUNT' || pr.type === 'COL_COUNT') {
+    // "몇 행에 몇 개"처럼 한 줄만 알려주는 게 아니라, 종류 하나만 고르면 6개 가로줄(또는 세로줄)
+    // 전부의 개수를 한 번에 알려준다 — 줄 번호는 더 이상 직접 고르지 않는다.
     const axis = pr.type === 'ROW_COUNT' ? 'row' : 'col';
-    const idx = Number(payload.index);
     const targetType = payload.targetType;
-    if (!Number.isInteger(idx) || idx < 0 || idx >= CONFIG.GRID) return;
     if (!CLUE_CATS.includes(targetType)) return;
     pr.used = true;
-    let count = 0;
-    for (let i = 0; i < CONFIG.GRID; i++) {
-      const cell = axis === 'row' ? player.room[idx][i] : player.room[i][idx];
-      if (cell.type === targetType) count += 1;
+    player.rewardUses[pr.type] = (player.rewardUses[pr.type] || 0) + 1;
+    const counts = [];
+    for (let idx = 0; idx < CONFIG.GRID; idx++) {
+      let count = 0;
+      for (let i = 0; i < CONFIG.GRID; i++) {
+        const cell = axis === 'row' ? player.room[idx][i] : player.room[i][idx];
+        if (cell.type === targetType) count += 1;
+      }
+      counts.push(count);
     }
-    const label = axis === 'row' ? `${idx + 1}행` : `${idx + 1}열`;
-    actionLog(player, `보상 사용 — 내 처소 ${label}의 ${CLUE_CAT_NAMES[targetType]} 개수 확인 → ${count}개`);
-    io.to(id).emit('rewardResult', { kind: pr.type, index: idx, targetType, count });
+    const axisLabel = axis === 'row' ? '가로줄' : '세로줄';
+    actionLog(player, `보상 사용 — 내 처소 각 ${axisLabel}의 ${CLUE_CAT_NAMES[targetType]} 개수 확인 → [${counts.join(', ')}]`);
+    io.to(id).emit('rewardResult', { kind: pr.type, targetType, counts });
     broadcastState();
     return;
   }
@@ -625,7 +762,18 @@ function checkRoundActionDone() {
   const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN);
   if (!allDone) return;
   if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
-  startRound();
+  // "칸을 다 열자마자 바로 다음 라운드로 넘어가서 상황 인지가 어렵다"는 피드백 — SETUP_DONE과
+  // 같은 패턴으로, 이번 라운드가 끝났다는 걸 5초간 보여준 뒤에야 다음 라운드 3-2-1 카운트다운으로
+  // 넘어간다. 마지막 라운드(위의 endMatchByScore 분기)는 "다음 라운드"가 없으므로 대상이 아니다.
+  match.phase = 'ROUND_DONE';
+  const seqAtRoundDone = match.seq;
+  const roundAtDone = match.round;
+  broadcastState();
+  setTimeout(() => {
+    // 이 사이 재대전/재시작 등으로 매치가 이미 다른 상태가 됐다면 낡은 타이머이므로 무시한다.
+    if (match.seq !== seqAtRoundDone || match.phase !== 'ROUND_DONE' || match.round !== roundAtDone) return;
+    startRound();
+  }, CONFIG.ROUND_DONE_MS);
 }
 
 function endMatchByScore() {
@@ -724,7 +872,10 @@ function buildClientState(forId) {
       type: pr.type,
       name: pr.type ? REWARD_NAMES[pr.type] : null,
       used: pr.used,
-      choices: pr.type ? null : pr.choices.map((t) => ({ type: t, name: REWARD_NAMES[t] })),
+      choices: pr.type ? null : pr.choices.map((t) => ({
+        type: t, name: REWARD_NAMES[t],
+        usesLeft: CONFIG.REWARD_USE_LIMIT - (me.rewardUses[t] || 0),
+      })),
     } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
     oppChoosingReward: !!(pr && pr.winnerId !== forId && !pr.type),
@@ -735,8 +886,11 @@ function buildClientState(forId) {
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
+    crestCells: CREST_CELLS, // 문장 9칸의 좌표 — 위치 자체는 양쪽 모두에게 공개된 정보
+    crestTotal: CREST_CELLS.length,
     me: me && {
       name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
+      crestOpened: me.crestOpened,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
@@ -745,7 +899,7 @@ function buildClientState(forId) {
     // 레거시 2인 모드와 동일하게 상대 처소는 계속 비공개다 — "서로 뭘 골랐는지"는 화면을
     // 소프트웨어로 합쳐 보여주는 대신, 컴퓨터를 마주보게 배치하는 물리적 방식으로 해결한다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null }),
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
@@ -795,6 +949,26 @@ function publicMinigameView(mg, forId) {
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls, marks: h.marks })),
     };
   }
+  if (mg.type === 'BLUFF') {
+    return { myPick: mg.picks[forId] ?? null, oppPicked: mg.picks[otherId(forId)] != null, waitingForMe: mg.picks[forId] == null,
+      revealed: mg.result != null ? { my: mg.picks[forId], opp: mg.picks[otherId(forId)] } : null };
+  }
+  if (mg.type === 'LIAR_DIE') {
+    const role = mine(mg.declarer) ? 'declarer' : 'responder';
+    return {
+      role, myRoll: mine(mg.declarer) ? mg.roll : null,
+      claim: mg.claim, decision: mg.decision,
+      waitingForMe: (role === 'declarer' && mg.claim == null) || (role === 'responder' && mg.claim != null && mg.decision == null),
+      revealedRoll: mg.decision === 'DOUBT' ? mg.roll : null,
+    };
+  }
+  if (mg.type === 'GAMBIT') {
+    return {
+      myCard: mg.cards[forId], myAction: mg.actions[forId] || null, oppActed: !!mg.actions[otherId(forId)],
+      waitingForMe: !mg.actions[forId],
+      revealed: mg.result != null ? { myCard: mg.cards[forId], oppCard: mg.cards[otherId(forId)], myAction: mg.actions[forId], oppAction: mg.actions[otherId(forId)] } : null,
+    };
+  }
   return {};
 }
 
@@ -827,6 +1001,9 @@ function buildAdminMinigameSummary(mg) {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
   };
+  if (type === 'BLUFF') return { 배팅현황: byName(mg.picks) };
+  if (type === 'LIAR_DIE') return { 선언자: nameOf(mg.declarer), 실제주사위: mg.roll, 선언: mg.claim, 상대판단: mg.decision };
+  if (type === 'GAMBIT') return { 패: byName(mg.cards), 선택: byName(mg.actions) };
   return {};
 }
 
@@ -855,6 +1032,7 @@ function buildAdminState() {
         name: p.name,
         connected: p.connected,
         poison: p.poison, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
+        crestOpened: p.crestOpened, crestTotal: CREST_CELLS.length,
         opens: match.actionOpens[id] || 0,
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
@@ -935,6 +1113,8 @@ io.on('connection', (socket) => {
     for (const cell of cells) {
       if (cell.row < 0 || cell.row >= CONFIG.GRID || cell.col < 0 || cell.col >= CONFIG.GRID)
         return socket.emit('error', { message: '유효하지 않은 좌표입니다.' });
+      if (isCrestCell(cell.row, cell.col))
+        return socket.emit('error', { message: '가문의 문장 자리에는 독을 설치할 수 없습니다.' });
       seen.add(cell.row + '_' + cell.col);
     }
     if (seen.size !== CONFIG.COUNTS.P) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
