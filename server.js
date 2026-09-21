@@ -22,7 +22,7 @@ const CONFIG = {
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_MS_MIN: 10000, REWARD_FLASH_MS_MAX: 20000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
+  REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 15000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
 };
 
@@ -326,7 +326,7 @@ function handleRewardChoose(id, payload) {
   pr.type = type;
   log(`${match.players[id].name}이 보상으로 [${REWARD_NAMES[type]}]을(를) 선택했습니다.`);
 
-  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 고른 후 10~20초(REWARD_FLASH_MS_MIN~MAX) 사이의
+  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 고른 후 0~15초(REWARD_FLASH_MS_MIN~MAX) 사이의
   // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다.
   // "보상을 획득하면 정확히 그 시간을 먼저 겪고 나서 처소에서 게임하도록" — 언제 터질지 이제는
   // 감추지 않고 정확한 시각(fireAt)을 그대로 알려주며, doAction()에서 그 순간이 오기 전까지는

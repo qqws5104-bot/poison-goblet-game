@@ -257,9 +257,9 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 }
 
 /* 안전핀 뽑기 — N개의 안전핀 중 하나가 폭탄, 직접 하나씩 클릭해서 뽑는다 */
-.pinGrid { display:flex; flex-wrap:wrap; gap: 8px; margin: 10px 0; justify-content:center; }
+.pinGrid { display:grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 10px auto; max-width: 316px; }
 .pinCell {
-  width: 46px; height: 46px; display:flex; align-items:center; justify-content:center;
+  width: 100%; aspect-ratio: 1 / 1; display:flex; align-items:center; justify-content:center;
   background: #1a0f14; border: 1px solid var(--border); border-radius: 4px; font-size: 20px;
 }
 .pinCell .mgIcon { width: 26px; height: 26px; }
