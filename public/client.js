@@ -477,6 +477,7 @@ function render(state) {
   renderStatusBar(state);
   app.innerHTML = '';
   if (state.phase === 'LOBBY') return renderLobby(state);
+  if (state.phase === 'SETUP_DONE') return renderSetupDone(state);
   if (state.phase === 'ROUND_COUNTDOWN') return renderCountdown(state);
   if (state.phase === 'END') return renderEnd(state);
   // "고르기" 화면(APP_ROLE === 'pick')은 4대 분리 모드 전용 — 이 화면이 담당하는 건 오직
@@ -490,6 +491,17 @@ function render(state) {
   }
   if (state.phase === 'SETUP') return renderSetup(state);
   return renderMain(state);
+}
+
+// ---------------------------- 셋업 완료 안내(SETUP_DONE) ----------------------------
+// "독배 설치를 끝내자마자 바로 게임으로 넘어가서 상황 인지가 어렵다"는 피드백 — 설치가 끝났다는
+// 걸 잠깐 보여준 뒤(숫자 카운트다운 없이, 완료 메시지만) 원래 있던 1라운드 3-2-1 카운트다운으로
+// 넘어간다. 정확히 몇 초 남았는지는 보여주지 않고, 그냥 곧 시작한다는 것만 알려준다.
+function renderSetupDone(state) {
+  const p = el('section', 'panel center countdownPanel');
+  p.appendChild(el('h2', null, '🍷 양쪽 모두 독배 설치를 완료했습니다'));
+  p.appendChild(el('p', 'hint', '잠시 후 본게임이 시작됩니다 — 마음의 준비를 하세요!'));
+  app.appendChild(p);
 }
 
 // ---------------------------- 라운드 시작 전 3-2-1 카운트다운 ----------------------------

@@ -17,6 +17,7 @@ const CONFIG = {
   ROUNDS: 10,             // 총 라운드 수 (고정)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
   ROUND_COUNTDOWN_MS: 3000, // 매 라운드 미니게임 시작 전 3-2-1 카운트다운 길이
+  SETUP_DONE_MS: 5000, // 양쪽 다 독배 설치를 마친 직후, 본게임(1라운드 3-2-1 카운트다운)으로 넘어가기 전 대기 시간
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MS_MIN: 30000, BOMB_FUSE_MS_MAX: 60000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
@@ -109,12 +110,13 @@ function freshMatch() {
   matchSeq += 1;
   return {
     seq: matchSeq, // 새 매치(재대전 포함)마다 증가 — 클라이언트가 화면/입력 상태를 리셋하는 신호로 사용
-    phase: 'LOBBY', // LOBBY, SETUP, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, END
+    phase: 'LOBBY', // LOBBY, SETUP, SETUP_DONE, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, END
     players: {}, order: [],
     setupSelections: {},
     setupPreview: {}, // 확정 전 실시간 선택 상태 — 관리자 화면 전용(상대 플레이어에게는 절대 내려주지 않음)
     round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
     countdownEndsAt: null, // ROUND_COUNTDOWN 동안 3-2-1이 몇 시에 끝나는지(클라이언트가 직접 카운트다운을 그리는 기준)
+    setupDoneEndsAt: null, // SETUP_DONE(양쪽 독배 설치 완료 안내) 대기가 몇 시에 끝나는지
     pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
@@ -182,8 +184,19 @@ function finalizeSetup() {
     }
   }
   log(`양쪽 처소 구성 완료. 총 ${CONFIG.ROUNDS}라운드의 본게임을 시작합니다.`);
-  match.round = 0;
-  startRound();
+  // "선택하자마자 바로 게임으로 넘어가서 상황 인지가 어렵다"는 피드백 — 독배 설치가 끝났다는 걸
+  // 잠깐 보여준 뒤(SETUP_DONE, 5초)에야 원래 있던 1라운드 3-2-1 카운트다운(startRound)으로 넘어간다.
+  match.phase = 'SETUP_DONE';
+  match.setupDoneEndsAt = Date.now() + CONFIG.SETUP_DONE_MS;
+  const seqAtSetupDone = match.seq;
+  broadcastState();
+  setTimeout(() => {
+    // 이 사이 재대전/재시작 등으로 매치가 이미 다른 상태가 됐다면 낡은 타이머이므로 무시한다.
+    if (match.seq !== seqAtSetupDone || match.phase !== 'SETUP_DONE') return;
+    match.setupDoneEndsAt = null;
+    match.round = 0;
+    startRound();
+  }, CONFIG.SETUP_DONE_MS);
 }
 
 // ------------------------------ 라운드 / 미니게임 ----------------------------
