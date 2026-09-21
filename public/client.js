@@ -20,7 +20,6 @@ let bankDigits = []; // 금고 번호 맞추기: 자릿수별 칸에 입력 중�
 let bankFocusIndex = 0; // 지금 숫자를 채울 칸(자동으로 다음 빈 칸으로 이동)
 let bankRound = null;
 let bombTicking = false; // 폭탄 눈치 넘기기: 실시간 남은시간 표시용 rAF 루프가 이미 돌고 있는지
-let flashTicking = false; // 철가방(섬광) 정찰 보상: 발동까지 남은시간 표시용 rAF 루프가 이미 돌고 있는지
 let flashRoom = null; // 섬광 정찰 보상: 잠깐 전체 공개할 내 처소 타입 배열
 let rewardChosenType = null; // 행/열 정찰 보상 선택 중인 술잔 종류
 let seenSeq = null; // 서버의 match.seq — 값이 바뀌면(재대전 포함) 새 매치이므로 화면/입력 상태를 초기화
@@ -452,14 +451,6 @@ function tickBombTimer() {
   }
   requestAnimationFrame(tickBombTimer);
 }
-function tickFlashTimer() {
-  const r = lastState && lastState.myReward;
-  if (!r || r.type !== 'FLASH_ALL' || r.used || !r.fireAt) { flashTicking = false; return; }
-  const timerEl = document.getElementById('flashRewardTimer');
-  if (timerEl) timerEl.textContent = formatCountdownClock(r.fireAt - Date.now());
-  requestAnimationFrame(tickFlashTimer);
-}
-
 // 방금 끝난 미니게임의 승패(+ 와인잔 개수처럼 실제 정답이 궁금한 경우 정답 공개)를 ROUND_ACTION
 // 동안 잠깐 보여주는 패널. match.minigame은 다음 라운드 카운트다운이 시작되기 전까지 서버에
 // 그대로 남아있으므로, 그 값을 그대로 읽어서 보여주면 된다.
@@ -938,6 +929,12 @@ function renderMinigamePanel(state) {
   } else if (type === 'PIN') {
     box.appendChild(el('div', 'desc', `안전핀 ${mg.pinCount}개 중 하나는 폭탄 — 번갈아 하나씩 뽑으세요.<br/>폭탄을 뽑으면 그 사람이 집니다.`));
     const grid = el('div', 'pinGrid');
+    // 항상 2줄로 나누되, 윗줄/아랫줄 개수가 최대한 비슷하도록 열 개수를 그때그때 계산한다
+    // (예: 12개 → 6+6, 10개 → 5+5, 9개 → 5+4) — 고정 6열로 두면 개수가 6의 배수가 아닐 때
+    // 아랫줄만 짧게 남아 줄이 안 맞아 보였다.
+    const pinCols = Math.ceil(mg.pinCount / 2);
+    grid.style.gridTemplateColumns = `repeat(${pinCols}, 1fr)`;
+    grid.style.maxWidth = `${pinCols * 46 + (pinCols - 1) * 8}px`;
     for (let i = 0; i < mg.pinCount; i++) {
       const pulled = mg.pulled[i];
       const isBomb = mg.bombIndex === i;
@@ -1063,13 +1060,11 @@ function renderRewardPanel(state) {
   const r = state.myReward;
 
   if (r.type === 'FLASH_ALL') {
-    // "정확히 그 시간을 먼저 겪고 나서 처소에서 게임" — 이제 정확한 발동 시각을 그대로 보여주고,
-    // 그 순간이 오기 전까지는 (renderMyRoomPanel에서) 칸 열기 자체를 잠가 정보가 헛되지 않게 한다.
-    box.appendChild(el('div', 'desc', '🍱 철가방 정찰 — 아래 시간이 다 되면 내 처소 전체의 뚜껑이 확 열렸다가 저절로 잠깐 드러납니다. 그 전까지는 칸을 열 수 없습니다.'));
-    const timerEl = el('div', 'bombTimer', formatCountdownClock(r.fireAt - Date.now()));
-    timerEl.id = 'flashRewardTimer';
-    box.appendChild(timerEl);
-    if (!flashTicking) { flashTicking = true; requestAnimationFrame(tickFlashTimer); }
+    // 정확히 언제 터질지는 이제 화면에 보여주지 않는다 — "몇 초 후 터집니다" 카운트다운이 없어야
+    // 기습적으로 느껴진다는 피드백. 서버는 여전히 fireAt을 알고 있고, 그 순간이 오기 전까지는
+    // (renderMyRoomPanel에서) 칸 열기 자체를 잠가 정보가 헛되지 않게 한다.
+    box.appendChild(el('div', 'desc', '🍱 철가방 정찰 — 곧(언제일지 모름) 내 처소 전체의 뚜껑이 확 열렸다가 저절로 잠깐 드러납니다. 그 전까지는 칸을 열 수 없습니다.'));
+    box.appendChild(el('div', 'hint', '⏳ 기다리는 중...'));
   } else if (r.type === 'PEEK_CELL') {
     box.appendChild(el('div', 'desc', '내 처소에서 확인할 칸 1개를 고르세요 (아래는 내 처소의 좌표판입니다).'));
     const grid = el('div', 'grid6 pickerGrid');

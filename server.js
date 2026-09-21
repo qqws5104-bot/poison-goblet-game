@@ -22,7 +22,7 @@ const CONFIG = {
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 15000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
+  REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 10000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
 };
 
@@ -326,10 +326,9 @@ function handleRewardChoose(id, payload) {
   pr.type = type;
   log(`${match.players[id].name}이 보상으로 [${REWARD_NAMES[type]}]을(를) 선택했습니다.`);
 
-  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 고른 후 0~15초(REWARD_FLASH_MS_MIN~MAX) 사이의
-  // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다.
-  // "보상을 획득하면 정확히 그 시간을 먼저 겪고 나서 처소에서 게임하도록" — 언제 터질지 이제는
-  // 감추지 않고 정확한 시각(fireAt)을 그대로 알려주며, doAction()에서 그 순간이 오기 전까지는
+  // 섬광 정찰은 직접 "사용" 버튼을 누르는 게 아니라, 고른 후 0~10초(REWARD_FLASH_MS_MIN~MAX) 사이의
+  // 무작위 순간에 자동으로 REWARD_FLASH_REVEAL_MS만큼 내 처소 전체가 드러나는 방식이다. 언제 터질지는
+  // 클라이언트에 알려주지 않아 기습적으로 느껴지게 하고, doAction()에서는 그 순간이 오기 전까지는
   // 칸을 열 수 없게 막는다 — 미리 봐야 의미 있는 정보인데 칸부터 다 열어버리면 쓸모가 없어지기 때문.
   if (type === 'FLASH_ALL') {
     const roundAtGrant = match.round;
@@ -705,13 +704,13 @@ function buildClientState(forId) {
     countdownEndsAt: match.phase === 'ROUND_COUNTDOWN' ? match.countdownEndsAt : null,
     nextMinigameName: match.phase === 'ROUND_COUNTDOWN' ? MINIGAME_NAMES[match.minigameOrder[match.round - 1]] : null,
     // 보상은 승자가 직접 고르는 구조 — type이 아직 null이면 choices 중 하나를 골라야 한다.
-    // FLASH_ALL은 이제 정확히 언제 터지는지(fireAt) 그대로 알려주고, 그 순간이 오기 전까지는
-    // doAction()에서 칸 열기를 막는다 — "그 시간을 먼저 겪고 나서 처소에서 게임"하도록.
+    // FLASH_ALL은 정확히 언제 터지는지(fireAt)를 클라이언트에 내려주지 않는다 — "몇 초 후 터집니다"
+    // 카운트다운이 없어야 기습적으로 느껴진다는 피드백. doAction()에서는 서버가 들고 있는 pr.fireAt
+    // 기준으로 여전히 그 순간이 오기 전까지 칸 열기를 막는다.
     myReward: pr && pr.winnerId === forId ? {
       type: pr.type,
       name: pr.type ? REWARD_NAMES[pr.type] : null,
       used: pr.used,
-      fireAt: pr.type === 'FLASH_ALL' ? pr.fireAt : null,
       choices: pr.type ? null : pr.choices.map((t) => ({ type: t, name: REWARD_NAMES[t] })),
     } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
