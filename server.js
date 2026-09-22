@@ -25,8 +25,10 @@ const CONFIG = {
   ROUND_DONE_MS: 5000, // 매 라운드 양쪽 다 칸을 다 연 직후, 다음 라운드 3-2-1 카운트다운으로 넘어가기 전 대기 시간
   POISON_INITIAL: 3,      // 전반 셋업: 24칸 중 상대 처소에 몰래 지정하는 독 개수
   POISON_MID: 2,          // 중반 재설치: 아직 안 연 칸 중 상대 처소에 추가로 지정하는 독 개수
-  CREST_WAVE1_MIN: 5, CREST_WAVE1_MAX: 6, // 전반 24칸 안에 무작위 배치되는 문장 조각 개수(본인도 비공개)
-  CREST_WAVE2_MIN: 3, CREST_WAVE2_MAX: 4, // 후반에 새로 열리는 12칸 안에 무작위 배치되는 문장 조각 개수
+  CREST_TOTAL: 9, // 가문의 문장 조각 총 개수 — 3x3 이미지 한 장을 조각내는 구조라 항상 정확히 9개로 고정
+  CREST_WAVE1_MIN: 5, CREST_WAVE1_MAX: 6, // 전반 24칸 안에 무작위 배치되는 1차 조각 개수(본인도 비공개) — 나머지(9-이 값)는 후반에 배치
+  // CREST_WAVE2는 더 이상 독립적으로 무작위가 아니다 — 총량이 9로 고정됐으므로 후반 배치 개수는
+  // finalizeMidSetup()에서 CREST_TOTAL - player.crestWave1Count로 계산한다(위 1차 개수의 나머지).
   POOL_GEM_RATIO: 0.25, POOL_A_RATIO: 0.25, // 독·문장을 뺀 나머지 칸을 보석/해독제/빈칸으로 채울 때 비율(빈칸이 나머지)
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MS_MIN: 12000, BOMB_FUSE_MS_MAX: 20000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
@@ -39,18 +41,28 @@ const CONFIG = {
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
-// "심리싸움 하는 느낌이 살면 좋겠다"는 최종 피드백에 따라, 운/대박 요소는 유지하면서도 상대를
-// 읽어야 이기는 3종(BLUFF/LIAR_DIE/GAMBIT)을 추가했다 — 총 11종. ROUNDS(10) < 11종이라
-// 한 매치에 11종이 전부 나오진 않지만(그중 10개를 무작위로 섞어 사용), 그 편이 매치마다
-// 다른 조합을 보게 되어 오히려 반복감이 줄어든다.
-// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미 피드백으로 제외.
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'BLUFF', 'LIAR_DIE', 'GAMBIT'];
+// "심리싸움 하는 느낌이 살면 좋겠다"는 피드백에 따라 운/대박 요소는 유지하면서도 상대를 읽어야
+// 이기는 심리전 계열을 추가했다 — 총 10종. ROUNDS(15) > 10종이라 한 매치에 10종이 전부 나올
+// 수도 있다(그중 최대 15개를 무작위로 섞어 채움).
+// 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미
+// 피드백으로 제외. 심리전 계열 초안 3종(BLUFF/LIAR_DIE/GAMBIT)은 플레이테스트 결과 셋 다
+// 실제로는 "읽을 게 없는" 게임이었다는 게 드러나 전부 제외했다 — 라이어 주사위는 선언 한 번 +
+// 트러스트/더블 찍기뿐이라 상대를 읽을 단서가 전혀 없는 포장된 동전던지기였고, 황금 잔 허세
+// 대결은 GOLD를 쥔 쪽은 PUSH가 손해볼 일이 없는 확정 정답이라 절반의 상황에서 진짜 '결정'이
+// 없었으며, 허세 배팅은 세 선택지(1/2/3) 중 3이 다른 모든 선택지를 (약)우월하게 지배해서
+// "무조건 3"이 정답인 게임이었다(세 게임 모두 "애매하다"는 피드백으로 확인). 세 게임 모두
+// 양쪽 모두에게 실제 딜레마가 있는 대체 게임 두 개로 통합했다: 숫자 패 대결(CARD_DUEL, 쿤 포커
+// 축약형 — 베팅/체크·콜/폴드가 있어 "무조건 최댓값 베팅"이 통하지 않는 균형 잡힌 허세 구조)과
+// 의리 시험(PACT, 죄수의 딜레마형 — 배신의 유혹이 상호협력의 보상보다 확실히 커야 진짜 딜레마가
+// 되므로, 밀고 쪽 보상을 정찰 보상 "직접 선택"으로, 상호침묵 쪽은 그보다 작은 즉석 한 칸 정찰로
+// 차등을 뒀다).
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'CARD_DUEL', 'PACT'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
   SIGIL: '표식 대결', GUESS_COUNT: '탁자 위 술잔 개수 세기',
   BANK: '금고 번호 맞추기',
-  BLUFF: '허세 배팅', LIAR_DIE: '라이어 주사위', GAMBIT: '황금 잔 허세 대결',
+  CARD_DUEL: '숫자 패 대결', PACT: '의리 시험',
 };
 function buildMinigameOrder() {
   const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS_TOTAL);
@@ -124,8 +136,14 @@ function newPlayer(id, name) {
     id, name, room: makeRoom(),
     poison: 0, antidote: 0, score: 0, finalScore: null,
     crestOpened: 0, // 자기 처소에서 연 문장 칸 개수
-    crestTotal: 0,  // 문장 조각 총 개수 — 전반(finalizeSetup)+후반(finalizeMidSetup) 배치가 끝나야 확정되고,
+    crestTotal: 0,  // 실제로 처소에 배치된 문장 조각 개수 — 기본은 CREST_TOTAL(9)이지만 중반 저격으로
+                     // 줄어들 수 있다. 전반(finalizeSetup)+후반(finalizeMidSetup) 배치가 끝나야 확정되고,
                      // 완성 전까지는 본인에게도 공개하지 않는다(비공개 서프라이즈 요소).
+    crestWave1Count: 0, // 1차(전반)에 배치된 조각 개수 — 2차(후반) 배치 개수(9-이 값)를 계산하는 데 쓰임
+    // 문장 이미지를 3x3=9조각으로 잘라 쓰므로, 조각 번호(1~9) 9개를 무작위 순서로 섞어뒀다가
+    // 칸에 배치되는 순서대로 하나씩 소비한다 — 그래야 9칸이 전부 열렸을 때 정확히 9개 조각이
+    // 정확히 1번씩 나온다(위치가 무작위라 어느 조각이 먼저 나올지는 매치마다 다름).
+    crestPieceOrder: shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]),
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
@@ -227,8 +245,12 @@ function finalizeSetup() {
     }
     const crestCount = randInt(CONFIG.CREST_WAVE1_MIN, CONFIG.CREST_WAVE1_MAX);
     const chosen = pickRandomCells(candidates, crestCount);
-    for (const { row, col } of chosen) room[row][col].type = 'C';
+    chosen.forEach(({ row, col }, i) => {
+      room[row][col].type = 'C';
+      room[row][col].piece = player.crestPieceOrder[i]; // 1차분: 섞어둔 조각 번호의 앞쪽부터 소비
+    });
     player.crestTotal += chosen.length;
+    player.crestWave1Count = chosen.length;
   }
   // 3) 나머지 전반 칸(독·문장을 뺀 칸)을 보석/해독제/빈칸으로 비율대로 채운다.
   for (const id of match.order) {
@@ -301,9 +323,16 @@ function finalizeMidSetup() {
         if (room[r][c].type === null) candidates.push({ row: r, col: c });
       }
     }
-    const crestCount = randInt(CONFIG.CREST_WAVE2_MIN, CONFIG.CREST_WAVE2_MAX);
+    // 총량은 9로 고정이므로, 2차 배치 개수는 "9 - 1차에 이미 배치한 개수"로 정해진다(무작위 아님) —
+    // 1차가 5개였으면 2차는 4개, 1차가 6개였으면 2차는 3개. 그래야 두 웨이브를 합쳐 정확히 9조각이
+    // 나온다(사용자 확인: "총 개수는 9개 고정, 5개냐 6개냐는 1차 배치분만 랜덤").
+    const crestCount = CONFIG.CREST_TOTAL - player.crestWave1Count;
     const chosen = pickRandomCells(candidates, crestCount);
-    for (const { row, col } of chosen) room[row][col].type = 'C';
+    chosen.forEach(({ row, col }, i) => {
+      room[row][col].type = 'C';
+      // 2차분: 섞어둔 조각 번호 중 1차에서 쓰고 남은 뒷부분을 이어서 소비
+      room[row][col].piece = player.crestPieceOrder[player.crestWave1Count + i];
+    });
     player.crestTotal += chosen.length;
   }
   // 4) 새 12칸 중 아직 안 정해진 나머지를 보석/해독제/빈칸으로 채운다(옛 24칸은 이미 다 채워져 있음).
@@ -418,23 +447,29 @@ function initMinigame(type, roundNo) {
       history: { [a]: [], [b]: [] },
     };
   }
-  if (type === 'BLUFF') {
-    // 허세 배팅 — 동시에 몰래 1~3 중 하나를 "배팅"하고 공개. 더 큰 숫자를 낸 쪽이 승리.
-    // 같은 숫자를 내면 정면충돌로 둘 다 허탕(무승부) — 재입력 없이 그대로 다음 라운드로 넘어간다.
-    return { ...base, picks: {} };
+  if (type === 'CARD_DUEL') {
+    // 숫자 패 대결(쿤 포커 축약형) — 각자 1~3 중 하나를 몰래 받는다(독립 무작위, 같은 숫자면
+    // 동점 가능). 선공이 체크/베팅을 고르고, 그다음은 상대 차례:
+    //  - 선공 베팅 → 후공이 콜(공개 승부)/폴드(선공 승) 선택
+    //  - 선공 체크 → 후공이 체크(바로 공개 승부)/베팅 선택, 후공이 베팅하면 다시 선공이 콜/폴드
+    // 낮은 패를 들고도 베팅으로 상대를 접게 만들 수 있고, 높은 패를 들고도 체크로 유인할 수 있어
+    // 양쪽 다 진짜 허세/견제 판단이 필요하다(GAMBIT과 달리 어느 한쪽도 "항상 정답"인 패가 없음).
+    const first = firstIsA ? a : b, second = firstIsA ? b : a;
+    return {
+      ...base, first, second,
+      cards: { [a]: randInt(1, 3), [b]: randInt(1, 3) },
+      stage: 'FIRST_ACT', firstAct: null, secondAct: null, finalAct: null,
+    };
   }
-  if (type === 'LIAR_DIE') {
-    // 라이어 주사위 — 선언자만 몰래 주사위(1~6)를 굴려 자신만 확인하고, 그 숫자가 "높다(4~6)"인지
-    // "낮다(1~3)"인지를 선언한다(진실/거짓 가능). 상대는 그 선언을 믿을지(그대로 선언자 승리) 의심할지
-    // (실제 주사위를 공개해 진위 판정) 고른다 — 표정/패턴을 읽는 심리전 + 주사위 자체의 운.
-    return { ...base, declarer: firstIsA ? a : b, responder: firstIsA ? b : a, roll: randInt(1, 6), claim: null, decision: null };
-  }
-  if (type === 'GAMBIT') {
-    // 황금 잔 허세 대결 — 각자 몰래 GOLD(강함)/GLASS(약함) 패를 받는다(각자 독립 50/50).
-    // 동시에 PUSH(밀어붙인다)/YIELD(물러난다)를 고른다: 둘 다 YIELD면 무승부, 하나만 PUSH면
-    // PUSH가 자동 승리, 둘 다 PUSH면 카드를 공개해 GOLD가 GLASS를 이긴다(같은 패면 무승부).
-    // 내 패가 약해도 밀어붙이면 상대가 물러날 수 있다는 점이 허세/블러핑의 핵심.
-    return { ...base, cards: { [a]: Math.random() < 0.5 ? 'GOLD' : 'GLASS', [b]: Math.random() < 0.5 ? 'GOLD' : 'GLASS' }, actions: {} };
+  if (type === 'PACT') {
+    // 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵(SILENT)/밀고(TALK)를 고른다.
+    //  - 둘 다 침묵 → 서로 의리를 지킨 보상으로 각자 즉석 한 칸 정찰을 받는다(endMinigameMutualReveal).
+    //  - 한쪽만 밀고 → 밀고한 쪽이 미니게임 승리로 처리되어 정찰 보상을 "직접 골라" 받는다(더 큼).
+    //  - 둘 다 밀고 → 아무도 얻는 것 없이 무승부.
+    // 밀고 쪽 보상이 상호침묵 쪽보다 확실히 커야("배신의 유혹"이 "협력의 보상"보다 커야) 진짜
+    // 딜레마가 된다 — 그래야 "다 같이 침묵하는 게 둘 다에게 낫다"는 걸 알면서도 상대를 못 믿어
+    // 밀고하고 싶어지는 긴장이 생긴다.
+    return { ...base, actions: {} };
   }
   return base;
 }
@@ -470,10 +505,8 @@ function endMinigame(winnerId) {
   broadcastState();
 }
 
-// "둘 다 정답을 맞히지 못함" 같은 무승부가 나는 미니게임을 위한 범용 처리 — 승자를 억지로
-// 정해 보상까지 챙겨주지 않고, 이번 라운드는 그냥 보상 없이 본행동으로 넘어간다. (현재 남아있는
-// 8종 미니게임 중에는 실제로 무승부가 나는 종류가 없어 당장은 호출되지 않지만, 이후 무승부가
-// 가능한 미니게임을 추가할 때 재사용할 수 있도록 남겨둔다.)
+// "둘 다 정답을 맞히지 못함"이나 "둘 다 밀고함" 같은 무승부가 나는 미니게임을 위한 범용 처리 —
+// 승자를 억지로 정해 보상까지 챙겨주지 않고, 이번 라운드는 그냥 보상 없이 본행동으로 넘어간다.
 function endMinigameDraw() {
   match.minigame.result = 'DRAW';
   match.pendingReward = null;
@@ -481,6 +514,35 @@ function endMinigameDraw() {
   match.phase = 'ROUND_ACTION';
   match.streak = { winnerId: null, count: 0 }; // 무승부는 스트릭을 끊는다
   log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
+  broadcastState();
+}
+
+// 의리 시험(PACT)에서 "둘 다 침묵"했을 때 전용 처리 — 승자는 없지만(스트릭도 끊김) 아무 보상도
+// 없는 진짜 무승부와는 달리, 서로 의리를 지킨 보상으로 각자 자기 처소의 안 연 칸 하나를 몰래
+// 들여다본다. 보상 후보를 "직접 고르는" 정찰 보상(endMinigame이 미니게임 승자에게 주는 것)보다는
+// 확실히 작아야 한다 — 그래야 "밀고하면 더 크게 얻는다"는 유혹이 살아있는 진짜 죄수의 딜레마가
+// 된다. 정찰 대상은 무작위 한 칸으로, 실제로 여는 게 아니라 PEEK_CELL 보상과 똑같이 정보만 준다.
+function endMinigameMutualReveal() {
+  match.minigame.result = 'DRAW';
+  match.pendingReward = null;
+  match.actionOpens = {};
+  match.phase = 'ROUND_ACTION';
+  match.streak = { winnerId: null, count: 0 };
+  for (const id of match.order) {
+    const player = match.players[id];
+    const candidates = [];
+    for (let r = 0; r < player.room.length; r++) {
+      for (let c = 0; c < player.room[r].length; c++) {
+        if (!player.room[r][c].opened && !player.room[r][c].locked) candidates.push({ row: r, col: c });
+      }
+    }
+    if (!candidates.length) continue;
+    const { row, col } = candidates[randInt(0, candidates.length - 1)];
+    const type = player.room[row][col].type;
+    actionLog(player, `의리를 지킨 보상 — 내 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
+    io.to(id).emit('rewardResult', { kind: 'PEEK_CELL', row, col, type });
+  }
+  log('둘 다 침묵했습니다 — 서로에게 처소 정보를 하나씩 몰래 나눠줍니다.');
   broadcastState();
 }
 
@@ -528,9 +590,8 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
-  if (mg.type === 'BLUFF') return handleBluff(id, payload, mg);
-  if (mg.type === 'LIAR_DIE') return handleLiarDie(id, payload, mg);
-  if (mg.type === 'GAMBIT') return handleGambit(id, payload, mg);
+  if (mg.type === 'CARD_DUEL') return handleCardDuel(id, payload, mg);
+  if (mg.type === 'PACT') return handlePact(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -683,72 +744,80 @@ function handleBank(id, payload, mg) {
   broadcastState();
 }
 
-// 11) 허세 배팅 — 동시에 몰래 1~3 배팅, 큰 쪽 승리, 동수는 무승부(심리+대박형)
-function handleBluff(id, payload, mg) {
-  if (mg.picks[id]) return;
-  const stake = Number(payload && payload.stake);
-  if (![1, 2, 3].includes(stake)) return;
-  mg.picks[id] = stake;
-  const [a, b] = match.order;
-  if (mg.picks[a] != null && mg.picks[b] != null) {
-    log(`허세 배팅 공개: ${match.players[a].name}=${mg.picks[a]} vs ${match.players[b].name}=${mg.picks[b]}`);
-    if (mg.picks[a] === mg.picks[b]) {
+// 11) 숫자 패 대결(쿤 포커 축약형) — 선공 체크/베팅 → 후공 반응(콜/폴드 또는 체크/베팅) →
+// (후공이 베팅했다면) 선공 반응(콜/폴드)까지 최대 2단계. 콜/체크로 승부가 나면 패를 공개해
+// 더 높은 숫자가 승리(동점은 무승부), 폴드가 나오면 상대가 패를 보지 않고도 그대로 이긴다.
+function handleCardDuel(id, payload, mg) {
+  const showdown = () => {
+    const [a, b] = match.order;
+    log(`패 대결 공개: ${match.players[a].name}=${mg.cards[a]} vs ${match.players[b].name}=${mg.cards[b]}`);
+    if (mg.cards[a] === mg.cards[b]) {
       broadcastState();
-      log('정면충돌! 같은 배팅 — 둘 다 허탕입니다.');
+      log('같은 숫자 — 무승부입니다.');
       return endMinigameDraw();
     }
     broadcastState();
-    return endMinigame(mg.picks[a] > mg.picks[b] ? a : b);
-  }
-  broadcastState();
-}
-
-// 12) 라이어 주사위 — 선언자의 "높다/낮다" 선언을 믿을지 의심할지(심리) + 실제 주사위(운)
-function handleLiarDie(id, payload, mg) {
-  if (id === mg.declarer && mg.claim == null) {
-    if (!['HIGH', 'LOW'].includes(payload && payload.claim)) return;
-    mg.claim = payload.claim;
-    log(`${match.players[mg.declarer].name}이 "내 주사위는 ${mg.claim === 'HIGH' ? '높다(4~6)' : '낮다(1~3)'}"라고 선언했습니다.`);
+    return endMinigame(mg.cards[a] > mg.cards[b] ? a : b);
+  };
+  if (mg.stage === 'FIRST_ACT' && id === mg.first) {
+    if (!['CHECK', 'BET'].includes(payload && payload.action)) return;
+    mg.firstAct = payload.action;
+    log(`${match.players[mg.first].name}이 ${mg.firstAct === 'BET' ? '베팅했습니다' : '체크했습니다'}.`);
+    mg.stage = mg.firstAct === 'BET' ? 'SECOND_RESPOND' : 'SECOND_ACT';
     broadcastState();
     return;
   }
-  if (id === mg.responder && mg.claim != null && mg.decision == null) {
-    if (!['TRUST', 'DOUBT'].includes(payload && payload.decision)) return;
-    mg.decision = payload.decision;
-    if (mg.decision === 'TRUST') {
-      log(`${match.players[mg.responder].name}이 선언을 그대로 믿었습니다 — 진실은 아무도 모른 채 넘어갑니다.`);
-      broadcastState();
-      return endMinigame(mg.declarer);
+  if (mg.stage === 'SECOND_ACT' && id === mg.second) {
+    if (!['CHECK', 'BET'].includes(payload && payload.action)) return;
+    mg.secondAct = payload.action;
+    if (mg.secondAct === 'CHECK') {
+      log(`${match.players[mg.second].name}도 체크했습니다 — 패를 공개합니다.`);
+      return showdown();
     }
-    const actualRange = mg.roll >= 4 ? 'HIGH' : 'LOW';
-    const wasTrue = actualRange === mg.claim;
-    log(`${match.players[mg.responder].name}이 의심했습니다 — 실제 주사위는 ${mg.roll}이었습니다 (선언은 ${wasTrue ? '진실' : '거짓'}).`);
+    log(`${match.players[mg.second].name}이 베팅했습니다.`);
+    mg.stage = 'FIRST_RESPOND';
     broadcastState();
-    return endMinigame(wasTrue ? mg.declarer : mg.responder);
+    return;
+  }
+  if (mg.stage === 'SECOND_RESPOND' && id === mg.second) {
+    if (!['CALL', 'FOLD'].includes(payload && payload.action)) return;
+    mg.secondAct = payload.action;
+    if (mg.secondAct === 'FOLD') {
+      log(`${match.players[mg.second].name}이 폴드했습니다 — ${match.players[mg.first].name}이 패를 보여주지 않고 승리합니다.`);
+      broadcastState();
+      return endMinigame(mg.first);
+    }
+    log(`${match.players[mg.second].name}이 콜했습니다 — 패를 공개합니다.`);
+    return showdown();
+  }
+  if (mg.stage === 'FIRST_RESPOND' && id === mg.first) {
+    if (!['CALL', 'FOLD'].includes(payload && payload.action)) return;
+    mg.finalAct = payload.action;
+    if (mg.finalAct === 'FOLD') {
+      log(`${match.players[mg.first].name}이 폴드했습니다 — ${match.players[mg.second].name}이 패를 보여주지 않고 승리합니다.`);
+      broadcastState();
+      return endMinigame(mg.second);
+    }
+    log(`${match.players[mg.first].name}이 콜했습니다 — 패를 공개합니다.`);
+    return showdown();
   }
 }
 
-// 13) 황금 잔 허세 대결 — 몰래 받은 패(강/약)를 숨긴 채 밀어붙일지 물러날지 동시에 결정(블러핑형)
-function handleGambit(id, payload, mg) {
+// 12) 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵/밀고를 고른다. 결과는 handlePact 아래 참고.
+function handlePact(id, payload, mg) {
   if (mg.actions[id]) return;
-  if (!['PUSH', 'YIELD'].includes(payload && payload.action)) return;
+  if (!['SILENT', 'TALK'].includes(payload && payload.action)) return;
   mg.actions[id] = payload.action;
   const [a, b] = match.order;
   if (mg.actions[a] && mg.actions[b]) {
-    log(`대결 공개: ${match.players[a].name}=${mg.cards[a]}/${mg.actions[a]} vs ${match.players[b].name}=${mg.cards[b]}/${mg.actions[b]}`);
+    log(`의리 시험 공개: ${match.players[a].name}=${mg.actions[a] === 'SILENT' ? '침묵' : '밀고'} vs ${match.players[b].name}=${mg.actions[b] === 'SILENT' ? '침묵' : '밀고'}`);
     broadcastState();
-    if (mg.actions[a] === 'YIELD' && mg.actions[b] === 'YIELD') {
-      log('둘 다 물러났습니다 — 무승부.');
+    if (mg.actions[a] === 'SILENT' && mg.actions[b] === 'SILENT') return endMinigameMutualReveal();
+    if (mg.actions[a] === 'TALK' && mg.actions[b] === 'TALK') {
+      log('둘 다 밀고했습니다 — 아무도 얻는 것 없이 무승부.');
       return endMinigameDraw();
     }
-    if (mg.actions[a] === 'PUSH' && mg.actions[b] === 'YIELD') return endMinigame(a);
-    if (mg.actions[b] === 'PUSH' && mg.actions[a] === 'YIELD') return endMinigame(b);
-    // 둘 다 PUSH — 카드로 승부(같은 패면 무승부)
-    if (mg.cards[a] === mg.cards[b]) {
-      log('둘 다 밀어붙였지만 같은 패 — 무승부.');
-      return endMinigameDraw();
-    }
-    return endMinigame(mg.cards[a] === 'GOLD' ? a : b);
+    return endMinigame(mg.actions[a] === 'TALK' ? a : b);
   }
   broadcastState();
 }
@@ -965,6 +1034,8 @@ function buildClientState(forId) {
       locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
+      // 문장 조각 번호(1~9)는 실제로 공개된 문장 칸일 때만 내려준다 — 3x3 이미지 조각 렌더링용.
+      piece: (cell.opened || revealAll) && cell.type === 'C' ? cell.piece : null,
     })));
 
   const pr = match.pendingReward;
@@ -1077,24 +1148,26 @@ function publicMinigameView(mg, forId) {
       myGuesses: (mg.history[forId] || []).map((h) => ({ guess: h.guess, strikes: h.strikes, balls: h.balls, marks: h.marks })),
     };
   }
-  if (mg.type === 'BLUFF') {
-    return { myPick: mg.picks[forId] ?? null, oppPicked: mg.picks[otherId(forId)] != null, waitingForMe: mg.picks[forId] == null,
-      revealed: mg.result != null ? { my: mg.picks[forId], opp: mg.picks[otherId(forId)] } : null };
-  }
-  if (mg.type === 'LIAR_DIE') {
-    const role = mine(mg.declarer) ? 'declarer' : 'responder';
+  if (mg.type === 'CARD_DUEL') {
+    // 배팅 액션(체크/베팅/콜/폴드) 자체는 원래 포커에서도 공개 정보이므로 그대로 내려주고,
+    // 카드 숫자만 승부가 끝날 때까지(result가 생길 때까지) 비공개로 한다.
+    const role = mine(mg.first) ? 'first' : 'second';
+    const waitingForMe =
+      (mg.stage === 'FIRST_ACT' && role === 'first') ||
+      (mg.stage === 'SECOND_ACT' && role === 'second') ||
+      (mg.stage === 'SECOND_RESPOND' && role === 'second') ||
+      (mg.stage === 'FIRST_RESPOND' && role === 'first');
     return {
-      role, myRoll: mine(mg.declarer) ? mg.roll : null,
-      claim: mg.claim, decision: mg.decision,
-      waitingForMe: (role === 'declarer' && mg.claim == null) || (role === 'responder' && mg.claim != null && mg.decision == null),
-      revealedRoll: mg.decision === 'DOUBT' ? mg.roll : null,
+      role, myCard: mg.cards[forId], stage: mg.stage,
+      firstAct: mg.firstAct, secondAct: mg.secondAct, waitingForMe,
+      revealed: mg.result != null ? { myCard: mg.cards[forId], oppCard: mg.cards[otherId(forId)] } : null,
     };
   }
-  if (mg.type === 'GAMBIT') {
+  if (mg.type === 'PACT') {
     return {
-      myCard: mg.cards[forId], myAction: mg.actions[forId] || null, oppActed: !!mg.actions[otherId(forId)],
+      myAction: mg.actions[forId] || null, oppActed: !!mg.actions[otherId(forId)],
       waitingForMe: !mg.actions[forId],
-      revealed: mg.result != null ? { myCard: mg.cards[forId], oppCard: mg.cards[otherId(forId)], myAction: mg.actions[forId], oppAction: mg.actions[otherId(forId)] } : null,
+      revealed: mg.result != null ? { myAction: mg.actions[forId], oppAction: mg.actions[otherId(forId)] } : null,
     };
   }
   return {};
@@ -1129,9 +1202,8 @@ function buildAdminMinigameSummary(mg) {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
   };
-  if (type === 'BLUFF') return { 배팅현황: byName(mg.picks) };
-  if (type === 'LIAR_DIE') return { 선언자: nameOf(mg.declarer), 실제주사위: mg.roll, 선언: mg.claim, 상대판단: mg.decision };
-  if (type === 'GAMBIT') return { 패: byName(mg.cards), 선택: byName(mg.actions) };
+  if (type === 'CARD_DUEL') return { 선공: nameOf(mg.first), 후공: nameOf(mg.second), 패: byName(mg.cards), 진행단계: mg.stage, 선공액션: mg.firstAct, 후공액션: mg.secondAct, 선공콜폴드: mg.finalAct };
+  if (type === 'PACT') return { 선택현황: byName(mg.actions) };
   return {};
 }
 

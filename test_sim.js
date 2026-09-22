@@ -1,6 +1,6 @@
 // 자동 스모크 테스트: 두 개의 소켓 클라이언트로 전반 셋업(6×4) + 8라운드 + 중반 재설치
 // (독 추가 2칸 + 6×6 확장) + 후반 7라운드, 총 15라운드를 진행시켜 서버 로직이 예외 없이
-// 동작하는지, 11종 미니게임과 보상 시스템, 동적 문장(가문의 문장) 즉시승리 조건이 모두
+// 동작하는지, 10종 미니게임과 보상 시스템, 동적 문장(가문의 문장) 즉시승리 조건이 모두
 // 정상 동작하는지 확인한다.
 const { io } = require('socket.io-client');
 
@@ -114,9 +114,9 @@ function onState(label, socket, s) {
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    // 미니게임이 11종으로 늘었고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 11종이 전부
+    // 미니게임이 10종이고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 10종이 전부
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/11, max possible per match = min(11,ROUNDS_TOTAL))`);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10, max possible per match = min(10,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     // 문장 총량은 게임 끝까지 본인도 모르는 값이었다가, END 시점에만 me.crestTotal로 공개된다.
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, crestOpened: s.me.crestOpened, crestTotal: s.me.crestTotal });
@@ -199,12 +199,12 @@ function playMinigame(label, socket, s) {
       const guess = pool[Math.floor(Math.random() * pool.length)];
       socket.emit('minigame:move', { guess });
     }
-    if (type === 'BLUFF' && mg.waitingForMe) socket.emit('minigame:move', { stake: 1 + Math.floor(Math.random() * 3) });
-    if (type === 'LIAR_DIE') {
-      if (mg.role === 'declarer' && mg.claim == null) socket.emit('minigame:move', { claim: Math.random() < 0.5 ? 'HIGH' : 'LOW' });
-      if (mg.role === 'responder' && mg.waitingForMe) socket.emit('minigame:move', { decision: Math.random() < 0.5 ? 'TRUST' : 'DOUBT' });
+    if (type === 'CARD_DUEL' && mg.waitingForMe) {
+      const isFirstDecision = mg.stage === 'FIRST_ACT' || mg.stage === 'SECOND_ACT';
+      const action = isFirstDecision ? (Math.random() < 0.5 ? 'CHECK' : 'BET') : (Math.random() < 0.5 ? 'CALL' : 'FOLD');
+      socket.emit('minigame:move', { action });
     }
-    if (type === 'GAMBIT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'PUSH' : 'YIELD' });
+    if (type === 'PACT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'SILENT' : 'TALK' });
     // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른
     // 미니게임과 같은 20~80ms 간격으로 스팸처럼 넘기면 초당 십수 번씩 왕복 메시지가 오가며
     // 실제 사람이라면 절대 하지 않을 부하를 만들어 테스트 전체를 느리게 만든다(실측상 수백~

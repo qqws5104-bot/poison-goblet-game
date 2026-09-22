@@ -28,6 +28,8 @@ let lastRewardResult = null; // 보상으로 획득한 정찰 결과 텍스트 �
 let lastRewardResultRound = null;
 let activeTab = 'GAME'; // '게임 화면'(미니게임/본행동/보상)과 '6×6 화면'(내 처소)을 탭으로 분리 — 'GAME' | 'ROOM'
 let lastPhaseForTab = null; // 페이즈가 "바뀌는 순간"에만 자동으로 알맞은 탭으로 전환하기 위한 추적값
+let roundOpenSummary = []; // 이번 라운드에 내가 새로 연 칸들 [{row,col,type}] — ROUND_DONE 화면에서 "방금 뭘 열었는지" 보여주는 용도
+let roundOpenSummaryRound = null; // roundOpenSummary가 몇 라운드 것인지(라운드가 바뀌면 초기화)
 // 미니게임 모달이 "이미 떠 있던 채로" 다시 그려지는 것인지 추적 — render()는 상대의 움직임이나
 // 내 입력 하나하나에도 화면 전체를 다시 그리므로, 매번 모달을 새로 마운트하면 등장 애니메이션이
 // (본인이 만든 변화가 아니어도) 계속 재생되어 화면이 깜빡이는 것처럼 보인다. 직전 프레임에도
@@ -100,6 +102,39 @@ function cellIconSVG(type) {
     ${drip}
     ${inner}
   </svg>`;
+}
+// 가문의 문장(C) 칸은 실제로 "연" 순간부터는 범용 방패 아이콘 대신, 서버가 함께 내려준 조각
+// 번호(1~9)에 해당하는 실제 이미지 조각(/crest/{gold|silver}_{1..9}.png)을 보여준다 — 9조각을
+// 다 모으면 원본 그림 한 장이 완성되는 구조. 장남은 금색, 차남은 은색 문장을 쓴다(추천안대로
+// 서로 다른 이미지). 아직 열지 않았거나(정찰로 살짝 엿본 것뿐인) 서버가 조각 번호를 내려주지
+// 않은 경우엔 기존 방패 아이콘으로 대체한다(정찰은 "문장이 있다"는 정보만 주고, 정확히 몇 번
+// 조각인지는 실제로 열어야만 알 수 있게 해 정찰의 가치를 낮추지 않는다).
+function crestFamilyFor(name) { return name === '장남' ? 'gold' : 'silver'; }
+function crestTileImgHTML(piece, family) {
+  return `<img class="crestTile" src="/crest/${family}_${piece}.png" alt="가문의 문장 조각 ${piece}/9"/>`;
+}
+function cellVisualHTML(type, piece, family) {
+  if (type === 'C' && piece && family) return crestTileImgHTML(piece, family);
+  return cellIconSVG(type);
+}
+// 처소 그리드 한쪽(9칸 중 지금까지 실제로 연 문장 조각들)을 3x3 조립판으로 보여준다 — 아직
+// 못 찾은 조각은 물음표로, 저격당해 영영 못 찾는 조각도 그냥 물음표로 남는다(본인은 그게
+// 저격당한 건지 아직 안 나온 건지 구분할 수 없다 — 히든정보 원칙 유지).
+function crestAssemblyWidget(room, family) {
+  const collected = {};
+  for (const row of room) for (const cell of row) {
+    if (cell.opened && cell.type === 'C' && cell.piece) collected[cell.piece] = true;
+  }
+  const wrap = el('div', 'crestAssembly');
+  wrap.appendChild(el('h3', null, `가문의 문장 조각 (${Object.keys(collected).length}/9)`));
+  const grid = el('div', 'crestAssemblyGrid');
+  for (let i = 1; i <= 9; i++) {
+    const slot = el('div', 'crestAssemblySlot' + (collected[i] ? ' filled' : ''));
+    slot.innerHTML = collected[i] ? crestTileImgHTML(i, family) : '<span class="crestSlotQ">?</span>';
+    grid.appendChild(slot);
+  }
+  wrap.appendChild(grid);
+  return wrap;
 }
 // 셋업 화면에서 "이 칸에 독을 심겠다"고 표시만 하는 노란색 마커 — 실제 독 술잔(P) 아이콘과는
 // 색을 분리해 상대에게 아직 확정되지 않은 임시 선택임을 구분한다.
@@ -276,6 +311,10 @@ function detectImpacts(prev, next) {
           else if (after.type === 'A' && revealed !== 'P') revealed = 'A';
           else if (after.type === 'C' && !revealed) revealed = 'C';
           else if (after.type === 'GEM' && !revealed) revealed = 'GEM';
+          // "칸을 열자마자 바로 다음으로 넘어가 뭘 열었는지 놓친다"는 피드백 — 이번 라운드에
+          // 새로 연 칸을 전부 기록해뒀다가, ROUND_DONE(5초 대기) 화면에서 한눈에 보여준다.
+          if (next.round !== roundOpenSummaryRound) { roundOpenSummary = []; roundOpenSummaryRound = next.round; }
+          roundOpenSummary.push({ row: r, col: c, type: after.type, piece: after.piece || null });
         }
       }
     }
@@ -308,6 +347,8 @@ socket.on('state', (state) => {
     nimRound = null;
     activeTab = 'GAME';
     lastPhaseForTab = null;
+    roundOpenSummary = [];
+    roundOpenSummaryRound = null;
     lastState = state; // 새 매치 프레임은 diff 기준으로 삼지 않는다
     render(state);
     return;
@@ -528,10 +569,27 @@ function renderSetupDone(state) {
 }
 
 // 매 라운드 양쪽 다 칸을 다 연 직후에도 SETUP_DONE과 같은 이유로 같은 방식의 완료 안내를 보여준다 —
-// "칸을 열자마자 바로 다음 라운드로 넘어가서 상황 인지가 어렵다"는 피드백.
+// "칸을 열자마자 바로 다음 라운드로 넘어가서 상황 인지가 어렵다"는 피드백. 여기서 한 발 더 나아가,
+// 방금 이번 라운드에 내가 연 칸이 각각 뭐였는지(문장/보석/독/해독제/빈칸)를 5초 동안 직접 보여줘서
+// "마지막 선택 후 그게 뭔지 확인할 시간 없이 바로 다음으로 넘어간다"는 문제를 해결한다.
 function renderRoundDone(state) {
   const p = el('section', 'panel center countdownPanel');
   p.appendChild(el('h2', null, `✅ ${state.round} / ${state.roundsTotal} 라운드 종료`));
+  const summary = roundOpenSummaryRound === state.round ? roundOpenSummary : [];
+  if (summary.length) {
+    p.appendChild(el('p', 'hint', '이번 라운드에 내가 연 칸:'));
+    const row = el('div', 'roundOpenSummaryRow');
+    const myFamily = state.me ? crestFamilyFor(state.me.name) : null;
+    summary.forEach(({ row: r, col: c, type, piece }) => {
+      const item = el('div', 'roundOpenSummaryItem');
+      const icon = el('div', 'roundOpenSummaryIcon' + (type === 'E' ? '' : ' cellIcon-' + type));
+      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type, piece, myFamily);
+      item.appendChild(icon);
+      item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${type === 'E' ? '빈 칸' : CELL_NAME[type]}`));
+      row.appendChild(item);
+    });
+    p.appendChild(row);
+  }
   p.appendChild(el('p', 'hint', '잠시 후 다음 라운드가 시작됩니다 — 마음의 준비를 하세요!'));
   app.appendChild(p);
 }
@@ -918,7 +976,7 @@ function buildRoomGrid(room, opts) {
       } else if (data.opened) {
         cell.classList.add('opened', data.type);
         // 빈 칸(E)은 아이콘이 없어 안 연 칸과 헷갈릴 수 있으므로, 큰 X로 "이미 열어봤음"을 표시한다.
-        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(data.type);
+        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type, data.piece, opts.crestFamily);
       } else if (opts.peekCell && opts.peekCell.row === r && opts.peekCell.col === c) {
         // 한 칸 정찰 보상: 실제로 연 것은 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
@@ -952,9 +1010,11 @@ function renderMyRoomPanel(state) {
   // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
-  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
+  const myFamily = crestFamilyFor(state.me.name);
+  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestFamily: myFamily }));
   if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) p.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
+  p.appendChild(crestAssemblyWidget(state.me.room, myFamily));
   return p;
 }
 
@@ -978,10 +1038,12 @@ function renderPickView(state) {
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
-  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
+  const myFamily = crestFamilyFor(state.me.name);
+  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestFamily: myFamily }));
   if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
   else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
+  mine.appendChild(crestAssemblyWidget(state.me.room, myFamily));
   wrap.appendChild(mine);
 
   app.appendChild(wrap);
@@ -1161,53 +1223,32 @@ function renderMinigamePanel(state) {
         return true;
       },
     }));
-  } else if (type === 'BLUFF') {
-    box.appendChild(el('div', 'desc', '상대와 동시에 몰래 1~3 중 하나로 배팅합니다. 더 큰 숫자를 낸 쪽이 승리 — 같은 숫자면 정면충돌로 둘 다 허탕입니다.'));
-    const row = el('div', 'btnRow');
-    [1, 2, 3].forEach((n) => {
-      const b = el('button', 'action' + (mg.myPick === n ? ' primary' : ''), n === 3 ? `${n} (올인)` : String(n));
-      b.disabled = !mg.waitingForMe;
-      b.onclick = () => socket.emit('minigame:move', { stake: n });
-      row.appendChild(b);
-    });
-    box.appendChild(row);
-    if (!mg.waitingForMe) box.appendChild(el('div', 'hint', mg.oppPicked ? '결과 공개 중...' : '상대의 배팅을 기다리는 중...'));
-  } else if (type === 'LIAR_DIE') {
-    box.appendChild(el('div', 'desc', '선언자가 몰래 굴린 주사위(1~6)를 보고 "높다(4~6)"인지 "낮다(1~3)"인지 선언합니다(거짓 선언 가능). 상대는 그 말을 믿을지 의심할지 고릅니다.'));
-    if (mg.role === 'declarer') {
-      box.appendChild(el('div', 'desc', `내 주사위: <b>${mg.myRoll}</b>`));
-      if (mg.claim == null) {
-        const row = el('div', 'btnRow');
-        [['HIGH', '높다 (4~6)'], ['LOW', '낮다 (1~3)']].forEach(([key, label]) => {
-          const b = el('button', 'action', label);
-          b.onclick = () => socket.emit('minigame:move', { claim: key });
-          row.appendChild(b);
-        });
-        box.appendChild(row);
-      } else {
-        box.appendChild(el('div', 'hint', `선언 완료: "${mg.claim === 'HIGH' ? '높다' : '낮다'}" — 상대의 판단을 기다리는 중...`));
-      }
+  } else if (type === 'CARD_DUEL') {
+    box.appendChild(el('div', 'desc', '서로 다른 숫자 패(1~3)를 몰래 받습니다. 선공이 체크(그냥 넘김)나 베팅을 고르면, 상대가 반응합니다 — 베팅에는 콜(패 공개)이나 폴드(즉시 패배)로, 체크에는 체크(바로 공개)나 되받아치는 베팅으로 답할 수 있습니다. 낮은 패로 베팅해 상대를 접게 만들 수도, 높은 패로 체크해서 유인할 수도 있습니다.'));
+    box.appendChild(el('div', 'desc', `내 패: <b>${mg.myCard}</b>`));
+    const CARD_DUEL_ACT_LABEL = { CHECK: '체크', BET: '베팅', CALL: '콜', FOLD: '폴드' };
+    const historyLines = [];
+    if (mg.firstAct) historyLines.push(`선공 ${CARD_DUEL_ACT_LABEL[mg.firstAct]}`);
+    if (mg.secondAct) historyLines.push(`후공 ${CARD_DUEL_ACT_LABEL[mg.secondAct]}`);
+    if (historyLines.length) box.appendChild(el('div', 'hint', historyLines.join(' → ')));
+    if (mg.waitingForMe) {
+      const row = el('div', 'btnRow');
+      const isFirstDecision = mg.stage === 'FIRST_ACT' || mg.stage === 'SECOND_ACT';
+      const options = isFirstDecision ? [['CHECK', '체크'], ['BET', '베팅']] : [['CALL', '콜 (패 공개)'], ['FOLD', '폴드 (포기)']];
+      options.forEach(([key, label]) => {
+        const b = el('button', 'action', label);
+        b.onclick = () => socket.emit('minigame:move', { action: key });
+        row.appendChild(b);
+      });
+      box.appendChild(row);
     } else {
-      if (mg.claim == null) {
-        box.appendChild(el('div', 'hint', '상대가 자신의 주사위를 선언하는 중입니다...'));
-      } else {
-        box.appendChild(el('div', 'desc', `상대의 선언: "내 주사위는 ${mg.claim === 'HIGH' ? '높다(4~6)' : '낮다(1~3)'}"`));
-        const row = el('div', 'btnRow');
-        [['TRUST', '믿는다'], ['DOUBT', '의심한다']].forEach(([key, label]) => {
-          const b = el('button', 'action', label);
-          b.disabled = !mg.waitingForMe;
-          b.onclick = () => socket.emit('minigame:move', { decision: key });
-          row.appendChild(b);
-        });
-        box.appendChild(row);
-      }
+      box.appendChild(el('div', 'hint', '상대의 선택을 기다리는 중...'));
     }
-    if (mg.revealedRoll != null) box.appendChild(el('div', 'hint', `공개된 실제 주사위: ${mg.revealedRoll}`));
-  } else if (type === 'GAMBIT') {
-    box.appendChild(el('div', 'desc', '몰래 GOLD(강함) 또는 GLASS(약함) 패를 받습니다. 상대와 동시에 PUSH(밀어붙인다)/YIELD(물러난다)를 고르세요.<br/>둘 다 YIELD면 무승부, 한쪽만 PUSH면 그 쪽이 자동 승리, 둘 다 PUSH면 GOLD가 GLASS를 이깁니다(같은 패는 무승부).'));
-    box.appendChild(el('div', 'desc', `내 패: <b>${mg.myCard === 'GOLD' ? '🏆 GOLD' : '🪟 GLASS'}</b>`));
+    if (mg.revealed) box.appendChild(el('div', 'hint', `공개된 상대 패: ${mg.revealed.oppCard}`));
+  } else if (type === 'PACT') {
+    box.appendChild(el('div', 'desc', '상대와 동시에 몰래 침묵/밀고를 고릅니다.<br/>둘 다 침묵하면 서로 처소 정보를 하나씩 나눠 받고, 한쪽만 밀고하면 그 쪽이 미니게임 승리로 정찰 보상을 직접 고르며, 둘 다 밀고하면 아무도 얻는 것이 없습니다.'));
     const row = el('div', 'btnRow');
-    [['PUSH', '밀어붙인다'], ['YIELD', '물러난다']].forEach(([key, label]) => {
+    [['SILENT', '침묵한다'], ['TALK', '밀고한다']].forEach(([key, label]) => {
       const b = el('button', 'action' + (mg.myAction === key ? ' primary' : ''), label);
       b.disabled = !mg.waitingForMe;
       b.onclick = () => socket.emit('minigame:move', { action: key });
@@ -1298,7 +1339,7 @@ function renderEnd(state) {
   mine.appendChild(el('h3', null, `내 처소 최종 (${state.me.name})`));
   mine.appendChild(statGrid(state.me));
   mine.appendChild(el('p', 'hint', `최종 점수: <b>${state.me.finalScore}</b> (술잔 점수 ${state.me.score} − 독 ${state.me.poison}개 × ${state.config.POISON_PENALTY})`));
-  mine.appendChild(buildRevealGrid(state.me.room));
+  mine.appendChild(buildRevealGrid(state.me.room, crestFamilyFor(state.me.name)));
   cols.appendChild(mine);
 
   if (state.opp) {
@@ -1306,7 +1347,7 @@ function renderEnd(state) {
     opp.appendChild(el('h3', null, `상대 처소 최종 (${state.opp.name})`));
     opp.appendChild(statGrid(state.opp));
     opp.appendChild(el('p', 'hint', `최종 점수: <b>${state.opp.finalScore}</b> (술잔 점수 ${state.opp.score} − 독 ${state.opp.poison}개 × ${state.config.POISON_PENALTY})`));
-    if (state.opp.room) opp.appendChild(buildRevealGrid(state.opp.room));
+    if (state.opp.room) opp.appendChild(buildRevealGrid(state.opp.room, crestFamilyFor(state.opp.name)));
     cols.appendChild(opp);
   }
   p.appendChild(cols);
@@ -1330,12 +1371,12 @@ function renderRematchPanel(state) {
   return p;
 }
 
-function buildRevealGrid(room) {
+function buildRevealGrid(room, family) {
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
-      const cell = el('div', 'cell opened ' + data.type, cellIconSVG(data.type));
+      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.piece, family));
       grid.appendChild(cell);
     }
   }

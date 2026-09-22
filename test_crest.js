@@ -1,13 +1,14 @@
-// 가문의 문장(동적 은닉 크레스트) 스모크 테스트.
+// 가문의 문장(고정 9개 총량 + 이미지 조각 은닉 크레스트) 스모크 테스트.
 //
 // 예전 버전은 문장이 고정된 3x3 블록(row2~4,col2~4)에 있다는 전제로 그 칸만 순서대로 열었지만,
-// 지금은 "독 배치 이후 남은 칸 중 완전 무작위, 개수(5~6/3~4)도 본인조차 모름" 구조로 바뀌어
-// 그 접근 자체가 성립하지 않는다. 대신 두 플레이어 모두 자기 처소를 처음부터 끝까지 결정론적으로
-// (row-major) 스캔해서 열게 하여, 실제 플레이라면 우연히 순서대로 열어나가다 문장을 전부 찾아내는
-// 상황을 근사한다. 전반 8라운드(16칸) + 후반 7라운드(14칸) = 30/36칸이 열리므로, 1차 문장(전반
-// 24칸 안, 5~6개)은 거의 항상 다 열리고 2차 문장(후반 신규 12칸 안, 3~4개)도 상당수 열린다 —
-// 그래서 실제로 즉시승리(가문의 문장) 조건이 발동하는지, crestTotal이 설계 범위(8~10)를 벗어나지
-// 않는지, 그리고 MID_SETUP 전환이 문제없이 이뤄지는지를 검증한다.
+// 지금은 "독 배치 이후 남은 칸 중 완전 무작위" 구조로 바뀌어 그 접근 자체가 성립하지 않는다.
+// 대신 두 플레이어 모두 자기 처소를 처음부터 끝까지 결정론적으로(row-major) 스캔해서 열게 하여,
+// 실제 플레이라면 우연히 순서대로 열어나가다 문장을 전부 찾아내는 상황을 근사한다. 전반 8라운드
+// (16칸) + 후반 7라운드(14칸) = 30/36칸이 열리므로, 1차 문장(전반 24칸 안, 5~6개)은 거의 항상
+// 다 열리고 2차 문장(후반 신규 12칸 안, 나머지 3~4개)도 상당수 열린다 — 총량은 9로 고정이지만
+// (본인도 모르는) 1차/2차 배치 개수 자체는 여전히 무작위다. 그래서 실제로 즉시승리(가문의 문장)
+// 조건이 발동하는지, crestTotal이 설계 범위(5~9, 저격당하면 9보다 줄 수 있음)를 벗어나지 않는지,
+// 그리고 MID_SETUP 전환이 문제없이 이뤄지는지를 검증한다.
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
@@ -110,12 +111,13 @@ function onState(label, socket, s) {
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
     console.log(`final me(${label}): crestOpened=${s.me.crestOpened} crestTotal=${s.me.crestTotal} opp.crestTotal=${s.opp && s.opp.crestTotal}`);
     // crestTotal은 1차만 반영된 채로 끝났다면 5~6(문장 즉시승리는 전반 중에도 발동할 수 있어
-    // 2차가 더해지기 전일 수 있다), 중반 재설치(2차: 3~4)까지 거쳤다면 기본 8~10이다. 다만
+    // 2차가 더해지기 전일 수 있다), 중반 재설치까지 거쳤다면 총량이 9로 고정이라 기본 9다. 다만
     // 중반 독 추가 설치가 하필 이미 있던 1차 문장 자리를 "저격"하면 그 조각만큼 crestTotal도
-    // 함께 줄어드므로(POISON_MID=2까지 저격 가능), 하한을 그만큼 더 낮게 잡는다.
-    const totalsOk = [s.me.crestTotal, s.opp && s.opp.crestTotal].every((t) => t == null || (t >= 5 && t <= 10));
+    // 함께 줄어드므로(POISON_MID=2까지 저격 가능), 하한은 그만큼 더 낮게, 상한은 총량 고정에
+    // 맞춰 9로 잡는다(예전처럼 10까지 갈 수는 이제 없다).
+    const totalsOk = [s.me.crestTotal, s.opp && s.opp.crestTotal].every((t) => t == null || (t >= 5 && t <= 9));
     if (!totalsOk) {
-      console.error('FAIL: crestTotal이 설계 범위(5~10)를 벗어났습니다.', s.me.crestTotal, s.opp && s.opp.crestTotal);
+      console.error('FAIL: crestTotal이 설계 범위(5~9)를 벗어났습니다.', s.me.crestTotal, s.opp && s.opp.crestTotal);
       setTimeout(() => process.exit(1), 200);
       return;
     }
@@ -176,12 +178,12 @@ function playMinigame(label, socket, s) {
       const pool = bankCandidates[label].length ? bankCandidates[label] : allPermutations(mg.digits);
       socket.emit('minigame:move', { guess: pool[Math.floor(Math.random() * pool.length)] });
     }
-    if (type === 'BLUFF' && mg.waitingForMe) socket.emit('minigame:move', { stake: 1 + Math.floor(Math.random() * 3) });
-    if (type === 'LIAR_DIE') {
-      if (mg.role === 'declarer' && mg.claim == null) socket.emit('minigame:move', { claim: Math.random() < 0.5 ? 'HIGH' : 'LOW' });
-      if (mg.role === 'responder' && mg.waitingForMe) socket.emit('minigame:move', { decision: Math.random() < 0.5 ? 'TRUST' : 'DOUBT' });
+    if (type === 'CARD_DUEL' && mg.waitingForMe) {
+      const isFirstDecision = mg.stage === 'FIRST_ACT' || mg.stage === 'SECOND_ACT';
+      const action = isFirstDecision ? (Math.random() < 0.5 ? 'CHECK' : 'BET') : (Math.random() < 0.5 ? 'CALL' : 'FOLD');
+      socket.emit('minigame:move', { action });
     }
-    if (type === 'GAMBIT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'PUSH' : 'YIELD' });
+    if (type === 'PACT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'SILENT' : 'TALK' });
   }, type === 'BOMB' ? 250 + Math.random() * 450 : 20 + Math.random() * 60);
 }
 
