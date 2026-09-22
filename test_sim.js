@@ -200,9 +200,9 @@ function playMinigame(label, socket, s) {
       socket.emit('minigame:move', { guess });
     }
     if (type === 'CARD_DUEL' && mg.waitingForMe) {
-      const isFirstDecision = mg.stage === 'FIRST_ACT' || mg.stage === 'SECOND_ACT';
-      const action = isFirstDecision ? (Math.random() < 0.5 ? 'CHECK' : 'BET') : (Math.random() < 0.5 ? 'CALL' : 'FOLD');
-      socket.emit('minigame:move', { action });
+      // 1~3을 무작위 순서로 섞어 세 자리에 배치 — 실제 플레이어의 "아무 순서로나 클릭"을 근사.
+      const shuffled = [1, 2, 3].sort(() => Math.random() - 0.5);
+      socket.emit('minigame:move', { arrangement: shuffled });
     }
     if (type === 'PACT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'SILENT' : 'TALK' });
     // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른

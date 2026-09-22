@@ -15,7 +15,10 @@ const CONFIG = {
   CREST_PTS: 2,           // 문장 칸 1칸을 열 때마다 획득하는 점수
   CREST_BONUS: 3,         // 문장을 전부 열어 완성하면 추가로 받는 보너스 점수
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
-  POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
+  POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -3점
+  POISON_PENALTY_MID: 5,  // 종료 시, 무효화되지 않은 "2차(중반 재설치)" 독 1개당 -5점 — 후반에 심는
+                           // 독이 더 아파야 중반 재설치가 실제로 위협적으로 느껴진다는 피드백. 해독은
+                           // (checkNeutralize에서) 항상 더 비싼 2차 독부터 자동으로 상쇄된다.
   ROUNDS_FIRST_HALF: 8,   // 전반(6×4) 라운드 수
   ROUNDS_TOTAL: 15,       // 총 라운드 수(전반 8 + 후반 7)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
@@ -38,6 +41,10 @@ const CONFIG = {
   REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 10000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
   REWARD_USE_LIMIT: 3, // 보상 종류별로 한 사람이 실제로 사용할 수 있는 최대 횟수
+  ROW_COL_REWARD_EARLY_ROUNDS: 3, // 세로줄/가로줄 정찰 보상은 "아직 안 연 칸"의 내용까지 그대로
+  // 알려주는 강력한 정보라, 각 절반(전반/후반)이 시작된 지 이 라운드 수 이내에는 보상 후보에서
+  // 아예 제외한다("초반 라운드에는 안 연 칸 정보를 알려주지 말자"는 피드백). 후반(중반 재설치
+  // 이후)도 새로 12칸이 열리는 순간이라 다시 "초반"으로 취급해 동일하게 적용한다.
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
@@ -51,11 +58,15 @@ const CONFIG = {
 // 대결은 GOLD를 쥔 쪽은 PUSH가 손해볼 일이 없는 확정 정답이라 절반의 상황에서 진짜 '결정'이
 // 없었으며, 허세 배팅은 세 선택지(1/2/3) 중 3이 다른 모든 선택지를 (약)우월하게 지배해서
 // "무조건 3"이 정답인 게임이었다(세 게임 모두 "애매하다"는 피드백으로 확인). 세 게임 모두
-// 양쪽 모두에게 실제 딜레마가 있는 대체 게임 두 개로 통합했다: 숫자 패 대결(CARD_DUEL, 쿤 포커
-// 축약형 — 베팅/체크·콜/폴드가 있어 "무조건 최댓값 베팅"이 통하지 않는 균형 잡힌 허세 구조)과
+// 양쪽 모두에게 실제 딜레마가 있는 대체 게임 두 개로 통합했다: 숫자 패 대결(CARD_DUEL)과
 // 의리 시험(PACT, 죄수의 딜레마형 — 배신의 유혹이 상호협력의 보상보다 확실히 커야 진짜 딜레마가
 // 되므로, 밀고 쪽 보상을 정찰 보상 "직접 선택"으로, 상호침묵 쪽은 그보다 작은 즉석 한 칸 정찰로
-// 차등을 뒀다).
+// 차등을 뒀다). 숫자 패 대결은 처음엔 쿤 포커 축약형(체크/베팅)이었으나 "체크 베팅 게임은
+// 하지 말자"는 피드백으로 완전히 새 규칙으로 바꿨다 — 1·2·3 세 장을 세 자리(①②③)에 원하는
+// 순서로 몰래 배치하고, 같은 자리끼리 상대와 비교해 더 큰 숫자를 낸 자리가 많은 쪽이 승리한다.
+// 6가지 배치 중 어느 것도 다른 모든 배치를 이기는 절대 우위가 없는 순환 구조라(가위바위보처럼
+// [3,1,2]가 [2,3,1]을 이기고 [2,3,1]이 [1,2,3]을 이기고 [1,2,3]이 다시 [3,1,2]를 이기는 식)
+// 진짜 읽기 싸움이 된다.
 const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'CARD_DUEL', 'PACT'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
@@ -134,7 +145,9 @@ function makeRoom() {
 function newPlayer(id, name) {
   return {
     id, name, room: makeRoom(),
-    poison: 0, antidote: 0, score: 0, finalScore: null,
+    // 독은 언제 심어졌는지(1차/2차)에 따라 종료 시 감점이 다르므로 따로 센다 — 합계가 필요한
+    // 곳(화면에 늘 보이는 총 독 개수 등)은 poisonTotal(player)로 구한다.
+    poisonInitial: 0, poisonMid: 0, antidote: 0, score: 0, finalScore: null,
     crestOpened: 0, // 자기 처소에서 연 문장 칸 개수
     crestTotal: 0,  // 실제로 처소에 배치된 문장 조각 개수 — 기본은 CREST_TOTAL(9)이지만 중반 저격으로
                      // 줄어들 수 있다. 전반(finalizeSetup)+후반(finalizeMidSetup) 배치가 끝나야 확정되고,
@@ -202,6 +215,8 @@ const socketSlot = {};
 const slotSockets = { A: new Set(), B: new Set() };
 
 function otherId(id) { return match.order.find((x) => x !== id); }
+function poisonTotal(player) { return player.poisonInitial + player.poisonMid; }
+function poisonPenaltyTotal(player) { return player.poisonInitial * CONFIG.POISON_PENALTY + player.poisonMid * CONFIG.POISON_PENALTY_MID; }
 function log(msg) { match.log.push({ t: Date.now(), msg }); if (match.log.length > 300) match.log.shift(); io.emit('log', { msg }); }
 // 본인 처소의 구체적인 정보(어느 칸에 뭐가 나왔는지 등)는 상대에게 새면 안 되므로,
 // 이런 개인 행동 기록은 방송하지 않고 그 플레이어의 state.me.history로만 내려준다.
@@ -230,7 +245,7 @@ function finalizeSetup() {
     const victim = otherId(id);
     const poisonCells = match.setupSelections[id];
     const room = match.players[victim].room;
-    for (const { row, col } of poisonCells) room[row][col].type = 'P';
+    for (const { row, col } of poisonCells) { room[row][col].type = 'P'; room[row][col].poisonWave = 1; }
   }
   // 2) 가문의 문장 1차 배치 — 독이 아닌 전반 24칸 중 무작위 5~6개. 매치·플레이어마다 독립적으로
   //    무작위라 몇 개가 들어갔는지는 본인도 모른다(칸을 열어보며 우연히 발견하는 서프라이즈).
@@ -299,10 +314,13 @@ function finalizeMidSetup() {
     }
   }
   // 2) 중반 독 배치 — 안 연 칸(옛 칸이든 새 칸이든) 중 상대가 고른 자리를 그대로 독으로 덮어쓴다.
+  //    이 2차 독은 1차보다 종료 시 감점이 더 크다(POISON_PENALTY_MID > POISON_PENALTY) — 중반
+  //    재설치가 실제로 더 위협적으로 느껴지게 하기 위함.
   //    하필 그 자리가 이미 정해져 있던 1차 문장 조각이었다면("문장 저격"), 그 조각은 독으로
   //    사라지는 대신 crestTotal에서도 함께 빼줘야 한다 — 안 그러면 실제 처소에는 문장이
-  //    crestTotal개보다 적게 남는데도 목표치는 그대로라, 그 라운드부터는 아무리 다 찾아도
-  //    "문장 완성 즉시승리"를 영영 달성할 수 없는 상태가 되어버린다.
+  //    crestTotal개보다 적게 남는데도 목표치는 그대로라, 완성 보너스 점수를 영영 받을 수 없는
+  //    상태가 되어버린다(문장 완성은 더 이상 즉시승리가 아니라 보너스 점수일 뿐이지만, 그래도
+  //    받을 수 있어야 공정하다).
   for (const id of match.order) {
     const victim = otherId(id);
     const victimPlayer = match.players[victim];
@@ -311,6 +329,7 @@ function finalizeMidSetup() {
     for (const { row, col } of cells) {
       if (room[row][col].type === 'C') victimPlayer.crestTotal -= 1;
       room[row][col].type = 'P';
+      room[row][col].poisonWave = 2;
     }
   }
   // 3) 가문의 문장 2차 배치 — 새로 열린 12칸 중, 방금 독이 되지 않은 칸에서만 무작위 3~4개.
@@ -448,18 +467,11 @@ function initMinigame(type, roundNo) {
     };
   }
   if (type === 'CARD_DUEL') {
-    // 숫자 패 대결(쿤 포커 축약형) — 각자 1~3 중 하나를 몰래 받는다(독립 무작위, 같은 숫자면
-    // 동점 가능). 선공이 체크/베팅을 고르고, 그다음은 상대 차례:
-    //  - 선공 베팅 → 후공이 콜(공개 승부)/폴드(선공 승) 선택
-    //  - 선공 체크 → 후공이 체크(바로 공개 승부)/베팅 선택, 후공이 베팅하면 다시 선공이 콜/폴드
-    // 낮은 패를 들고도 베팅으로 상대를 접게 만들 수 있고, 높은 패를 들고도 체크로 유인할 수 있어
-    // 양쪽 다 진짜 허세/견제 판단이 필요하다(GAMBIT과 달리 어느 한쪽도 "항상 정답"인 패가 없음).
-    const first = firstIsA ? a : b, second = firstIsA ? b : a;
-    return {
-      ...base, first, second,
-      cards: { [a]: randInt(1, 3), [b]: randInt(1, 3) },
-      stage: 'FIRST_ACT', firstAct: null, secondAct: null, finalAct: null,
-    };
+    // 숫자 패 대결 — 1·2·3 세 장을 세 자리(①②③)에 원하는 순서로 몰래 배치한다. 둘 다 배치를
+    // 마치면 동시 공개, 같은 자리끼리 숫자를 비교해 더 큰 쪽이 그 자리를 "이긴다" — 세 자리 중
+    // 더 많이 이긴 쪽이 승리(1승1패1무 등 서로 승수가 같으면 무승부). arrangement[id]는 아직
+    // 배치를 끝내지 않은 동안은 없다가, 제출하면 [자리1, 자리2, 자리3] 형태의 1~3 순열이 된다.
+    return { ...base, arrangement: {} };
   }
   if (type === 'PACT') {
     // 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵(SILENT)/밀고(TALK)를 고른다.
@@ -490,6 +502,15 @@ function endMinigame(winnerId) {
   // 네 종류를 전부 다 써버린 극단적인 경우(이론상 라운드 수가 아주 많아야 가능)에는 선택지가
   // 텅 비는 것보다는, 그냥 모든 종류를 다시 후보로 열어주는 쪽이 안전하다.
   if (availableTypes.length === 0) availableTypes = REWARD_TYPES.slice();
+  // 가로줄/세로줄 정찰(ROW_COUNT/COL_COUNT)은 "아직 안 연 칸"의 내용까지 그대로 알려주는 강력한
+  // 정보라, 각 절반(전반/후반)이 시작된 지 얼마 안 된 "초반 라운드"에는 후보에서 아예 뺀다 —
+  // 그 시점엔 실제로 열어본 칸이 거의 없어서 사실상 처소 전체를 공짜로 스캔해주는 셈이 되기
+  // 때문. 후반(중반 재설치 이후)도 새 12칸이 열리는 순간이라 다시 "초반"으로 취급한다.
+  const roundsIntoHalf = match.round <= CONFIG.ROUNDS_FIRST_HALF ? match.round : match.round - CONFIG.ROUNDS_FIRST_HALF;
+  if (roundsIntoHalf <= CONFIG.ROW_COL_REWARD_EARLY_ROUNDS) {
+    const withoutRowCol = availableTypes.filter((t) => t !== 'ROW_COUNT' && t !== 'COL_COUNT');
+    if (withoutRowCol.length > 0) availableTypes = withoutRowCol;
+  }
   match.pendingReward = {
     winnerId,
     choices: shuffle(availableTypes),
@@ -747,60 +768,27 @@ function handleBank(id, payload, mg) {
 // 11) 숫자 패 대결(쿤 포커 축약형) — 선공 체크/베팅 → 후공 반응(콜/폴드 또는 체크/베팅) →
 // (후공이 베팅했다면) 선공 반응(콜/폴드)까지 최대 2단계. 콜/체크로 승부가 나면 패를 공개해
 // 더 높은 숫자가 승리(동점은 무승부), 폴드가 나오면 상대가 패를 보지 않고도 그대로 이긴다.
+// 숫자 패 대결 — payload.arrangement로 [자리1,자리2,자리3](1~3의 순열)을 한 번에 제출받는다.
+// 둘 다 제출하면 자리별로 비교해 더 큰 숫자를 낸 자리가 많은 쪽이 승리(승수가 같으면 무승부).
 function handleCardDuel(id, payload, mg) {
-  const showdown = () => {
-    const [a, b] = match.order;
-    log(`패 대결 공개: ${match.players[a].name}=${mg.cards[a]} vs ${match.players[b].name}=${mg.cards[b]}`);
-    if (mg.cards[a] === mg.cards[b]) {
-      broadcastState();
-      log('같은 숫자 — 무승부입니다.');
-      return endMinigameDraw();
-    }
-    broadcastState();
-    return endMinigame(mg.cards[a] > mg.cards[b] ? a : b);
-  };
-  if (mg.stage === 'FIRST_ACT' && id === mg.first) {
-    if (!['CHECK', 'BET'].includes(payload && payload.action)) return;
-    mg.firstAct = payload.action;
-    log(`${match.players[mg.first].name}이 ${mg.firstAct === 'BET' ? '베팅했습니다' : '체크했습니다'}.`);
-    mg.stage = mg.firstAct === 'BET' ? 'SECOND_RESPOND' : 'SECOND_ACT';
-    broadcastState();
-    return;
+  if (mg.arrangement[id]) return; // 이미 제출함 — 중복/변경 제출은 무시
+  const arr = payload && payload.arrangement;
+  if (!Array.isArray(arr) || arr.length !== 3) return;
+  const nums = arr.map(Number);
+  const isValidPermutation = nums.every((n) => n === 1 || n === 2 || n === 3) && new Set(nums).size === 3;
+  if (!isValidPermutation) return;
+  mg.arrangement[id] = nums;
+  broadcastState();
+  const [a, b] = match.order;
+  if (!(mg.arrangement[a] && mg.arrangement[b])) return; // 아직 상대가 안 냈으면 대기
+  let winsA = 0, winsB = 0;
+  for (let lane = 0; lane < 3; lane++) {
+    if (mg.arrangement[a][lane] > mg.arrangement[b][lane]) winsA += 1;
+    else if (mg.arrangement[a][lane] < mg.arrangement[b][lane]) winsB += 1;
   }
-  if (mg.stage === 'SECOND_ACT' && id === mg.second) {
-    if (!['CHECK', 'BET'].includes(payload && payload.action)) return;
-    mg.secondAct = payload.action;
-    if (mg.secondAct === 'CHECK') {
-      log(`${match.players[mg.second].name}도 체크했습니다 — 패를 공개합니다.`);
-      return showdown();
-    }
-    log(`${match.players[mg.second].name}이 베팅했습니다.`);
-    mg.stage = 'FIRST_RESPOND';
-    broadcastState();
-    return;
-  }
-  if (mg.stage === 'SECOND_RESPOND' && id === mg.second) {
-    if (!['CALL', 'FOLD'].includes(payload && payload.action)) return;
-    mg.secondAct = payload.action;
-    if (mg.secondAct === 'FOLD') {
-      log(`${match.players[mg.second].name}이 폴드했습니다 — ${match.players[mg.first].name}이 패를 보여주지 않고 승리합니다.`);
-      broadcastState();
-      return endMinigame(mg.first);
-    }
-    log(`${match.players[mg.second].name}이 콜했습니다 — 패를 공개합니다.`);
-    return showdown();
-  }
-  if (mg.stage === 'FIRST_RESPOND' && id === mg.first) {
-    if (!['CALL', 'FOLD'].includes(payload && payload.action)) return;
-    mg.finalAct = payload.action;
-    if (mg.finalAct === 'FOLD') {
-      log(`${match.players[mg.first].name}이 폴드했습니다 — ${match.players[mg.second].name}이 패를 보여주지 않고 승리합니다.`);
-      broadcastState();
-      return endMinigame(mg.second);
-    }
-    log(`${match.players[mg.first].name}이 콜했습니다 — 패를 공개합니다.`);
-    return showdown();
-  }
+  log(`패 대결 공개: ${match.players[a].name}=[${mg.arrangement[a].join(',')}] vs ${match.players[b].name}=[${mg.arrangement[b].join(',')}] (${winsA}승:${winsB}승)`);
+  if (winsA === winsB) return endMinigameDraw();
+  return endMinigame(winsA > winsB ? a : b);
 }
 
 // 12) 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵/밀고를 고른다. 결과는 handlePact 아래 참고.
@@ -843,12 +831,9 @@ function doAction(id, kind, payload) {
   if (cell.type == null) return; // 안전장치 — 아직 타입이 정해지지 않은 칸
   resolveOpen(player, row, col, cell);
   match.actionOpens[id] = opens + 1;
-  // 문장을 전부 열어 완성했다면 그 즉시 왕위를 차지한다 — 라운드 진행 중이어도 즉시 종료.
-  // crestTotal은 전반+후반 배치가 모두 끝나야 확정되므로, 0인 동안(예: 전반 셋업 직후에도
-  // 이론상 0일 수는 없지만 방어적으로) 오판하지 않도록 함께 확인한다.
-  if (player.crestTotal > 0 && player.crestOpened >= player.crestTotal) {
-    return endMatch(`${player.name}이(가) 가문의 문장을 완성하여 왕위를 차지했습니다!`, player.id);
-  }
+  // 문장을 전부 모아도 즉시승리는 아니다 — "15라운드까지 다 진행해야 한다"는 피드백에 따라
+  // 완성은 CREST_BONUS 점수만 주고(resolveOpen 안에서 처리), 승부는 여전히 15라운드가 끝난 뒤
+  // 최종 점수 비교(endMatchByScore)로만 가린다.
   checkRoundActionDone();
 }
 
@@ -857,8 +842,12 @@ function resolveOpen(player, row, col, cell) {
   const t = cell.type;
   actionLog(player, `술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
   if (t === 'P') {
-    player.poison += 1;
-    actionLog(player, `독배를 마셨습니다... (해독하지 못하면 게임 종료 시 -${CONFIG.POISON_PENALTY}점)`);
+    // 몇 차(1차/2차) 독인지에 따라 종료 시 감점이 다르지만, 그 사실 자체를 여는 순간 숫자로
+    // 알려주면 몇 차 독인지가 그대로 드러나 버린다(같은 칸 위치라도 1차/2차 어느 쪽이든 될 수
+    // 있어 원래는 구분할 수 없는 정보다) — 그래서 여기서는 구체적인 감점 액수를 밝히지 않고,
+    // 정확한 액수는 게임이 끝났을 때(최종 점수 내역)만 공개한다.
+    if (cell.poisonWave === 2) player.poisonMid += 1; else player.poisonInitial += 1;
+    actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     checkNeutralize(player);
   } else if (t === 'GEM') {
     player.score += CONFIG.GEM_PTS;
@@ -872,14 +861,16 @@ function resolveOpen(player, row, col, cell) {
     actionLog(player, `가문의 문장 조각을 발견했습니다! (지금까지 ${player.crestOpened}개째)`);
     if (player.crestOpened >= player.crestTotal) {
       player.score += CONFIG.CREST_BONUS;
-      actionLog(player, `문장 완성 보너스 +${CONFIG.CREST_BONUS}점!`);
+      actionLog(player, `문장 완성 보너스 +${CONFIG.CREST_BONUS}점! (왕위는 15라운드 종료 후 점수로 가립니다)`);
     }
   }
 }
 
 function checkNeutralize(player) {
-  while (player.poison > 0 && player.antidote >= CONFIG.ANTIDOTE_NEED) {
-    player.poison -= 1;
+  // 해독은 항상 더 비싼(감점이 큰) 2차 독부터 상쇄한다 — 플레이어 입장에서 손해볼 일이 없는
+  // 자동 최적 처리이자, "2차 독이 더 아프다"는 설계 의도를 실제로 살려준다.
+  while (player.antidote >= CONFIG.ANTIDOTE_NEED && (player.poisonMid > 0 || player.poisonInitial > 0)) {
+    if (player.poisonMid > 0) player.poisonMid -= 1; else player.poisonInitial -= 1;
     player.antidote -= CONFIG.ANTIDOTE_NEED;
     actionLog(player, `해독제 ${CONFIG.ANTIDOTE_NEED}개로 독 1개 무효화!`);
   }
@@ -969,16 +960,16 @@ function checkRoundActionDone() {
 function endMatchByScore() {
   const [a, b] = match.order;
   const pa = match.players[a], pb = match.players[b];
-  const finalize = (p) => p.score - p.poison * CONFIG.POISON_PENALTY;
+  const finalize = (p) => p.score - poisonPenaltyTotal(p);
   const fa = finalize(pa), fb = finalize(pb);
   pa.finalScore = fa; pb.finalScore = fb;
   let winner = null, reason;
   if (fa !== fb) {
     winner = fa > fb ? a : b;
-    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 최종 점수 비교 승리 (독배 -${CONFIG.POISON_PENALTY}점 반영)`;
-  } else if (pa.poison !== pb.poison) {
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 최종 점수 비교 승리 (독배 감점 반영)`;
+  } else if (poisonTotal(pa) !== poisonTotal(pb)) {
     // 최종 점수가 완전히 같으면, 무효화하지 못한 독을 더 적게 마신 쪽(더 안전하게 버틴 쪽)이 승리한다.
-    winner = pa.poison < pb.poison ? a : b;
+    winner = poisonTotal(pa) < poisonTotal(pb) ? a : b;
     reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수 동률, 무효화하지 못한 독 개수로 승부 판정`;
   } else {
     reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독 개수 완전 동률(무승부)`;
@@ -1081,9 +1072,13 @@ function buildClientState(forId) {
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
     // 문장의 위치·총 개수는 매치마다 무작위로 정해지는 비공개 정보라 미리 내려주지 않는다 —
-    // 게임이 끝나야(전부 공개되거나, 완성해서 즉시 승리하거나) me/opp.crestTotal이 채워진다.
+    // 게임이 끝나야(전부 공개돼야) me/opp.crestTotal이 채워진다(완성해도 즉시승리는 아니다).
+    // 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/poisonMid —
+    // 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
     me: me && {
-      name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
+      name: me.name, poison: poisonTotal(me), antidote: me.antidote, score: me.score, finalScore: me.finalScore,
+      poisonInitial: match.phase === 'END' ? me.poisonInitial : null,
+      poisonMid: match.phase === 'END' ? me.poisonMid : null,
       crestOpened: me.crestOpened,
       crestTotal: match.phase === 'END' ? me.crestTotal : null,
       room: sanitizeRoom(me.room, match.phase === 'END'),
@@ -1096,7 +1091,7 @@ function buildClientState(forId) {
     // MID_SETUP 동안만은 예외로, 상대 처소의 "이미 열렸는지 여부"만(내용은 여전히 비공개) 알려줘야
     // 중반 독 추가 설치에서 이미 연 칸을 고르지 못하게 화면에서 걸러줄 수 있다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, crestTotal: opp.crestTotal, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, crestTotal: opp.crestTotal, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null }),
     oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
@@ -1149,18 +1144,14 @@ function publicMinigameView(mg, forId) {
     };
   }
   if (mg.type === 'CARD_DUEL') {
-    // 배팅 액션(체크/베팅/콜/폴드) 자체는 원래 포커에서도 공개 정보이므로 그대로 내려주고,
-    // 카드 숫자만 승부가 끝날 때까지(result가 생길 때까지) 비공개로 한다.
-    const role = mine(mg.first) ? 'first' : 'second';
-    const waitingForMe =
-      (mg.stage === 'FIRST_ACT' && role === 'first') ||
-      (mg.stage === 'SECOND_ACT' && role === 'second') ||
-      (mg.stage === 'SECOND_RESPOND' && role === 'second') ||
-      (mg.stage === 'FIRST_RESPOND' && role === 'first');
+    // 내가 제출을 끝냈는지(submitted)와 상대가 제출을 끝냈는지(oppSubmitted)만 진행 상황으로
+    // 알려주고, 실제 배치 내용은 둘 다 제출을 마쳐야(revealed) 공개된다.
+    const mySubmitted = !!mg.arrangement[forId];
+    const oppSubmitted = !!mg.arrangement[otherId(forId)];
     return {
-      role, myCard: mg.cards[forId], stage: mg.stage,
-      firstAct: mg.firstAct, secondAct: mg.secondAct, waitingForMe,
-      revealed: mg.result != null ? { myCard: mg.cards[forId], oppCard: mg.cards[otherId(forId)] } : null,
+      submitted: mySubmitted, oppSubmitted, waitingForMe: !mySubmitted,
+      myArrangement: mg.arrangement[forId] || null,
+      revealed: (mySubmitted && oppSubmitted) ? { mine: mg.arrangement[forId], opp: mg.arrangement[otherId(forId)] } : null,
     };
   }
   if (mg.type === 'PACT') {
@@ -1202,7 +1193,7 @@ function buildAdminMinigameSummary(mg) {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
   };
-  if (type === 'CARD_DUEL') return { 선공: nameOf(mg.first), 후공: nameOf(mg.second), 패: byName(mg.cards), 진행단계: mg.stage, 선공액션: mg.firstAct, 후공액션: mg.secondAct, 선공콜폴드: mg.finalAct };
+  if (type === 'CARD_DUEL') return { 배치현황: byName(mg.arrangement, (v) => v.join(',')) };
   if (type === 'PACT') return { 선택현황: byName(mg.actions) };
   return {};
 }
@@ -1236,7 +1227,7 @@ function buildAdminState() {
       return {
         name: p.name,
         connected: p.connected,
-        poison: p.poison, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
+        poison: poisonTotal(p), poisonInitial: p.poisonInitial, poisonMid: p.poisonMid, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
         crestOpened: p.crestOpened, crestTotal: p.crestTotal,
         opens: match.actionOpens[id] || 0,
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의

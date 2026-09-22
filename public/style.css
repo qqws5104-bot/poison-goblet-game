@@ -313,6 +313,23 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .pinCell.safe { opacity: 0.35; }
 .pinCell.bomb { border-color: var(--crimson-bright); background: rgba(209,66,90,0.22); box-shadow: 0 0 10px rgba(209,66,90,0.6); }
 
+/* 숫자 패 대결 — 1·2·3을 세 자리(①②③)에 배치하는 슬롯, 그리고 공개 후 자리별 승패 표시 */
+.cardDuelSlots { justify-content: center; }
+.cardDuelSlot {
+  width: 54px; height: 54px; display:flex; align-items:center; justify-content:center;
+  background: #1a0f14; border: 1px dashed var(--border); border-radius: 4px;
+  font-size: 11px; color: var(--muted); text-align: center;
+}
+.cardDuelSlot.filled { border-style: solid; border-color: var(--gold); color: var(--gold); font-size: 24px; font-weight: bold; }
+.cardDuelReveal { justify-content: center; }
+.cardDuelLane {
+  width: 64px; padding: 8px 4px; text-align:center; border-radius: 4px; font-weight: bold;
+  background: #1a0f14; border: 1px solid var(--border);
+}
+.cardDuelLane.win { border-color: var(--gold); color: var(--gold); box-shadow: 0 0 8px rgba(201,162,75,0.5); }
+.cardDuelLane.lose { border-color: var(--crimson-bright); color: var(--crimson-bright); opacity: 0.75; }
+.cardDuelLane.tie { color: var(--muted); }
+
 /* 방금 끝난 미니게임의 승패/정답 요약 배너 */
 .mgRecapPanel { border: 1px solid var(--border-bright); }
 .mgRecapPanel .desc { font-size: 15px; color: var(--gold); font-weight: 700; }

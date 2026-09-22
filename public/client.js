@@ -30,6 +30,8 @@ let activeTab = 'GAME'; // '게임 화면'(미니게임/본행동/보상)과 '6�
 let lastPhaseForTab = null; // 페이즈가 "바뀌는 순간"에만 자동으로 알맞은 탭으로 전환하기 위한 추적값
 let roundOpenSummary = []; // 이번 라운드에 내가 새로 연 칸들 [{row,col,type}] — ROUND_DONE 화면에서 "방금 뭘 열었는지" 보여주는 용도
 let roundOpenSummaryRound = null; // roundOpenSummary가 몇 라운드 것인지(라운드가 바뀌면 초기화)
+let cardDuelPicks = []; // 숫자 패 대결: 지금까지 클릭한 순서대로 쌓인 배치([1~3의 순열이 되기 전까지])
+let cardDuelRound = null; // cardDuelPicks가 몇 라운드 것인지(라운드가 바뀌면 초기화)
 // 미니게임 모달이 "이미 떠 있던 채로" 다시 그려지는 것인지 추적 — render()는 상대의 움직임이나
 // 내 입력 하나하나에도 화면 전체를 다시 그리므로, 매번 모달을 새로 마운트하면 등장 애니메이션이
 // (본인이 만든 변화가 아니어도) 계속 재생되어 화면이 깜빡이는 것처럼 보인다. 직전 프레임에도
@@ -349,6 +351,8 @@ socket.on('state', (state) => {
     lastPhaseForTab = null;
     roundOpenSummary = [];
     roundOpenSummaryRound = null;
+    cardDuelPicks = [];
+    cardDuelRound = null;
     lastState = state; // 새 매치 프레임은 diff 기준으로 삼지 않는다
     render(state);
     return;
@@ -925,10 +929,22 @@ function renderStatsPanel(state) {
   return p;
 }
 
+// END 화면에서만 쓰는, 1차/2차 독 감점 내역을 풀어 보여주는 문구 — 게임 중에는 poisonInitial/
+// poisonMid 자체가 서버에서 null로 내려오므로(END에서만 채워짐) 자연히 이 함수도 END에서만 호출된다.
+function poisonBreakdownText(p, config) {
+  if (p.poisonInitial == null || p.poisonMid == null) {
+    return `술잔 점수 ${p.score} − 독 ${p.poison}개`;
+  }
+  const initPenalty = p.poisonInitial * config.POISON_PENALTY;
+  const midPenalty = p.poisonMid * config.POISON_PENALTY_MID;
+  return `술잔 점수 ${p.score} − 1차 독 ${p.poisonInitial}개×${config.POISON_PENALTY}(-${initPenalty}) − 2차 독 ${p.poisonMid}개×${config.POISON_PENALTY_MID}(-${midPenalty})`;
+}
+
 function statGrid(p) {
   const g = el('div', 'statgrid');
-  // 독이 2개 이상 쌓이면(종료 시 -3점/개라 승부에 크게 영향) 위험하다는 긴장감을 시각적으로 준다.
-  g.appendChild(statBox('poison', p.poison, `독 (종료 시 -${lastState.config.POISON_PENALTY}점/개)`, p.poison >= 2));
+  // 독이 2개 이상 쌓이면 위험하다는 긴장감을 시각적으로 준다. 1차/2차 독의 정확한 감점 액수는
+  // 서로 달라서(2차가 더 아픔) 게임이 끝나야 공개되므로, 여기서는 구체적 숫자 없이 뭉뚱그려 표시한다.
+  g.appendChild(statBox('poison', p.poison, '독 (종료 시 감점 — 2차 독이 더 아픔)', p.poison >= 2));
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
   if (p.crestOpened != null) {
@@ -1224,27 +1240,50 @@ function renderMinigamePanel(state) {
       },
     }));
   } else if (type === 'CARD_DUEL') {
-    box.appendChild(el('div', 'desc', '서로 다른 숫자 패(1~3)를 몰래 받습니다. 선공이 체크(그냥 넘김)나 베팅을 고르면, 상대가 반응합니다 — 베팅에는 콜(패 공개)이나 폴드(즉시 패배)로, 체크에는 체크(바로 공개)나 되받아치는 베팅으로 답할 수 있습니다. 낮은 패로 베팅해 상대를 접게 만들 수도, 높은 패로 체크해서 유인할 수도 있습니다.'));
-    box.appendChild(el('div', 'desc', `내 패: <b>${mg.myCard}</b>`));
-    const CARD_DUEL_ACT_LABEL = { CHECK: '체크', BET: '베팅', CALL: '콜', FOLD: '폴드' };
-    const historyLines = [];
-    if (mg.firstAct) historyLines.push(`선공 ${CARD_DUEL_ACT_LABEL[mg.firstAct]}`);
-    if (mg.secondAct) historyLines.push(`후공 ${CARD_DUEL_ACT_LABEL[mg.secondAct]}`);
-    if (historyLines.length) box.appendChild(el('div', 'hint', historyLines.join(' → ')));
-    if (mg.waitingForMe) {
-      const row = el('div', 'btnRow');
-      const isFirstDecision = mg.stage === 'FIRST_ACT' || mg.stage === 'SECOND_ACT';
-      const options = isFirstDecision ? [['CHECK', '체크'], ['BET', '베팅']] : [['CALL', '콜 (패 공개)'], ['FOLD', '폴드 (포기)']];
-      options.forEach(([key, label]) => {
-        const b = el('button', 'action', label);
-        b.onclick = () => socket.emit('minigame:move', { action: key });
-        row.appendChild(b);
-      });
-      box.appendChild(row);
-    } else {
-      box.appendChild(el('div', 'hint', '상대의 선택을 기다리는 중...'));
+    box.appendChild(el('div', 'desc', '카드 1·2·3을 원하는 순서로 클릭해 세 자리(①②③)에 하나씩 배치하세요. 셋 다 놓으면 상대와 동시에 공개되어, 같은 자리끼리 숫자를 비교합니다 — 더 큰 숫자를 낸 자리가 많은 쪽이 승리(자리 승수가 같으면 무승부)입니다.'));
+    if (cardDuelRound !== state.round) { cardDuelRound = state.round; cardDuelPicks = []; }
+    // 새로고침 등으로 로컬 상태가 날아갔어도, 이미 서버에 제출된 배치가 있으면 그걸 그대로 보여준다.
+    if (mg.myArrangement && cardDuelPicks.length !== 3) cardDuelPicks = mg.myArrangement.slice();
+
+    const slotsRow = el('div', 'btnRow cardDuelSlots');
+    for (let i = 0; i < 3; i++) {
+      const val = cardDuelPicks[i];
+      slotsRow.appendChild(el('div', 'cardDuelSlot' + (val ? ' filled' : ''), val ? String(val) : `${i + 1}번째 자리`));
     }
-    if (mg.revealed) box.appendChild(el('div', 'hint', `공개된 상대 패: ${mg.revealed.oppCard}`));
+    box.appendChild(slotsRow);
+
+    if (!mg.submitted) {
+      const numRow = el('div', 'btnRow');
+      [1, 2, 3].forEach((n) => {
+        const used = cardDuelPicks.includes(n);
+        const b = el('button', 'action', String(n));
+        b.disabled = used || cardDuelPicks.length >= 3;
+        b.onclick = () => {
+          cardDuelPicks.push(n);
+          if (cardDuelPicks.length === 3) socket.emit('minigame:move', { arrangement: cardDuelPicks.slice() });
+          render(lastState);
+        };
+        numRow.appendChild(b);
+      });
+      box.appendChild(numRow);
+      if (cardDuelPicks.length > 0) {
+        const undo = el('button', 'action', '다시 배치');
+        undo.onclick = () => { cardDuelPicks = []; render(lastState); };
+        box.appendChild(undo);
+      }
+    } else {
+      box.appendChild(el('div', 'hint', mg.oppSubmitted ? '결과 공개 중...' : '상대의 배치를 기다리는 중...'));
+    }
+
+    if (mg.revealed) {
+      const revealRow = el('div', 'btnRow cardDuelReveal');
+      for (let i = 0; i < 3; i++) {
+        const myN = mg.revealed.mine[i], oppN = mg.revealed.opp[i];
+        const cls = myN > oppN ? 'win' : myN < oppN ? 'lose' : 'tie';
+        revealRow.appendChild(el('div', 'cardDuelLane ' + cls, `${myN} : ${oppN}`));
+      }
+      box.appendChild(revealRow);
+    }
   } else if (type === 'PACT') {
     box.appendChild(el('div', 'desc', '상대와 동시에 몰래 침묵/밀고를 고릅니다.<br/>둘 다 침묵하면 서로 처소 정보를 하나씩 나눠 받고, 한쪽만 밀고하면 그 쪽이 미니게임 승리로 정찰 보상을 직접 고르며, 둘 다 밀고하면 아무도 얻는 것이 없습니다.'));
     const row = el('div', 'btnRow');
@@ -1338,7 +1377,7 @@ function renderEnd(state) {
   const mine = el('div', 'col');
   mine.appendChild(el('h3', null, `내 처소 최종 (${state.me.name})`));
   mine.appendChild(statGrid(state.me));
-  mine.appendChild(el('p', 'hint', `최종 점수: <b>${state.me.finalScore}</b> (술잔 점수 ${state.me.score} − 독 ${state.me.poison}개 × ${state.config.POISON_PENALTY})`));
+  mine.appendChild(el('p', 'hint', `최종 점수: <b>${state.me.finalScore}</b> (${poisonBreakdownText(state.me, state.config)})`));
   mine.appendChild(buildRevealGrid(state.me.room, crestFamilyFor(state.me.name)));
   cols.appendChild(mine);
 
@@ -1346,7 +1385,7 @@ function renderEnd(state) {
     const opp = el('div', 'col');
     opp.appendChild(el('h3', null, `상대 처소 최종 (${state.opp.name})`));
     opp.appendChild(statGrid(state.opp));
-    opp.appendChild(el('p', 'hint', `최종 점수: <b>${state.opp.finalScore}</b> (술잔 점수 ${state.opp.score} − 독 ${state.opp.poison}개 × ${state.config.POISON_PENALTY})`));
+    opp.appendChild(el('p', 'hint', `최종 점수: <b>${state.opp.finalScore}</b> (${poisonBreakdownText(state.opp, state.config)})`));
     if (state.opp.room) opp.appendChild(buildRevealGrid(state.opp.room, crestFamilyFor(state.opp.name)));
     cols.appendChild(opp);
   }

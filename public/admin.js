@@ -109,7 +109,7 @@ function renderPlayerCard(p) {
   const card = el('div', 'panel adminCard adminCol');
   const openedCount = p.room.flat().filter((c) => c.opened).length;
   card.appendChild(el('h2', null,
-    `${p.name} <span class="adminSub">${p.connected ? '' : '(연결 끊김) '}독${p.poison} · 해독${p.antidote} · 점수${p.score} · 연 칸 ${openedCount}/36</span>`));
+    `${p.name} <span class="adminSub">${p.connected ? '' : '(연결 끊김) '}독${p.poison}(1차${p.poisonInitial}·2차${p.poisonMid}) · 해독${p.antidote} · 점수${p.score} · 연 칸 ${openedCount}/36</span>`));
 
   const prev = prevOpened[p.name] || [];
   const nowOpened = [];
