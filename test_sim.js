@@ -1,8 +1,11 @@
-// 자동 스모크 테스트: 두 개의 소켓 클라이언트로 셋업 + 10라운드를 진행시켜
-// 서버 로직이 예외 없이 동작하는지, 10종 미니게임과 보상 시스템이 모두 정상 동작하는지 확인한다.
+// 자동 스모크 테스트: 두 개의 소켓 클라이언트로 전반 셋업(6×4) + 8라운드 + 중반 재설치
+// (독 추가 2칸 + 6×6 확장) + 후반 7라운드, 총 15라운드를 진행시켜 서버 로직이 예외 없이
+// 동작하는지, 11종 미니게임과 보상 시스템, 동적 문장(가문의 문장) 즉시승리 조건이 모두
+// 정상 동작하는지 확인한다.
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
+const ROWS_FIRST_HALF = 4; // server CONFIG.ROWS_FIRST_HALF와 동일하게 맞춰둔다(봇의 좌표 선택용)
 let states = { A: null, B: null };
 let done = false;
 
@@ -18,6 +21,7 @@ function connectPlayer(label) {
 }
 
 let setupSent = { A: false, B: false };
+let midSetupSent = { A: false, B: false };
 let minigamesSeen = new Set();
 let rewardsSeen = new Set();
 let rewardUsed = { A: false, B: false };
@@ -53,10 +57,34 @@ function onState(label, socket, s) {
   }
   if (s.phase === 'SETUP' && !setupSent[label]) {
     setupSent[label] = true;
-    // 가문의 문장(row 2~4 & col 2~4)에는 독을 심을 수 없으므로, 그 블록을 피한 좌표를 쓴다.
-    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 5, col: 0 }] : [{ row: 5, col: 5 }, { row: 0, col: 5 }, { row: 5, col: 1 }];
+    // 전반전은 6×4(row 0~3)만 활성화되어 있으므로, 그 범위 안에서 3칸을 고른다.
+    // 문장은 더 이상 고정 위치가 아니라 독 배치 이후 서버가 알아서 랜덤 배치하므로
+    // 클라이언트가 피해야 할 금지 구역이 없다.
+    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 3, col: 0 }] : [{ row: 3, col: 5 }, { row: 0, col: 5 }, { row: 2, col: 1 }];
     setTimeout(() => socket.emit('setup:confirm', { cells }), 50 + Math.random() * 100);
   }
+
+  if (s.phase === 'MID_SETUP' && !midSetupSent[label]) {
+    if (s.oppOpenedMask) {
+      midSetupSent[label] = true;
+      // 상대 처소(36칸) 중 아직 열리지 않은 칸(마스크가 false)만 골라 POISON_MID개를 지정한다.
+      const candidates = [];
+      const mask = s.oppOpenedMask;
+      for (let r = 0; r < mask.length; r++) {
+        for (let c = 0; c < mask[r].length; c++) {
+          if (!mask[r][c]) candidates.push({ row: r, col: c });
+        }
+      }
+      const picked = [];
+      const pool = candidates.slice();
+      const need = (s.config && s.config.POISON_MID) || 2;
+      for (let i = 0; i < need && pool.length; i++) {
+        picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+      setTimeout(() => socket.emit('mid_setup:confirm', { cells: picked }), 50 + Math.random() * 100);
+    }
+  }
+  if (s.phase !== 'MID_SETUP') midSetupSent[label] = false;
 
   // 보상은 더 이상 라운드 시작 전에 자동 배정되지 않고, 미니게임 승자가 후보 중 하나를 직접
   // 고른 뒤에야 종류(myReward.type)가 정해진다 — 그 시점에 관측된 종류를 집계한다.
@@ -86,11 +114,12 @@ function onState(label, socket, s) {
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    // 미니게임이 8종→11종으로 늘었지만 ROUNDS(10)가 그대로라, 한 매치에 11종이 다 나오는 건
-    // 애초에 불가능하다(최대 10개까지만 뽑힘) — 그래도 매치마다 다른 조합이 섞여 나온다.
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/11, max possible per match = min(11,ROUNDS))`);
+    // 미니게임이 11종으로 늘었고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 11종이 전부
+    // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/11, max possible per match = min(11,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
-    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore });
+    // 문장 총량은 게임 끝까지 본인도 모르는 값이었다가, END 시점에만 me.crestTotal로 공개된다.
+    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, crestOpened: s.me.crestOpened, crestTotal: s.me.crestTotal });
     setTimeout(() => process.exit(0), 200);
   }
 }
@@ -106,7 +135,12 @@ function useReward(label, socket, s) {
   const r = s.myReward;
   if (!r || !r.type || r.used) return;
   if (r.type === 'FLASH_ALL') return socket.emit('reward:use', {});
-  if (r.type === 'PEEK_CELL') return socket.emit('reward:use', { row: Math.floor(Math.random() * 6), col: Math.floor(Math.random() * 6) });
+  if (r.type === 'PEEK_CELL') {
+    // 잠긴(아직 후반부로 확장되지 않은) 줄은 서버가 조용히 무시하므로, 실제로 열려 있는 줄
+    // 범위 안에서만 좌표를 고른다 — 전반전엔 row 0~3, 후반전엔 row 0~5.
+    const activeRows = (s.me.room[ROWS_FIRST_HALF] && s.me.room[ROWS_FIRST_HALF][0].locked) ? ROWS_FIRST_HALF : 6;
+    return socket.emit('reward:use', { row: Math.floor(Math.random() * activeRows), col: Math.floor(Math.random() * 6) });
+  }
   if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
     // 이제 줄 번호는 고르지 않고 종류만 고르면 6개 줄 전부의 개수를 한 번에 알려준다.
     const cats = Object.keys(s.clueCatNames);
@@ -201,7 +235,7 @@ function doRandomAction(label, socket, s) {
 
 function findUnopened(room) {
   const candidates = [];
-  for (let r = 0; r < room.length; r++) for (let c = 0; c < room[r].length; c++) if (!room[r][c].opened) candidates.push({ row: r, col: c });
+  for (let r = 0; r < room.length; r++) for (let c = 0; c < room[r].length; c++) if (!room[r][c].opened && !room[r][c].locked) candidates.push({ row: r, col: c });
   if (candidates.length === 0) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
@@ -211,7 +245,7 @@ setTimeout(() => connectPlayer('B'), 100);
 
 setTimeout(() => {
   if (!done) {
-    console.error('TIMEOUT: 게임이 300초 내에 끝나지 않았습니다. 마지막 상태:', JSON.stringify({ A: states.A && states.A.phase, B: states.B && states.B.phase }));
+    console.error('TIMEOUT: 게임이 420초 내에 끝나지 않았습니다. 마지막 상태:', JSON.stringify({ A: states.A && states.A.phase, B: states.B && states.B.phase }));
     process.exit(1);
   }
-}, 300000);
+}, 420000);

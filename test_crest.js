@@ -1,14 +1,37 @@
-// 가문의 문장 즉시 승리 조건만 집중적으로 검증하는 스모크 테스트.
-// A는 항상 문장 칸(row2~4,col2~4)만 순서대로 열고, B는 아무 칸이나 무작위로 연다.
-// A가 9칸을 다 열기 전에 라운드가 끝나버리지 않도록, 미니게임은 항상 A가 이기도록 유도한다.
+// 가문의 문장(동적 은닉 크레스트) 스모크 테스트.
+//
+// 예전 버전은 문장이 고정된 3x3 블록(row2~4,col2~4)에 있다는 전제로 그 칸만 순서대로 열었지만,
+// 지금은 "독 배치 이후 남은 칸 중 완전 무작위, 개수(5~6/3~4)도 본인조차 모름" 구조로 바뀌어
+// 그 접근 자체가 성립하지 않는다. 대신 두 플레이어 모두 자기 처소를 처음부터 끝까지 결정론적으로
+// (row-major) 스캔해서 열게 하여, 실제 플레이라면 우연히 순서대로 열어나가다 문장을 전부 찾아내는
+// 상황을 근사한다. 전반 8라운드(16칸) + 후반 7라운드(14칸) = 30/36칸이 열리므로, 1차 문장(전반
+// 24칸 안, 5~6개)은 거의 항상 다 열리고 2차 문장(후반 신규 12칸 안, 3~4개)도 상당수 열린다 —
+// 그래서 실제로 즉시승리(가문의 문장) 조건이 발동하는지, crestTotal이 설계 범위(8~10)를 벗어나지
+// 않는지, 그리고 MID_SETUP 전환이 문제없이 이뤄지는지를 검증한다.
 const { io } = require('socket.io-client');
-const URL = 'http://localhost:3000';
-let done = false;
 
-const CREST = [];
-for (let r = 2; r <= 4; r++) for (let c = 2; c <= 4; c++) CREST.push({ row: r, col: c });
-let crestIdx = 0;
+const URL = 'http://localhost:3000';
+const ROWS_FIRST_HALF = 4;
+let done = false;
+let states = { A: null, B: null };
+
+function connectPlayer(label) {
+  const socket = io(URL, { reconnection: false, forceNew: true });
+  socket.on('connect_error', (e) => console.error(label, 'connect_error', e.message));
+  socket.on('state', (s) => { states[label] = s; onState(label, socket, s); });
+  socket.on('log', ({ msg }) => console.log('[LOG]', msg));
+  socket.on('error', ({ message }) => console.log('[ERR]', label, message));
+  return socket;
+}
+
+let setupSent = { A: false, B: false };
+let midSetupSent = { A: false, B: false };
 let bankCandidates = { A: null, B: null };
+let bankRoundSeen = { A: null, B: null };
+let rewardUsed = { A: false, B: false };
+let rewardChosen = { A: false, B: false };
+let lastRoundLogged = { A: 0, B: 0 };
+
 function allPermutations(n) {
   const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
   const results = [];
@@ -29,109 +52,161 @@ function scoreGuessAgainst(guess, secret) {
   return { strikes, balls };
 }
 
-function connectPlayer(label) {
-  const socket = io(URL, { reconnection: false, forceNew: true });
-  socket.on('state', (s) => onState(label, socket, s));
-  socket.on('log', ({ msg }) => console.log('[LOG]', msg));
-  socket.on('error', ({ message }) => console.log('[ERR]', label, message));
-  return socket;
-}
-
-let setupSent = { A: false, B: false };
-let lastOpensRemaining = { A: null, B: null };
 function onState(label, socket, s) {
+  if (s.round && s.round !== lastRoundLogged[label]) {
+    lastRoundLogged[label] = s.round;
+    console.log(`[STATUS r${s.round}/${s.roundsTotal}] ${label}(${s.me.name}): crestOpened=${s.me.crestOpened} poison=${s.me.poison}`);
+  }
+
   if (s.phase === 'SETUP' && !setupSent[label]) {
     setupSent[label] = true;
-    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 5, col: 0 }] : [{ row: 5, col: 5 }, { row: 0, col: 5 }, { row: 5, col: 1 }];
-    setTimeout(() => socket.emit('setup:confirm', { cells }), 50);
+    const cells = label === 'A' ? [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 3, col: 0 }] : [{ row: 3, col: 5 }, { row: 0, col: 5 }, { row: 2, col: 1 }];
+    setTimeout(() => socket.emit('setup:confirm', { cells }), 50 + Math.random() * 100);
   }
-  if (s.phase === 'ROUND_MINIGAME' && s.minigame) {
-    playMinigame(label, socket, s);
+
+  if (s.phase === 'MID_SETUP' && !midSetupSent[label] && s.oppOpenedMask) {
+    midSetupSent[label] = true;
+    const candidates = [];
+    const mask = s.oppOpenedMask;
+    for (let r = 0; r < mask.length; r++) for (let c = 0; c < mask[r].length; c++) if (!mask[r][c]) candidates.push({ row: r, col: c });
+    const pool = candidates.slice();
+    const picked = [];
+    const need = (s.config && s.config.POISON_MID) || 2;
+    for (let i = 0; i < need && pool.length; i++) picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    setTimeout(() => socket.emit('mid_setup:confirm', { cells: picked }), 50 + Math.random() * 100);
   }
-  // 같은 opensRemaining 값에 대해 중복으로 action:open을 보내면(여러 state 브로드캐스트가
-  // 겹쳐 들어올 때) crestIdx가 실제로 열리지 않은 칸까지 건너뛰어버리므로, 값이 "새로 바뀌었을
-  // 때"만 한 번 행동한다.
-  if (s.phase === 'ROUND_ACTION' && s.isMyTurn && lastOpensRemaining[label] !== s.opensRemaining) {
-    lastOpensRemaining[label] = s.opensRemaining;
-    setTimeout(() => doAction(label, socket, s), 30);
+  if (s.phase !== 'MID_SETUP') midSetupSent[label] = false;
+
+  if (s.phase === 'ROUND_MINIGAME' && s.minigame) playMinigame(label, socket, s);
+
+  if (s.phase === 'ROUND_ACTION' && s.myReward && !s.myReward.type && !s.myReward.used && !rewardChosen[label]) {
+    rewardChosen[label] = true;
+    setTimeout(() => chooseReward(label, socket, s), 30 + Math.random() * 40);
   }
-  if (s.phase !== 'ROUND_ACTION') lastOpensRemaining[label] = null;
-  if (label === 'A' && s.me) console.log(`[STATUS] round=${s.round} phase=${s.phase} A.crestOpened=${s.me.crestOpened}`);
+  if (!(s.myReward && !s.myReward.type)) rewardChosen[label] = false;
+
+  if (s.phase === 'ROUND_ACTION' && s.myReward && s.myReward.type && !s.myReward.used && !rewardUsed[label]) {
+    rewardUsed[label] = true;
+    setTimeout(() => useReward(label, socket, s), 40 + Math.random() * 80);
+  }
+  if (s.phase !== 'ROUND_ACTION' || !s.myReward || !s.myReward.type) rewardUsed[label] = false;
+
+  // doScanAction은 매번 s.me.room을 처음부터 다시 스캔해 "아직 안 연 칸 중 첫 칸"을 고르는
+  // 상태 없는(stateless) 함수라, 같은 state로 여러 번 불려도 안전하다(서버가 이미 열린 칸은
+  // 그냥 무시함) — 그래서 isMyTurn인 동안은 매 state마다 계속 시도해도 된다. 반대로 "opensRemaining이
+  // 바뀔 때만" 시도하던 이전 방식은, 서버가 어떤 이유로든(예: 섬광 정찰 보상을 아직 못 써서) 이번
+  // 시도를 조용히 거절하면 opensRemaining이 영원히 안 바뀌어 다시는 재시도하지 않게 되는 함정이
+  // 있었다 — 실제로 FLASH_ALL 보상을 고른 직후 이 경합으로 게임이 영구 정지하는 문제를 겪었다.
+  if (process.env.DEBUG_CREST && s.phase === 'ROUND_ACTION') {
+    console.log('[DEBUG state]', label, 'isMyTurn=', s.isMyTurn, 'opensRemaining=', s.opensRemaining);
+  }
+  if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
+    setTimeout(() => doScanAction(label, socket, s), 30);
+  }
+
   if (s.phase === 'END' && !done) {
     done = true;
-    console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason, 'me.crestOpened:', s.me.crestOpened);
-    setTimeout(() => process.exit(s.endReason && s.endReason.includes('문장') ? 0 : 1), 200);
-  }
-}
-
-function doAction(label, socket, s) {
-  if (label === 'A') {
-    if (crestIdx < CREST.length) {
-      const target = CREST[crestIdx];
-      crestIdx += 1;
-      return socket.emit('action:open', target);
+    const crestWin = !!(s.endReason && s.endReason.includes('문장'));
+    console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
+    console.log(`final me(${label}): crestOpened=${s.me.crestOpened} crestTotal=${s.me.crestTotal} opp.crestTotal=${s.opp && s.opp.crestTotal}`);
+    // crestTotal은 1차만 반영된 채로 끝났다면 5~6(문장 즉시승리는 전반 중에도 발동할 수 있어
+    // 2차가 더해지기 전일 수 있다), 중반 재설치(2차: 3~4)까지 거쳤다면 기본 8~10이다. 다만
+    // 중반 독 추가 설치가 하필 이미 있던 1차 문장 자리를 "저격"하면 그 조각만큼 crestTotal도
+    // 함께 줄어드므로(POISON_MID=2까지 저격 가능), 하한을 그만큼 더 낮게 잡는다.
+    const totalsOk = [s.me.crestTotal, s.opp && s.opp.crestTotal].every((t) => t == null || (t >= 5 && t <= 10));
+    if (!totalsOk) {
+      console.error('FAIL: crestTotal이 설계 범위(5~10)를 벗어났습니다.', s.me.crestTotal, s.opp && s.opp.crestTotal);
+      setTimeout(() => process.exit(1), 200);
+      return;
     }
-    // 문장을 다 열었는데도 아직 안 끝났다면(이상 상황) 아무 칸이나 연다.
+    console.log(crestWin ? 'PASS: 가문의 문장 즉시승리 조건이 발동했습니다.' : 'PASS(약): 즉시승리는 안 났지만(라운드15 종료 등) crestTotal 범위는 정상입니다.');
+    setTimeout(() => process.exit(0), 200);
   }
-  const target = findUnopened(s.me.room);
-  if (target) socket.emit('action:open', target);
-}
-function findUnopened(room) {
-  const candidates = [];
-  for (let r = 0; r < room.length; r++) for (let c = 0; c < room[r].length; c++) if (!room[r][c].opened) candidates.push({ row: r, col: c });
-  if (candidates.length === 0) return null;
-  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-// A가 항상 이기도록: NIM은 A가 항상 유리하게 크게 채우고 최종에 맞춰 넘기게 하기보다,
-// 가장 간단한 REFLEX/SIGIL류에서 A가 유리하도록 하드코딩하기는 까다로우므로, 대신
-// "미니게임 승패와 무관하게 각자 자기 턴에 자기 처소를 연다"는 본행동 규칙을 활용한다 —
-// 즉 미니게임 승자와 무관하게 A는 매 라운드 자기 몫(OPENS_PER_TURN=2)을 문장칸부터 채운다.
-// 따라서 미니게임은 그냥 무작위로 대응해도 된다.
-let bankRoundSeen = { A: null, B: null };
+function chooseReward(label, socket, s) {
+  const r = s.myReward;
+  if (!r || r.type || !r.choices || !r.choices.length) return;
+  const pick = r.choices[Math.floor(Math.random() * r.choices.length)];
+  socket.emit('reward:choose', { type: pick.type });
+}
+
+function useReward(label, socket, s) {
+  const r = s.myReward;
+  if (!r || !r.type || r.used) return;
+  if (r.type === 'FLASH_ALL') return socket.emit('reward:use', {});
+  if (r.type === 'PEEK_CELL') {
+    const activeRows = (s.me.room[ROWS_FIRST_HALF] && s.me.room[ROWS_FIRST_HALF][0].locked) ? ROWS_FIRST_HALF : 6;
+    return socket.emit('reward:use', { row: Math.floor(Math.random() * activeRows), col: Math.floor(Math.random() * 6) });
+  }
+  if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
+    const cats = Object.keys(s.clueCatNames);
+    const cat = cats[Math.floor(Math.random() * cats.length)];
+    return socket.emit('reward:use', { targetType: cat });
+  }
+}
+
 function playMinigame(label, socket, s) {
   const mg = s.minigame.public;
   const type = s.minigame.type;
   if (type === 'BANK' && bankRoundSeen[label] !== s.round) { bankRoundSeen[label] = s.round; bankCandidates[label] = null; }
   setTimeout(() => {
-    if (type === 'NIM' && mg.myTurn) socket.emit('minigame:move', { n: 1 });
+    if (type === 'NIM' && mg.myTurn) socket.emit('minigame:move', { n: 1 + Math.floor(Math.random() * 3) });
     if (type === 'HAND') {
-      if (mg.role === 'hider' && mg.waitingForMe) socket.emit('minigame:move', { hand: 'L' });
-      if (mg.role === 'guesser' && mg.waitingForMe) socket.emit('minigame:move', { hand: 'L' });
+      if (mg.role === 'hider' && mg.waitingForMe) socket.emit('minigame:move', { hand: Math.random() < 0.5 ? 'L' : 'R' });
+      if (mg.role === 'guesser' && mg.waitingForMe) socket.emit('minigame:move', { hand: Math.random() < 0.5 ? 'L' : 'R' });
     }
     if (type === 'REFLEX' && !mg.myClicked && mg.goFired) socket.emit('minigame:move', { action: 'CLICK' });
     if (type === 'BOMB' && mg.myTurn) socket.emit('minigame:move', { action: 'PASS' });
     if (type === 'PIN' && mg.myTurn) {
       const remaining = mg.pulled.map((p, i) => (p ? null : i)).filter((i) => i != null);
-      if (remaining.length) socket.emit('minigame:move', { action: 'PICK', index: remaining[0] });
+      if (remaining.length) socket.emit('minigame:move', { action: 'PICK', index: remaining[Math.floor(Math.random() * remaining.length)] });
     }
-    if (type === 'SIGIL' && mg.waitingForMe) socket.emit('minigame:move', { pick: label === 'A' ? 'SWORD' : 'SHIELD' });
-    if (type === 'GUESS_COUNT' && mg.myGuess == null) socket.emit('minigame:move', { guess: mg.trueCount });
+    if (type === 'SIGIL' && mg.waitingForMe) socket.emit('minigame:move', { pick: ['SWORD', 'POISON', 'SHIELD'][Math.floor(Math.random() * 3)] });
+    if (type === 'GUESS_COUNT' && mg.myGuess == null) socket.emit('minigame:move', { guess: Math.max(0, mg.trueCount + Math.floor(Math.random() * 3) - 1) });
     if (type === 'BANK') {
-      if (!bankCandidates[label]) bankCandidates[label] = allPermutations(3);
-      const myGuesses = mg.myGuesses || [];
-      if (myGuesses.length) {
-        const last = myGuesses[myGuesses.length - 1];
+      if (!bankCandidates[label]) bankCandidates[label] = allPermutations(mg.digits);
+      if (mg.myGuesses.length) {
+        const last = mg.myGuesses[mg.myGuesses.length - 1];
         bankCandidates[label] = bankCandidates[label].filter((c) => {
           const r = scoreGuessAgainst(last.guess, c);
           return r.strikes === last.strikes && r.balls === last.balls;
         });
       }
-      const pool = bankCandidates[label].length ? bankCandidates[label] : allPermutations(3);
+      const pool = bankCandidates[label].length ? bankCandidates[label] : allPermutations(mg.digits);
       socket.emit('minigame:move', { guess: pool[Math.floor(Math.random() * pool.length)] });
     }
-    if (type === 'BLUFF' && mg.waitingForMe) socket.emit('minigame:move', { stake: 2 });
+    if (type === 'BLUFF' && mg.waitingForMe) socket.emit('minigame:move', { stake: 1 + Math.floor(Math.random() * 3) });
     if (type === 'LIAR_DIE') {
-      if (mg.role === 'declarer' && mg.claim == null) socket.emit('minigame:move', { claim: 'HIGH' });
-      if (mg.role === 'responder' && mg.waitingForMe) socket.emit('minigame:move', { decision: 'TRUST' });
+      if (mg.role === 'declarer' && mg.claim == null) socket.emit('minigame:move', { claim: Math.random() < 0.5 ? 'HIGH' : 'LOW' });
+      if (mg.role === 'responder' && mg.waitingForMe) socket.emit('minigame:move', { decision: Math.random() < 0.5 ? 'TRUST' : 'DOUBT' });
     }
-    if (type === 'GAMBIT' && mg.waitingForMe) socket.emit('minigame:move', { action: 'YIELD' });
-  }, type === 'BOMB' ? 300 : 30);
+    if (type === 'GAMBIT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'PUSH' : 'YIELD' });
+  }, type === 'BOMB' ? 250 + Math.random() * 450 : 20 + Math.random() * 60);
+}
+
+// 자기 처소를 row-major 순서로 처음부터 끝까지 스캔하며 연다 — 문장이 어디 있는지 몰라도
+// 결국 다 훑게 되므로, 실제 플레이에서 "우연히 찾는" 상황을 근사한다.
+function doScanAction(label, socket, s) {
+  const room = s.me.room;
+  for (let r = 0; r < room.length; r++) {
+    for (let c = 0; c < room[r].length; c++) {
+      const cell = room[r][c];
+      if (!cell.opened && !cell.locked) {
+        if (process.env.DEBUG_CREST) console.log('[DEBUG scan]', label, 'emit open', r, c, 'cellType(hidden normally)=', cell.type, 'opensRemaining=', s.opensRemaining);
+        return socket.emit('action:open', { row: r, col: c });
+      }
+    }
+  }
+  if (process.env.DEBUG_CREST) console.log('[DEBUG scan]', label, 'NO CANDIDATE FOUND', 'opensRemaining=', s.opensRemaining, 'phase=', s.phase);
 }
 
 connectPlayer('A');
 setTimeout(() => connectPlayer('B'), 100);
 
 setTimeout(() => {
-  if (!done) { console.error('TIMEOUT'); process.exit(1); }
-}, 120000);
+  if (!done) {
+    console.error('TIMEOUT: 게임이 420초 내에 끝나지 않았습니다. 마지막 상태:', JSON.stringify({ A: states.A && states.A.phase, B: states.B && states.B.phase }));
+    process.exit(1);
+  }
+}, 420000);

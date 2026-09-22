@@ -11,6 +11,7 @@ const logBox = document.getElementById('log');
 
 let lastState = null;
 let setupSelection = []; // [{row,col}]
+let midSetupSelection = []; // 중반 독 추가 설치: [{row,col}]
 let guessCountRound = null;
 let guessCountRevealUntil = 0;
 let guessCountTransitioned = false; // 공개→입력 화면 전환을 딱 한 번만 하기 위한 플래그
@@ -265,7 +266,7 @@ function detectImpacts(prev, next) {
     else if (nextResult === 'draw') impactFor('draw');
   }
   if (prev.me && next.me && Array.isArray(prev.me.room) && Array.isArray(next.me.room)) {
-    let revealed = null; // 우선순위: 독 > 해독제 > 금/은
+    let revealed = null; // 우선순위: 독 > 해독제 > 문장 > 보석
     for (let r = 0; r < next.me.room.length; r++) {
       for (let c = 0; c < next.me.room[r].length; c++) {
         const before = prev.me.room[r] && prev.me.room[r][c];
@@ -273,13 +274,14 @@ function detectImpacts(prev, next) {
         if (before && !before.opened && after.opened) {
           if (after.type === 'P') revealed = 'P';
           else if (after.type === 'A' && revealed !== 'P') revealed = 'A';
-          else if ((after.type === 'G' || after.type === 'S') && !revealed) revealed = 'GS';
+          else if (after.type === 'C' && !revealed) revealed = 'C';
+          else if (after.type === 'GEM' && !revealed) revealed = 'GEM';
         }
       }
     }
     if (revealed === 'P') impactFor('poison');
     else if (revealed === 'A') impactFor('antidote');
-    else if (revealed === 'GS') impactFor('treasure');
+    else if (revealed === 'C' || revealed === 'GEM') impactFor('treasure');
   }
 }
 
@@ -288,6 +290,7 @@ socket.on('state', (state) => {
     // 새 매치 시작(최초 접속 또는 재대전) — 지난 판에서 남은 화면/입력 상태를 전부 초기화
     seenSeq = state.seq;
     setupSelection = [];
+    midSetupSelection = [];
     guessCountRound = null;
     guessCountRevealUntil = 0;
     guessCountTransitioned = false;
@@ -494,19 +497,22 @@ function render(state) {
   app.innerHTML = '';
   if (state.phase === 'LOBBY') return renderLobby(state);
   if (state.phase === 'SETUP_DONE') return renderSetupDone(state);
+  if (state.phase === 'MID_SETUP_DONE') return renderMidSetupDone(state);
   if (state.phase === 'ROUND_DONE') return renderRoundDone(state);
   if (state.phase === 'ROUND_COUNTDOWN') return renderCountdown(state);
   if (state.phase === 'END') return renderEnd(state);
   // "고르기" 화면(APP_ROLE === 'pick')은 4대 분리 모드 전용 — 이 화면이 담당하는 건 오직
-  // "라운드 중 6×6 처소 칸 열기"뿐이다. SETUP(독 설치)과 미니게임은 여전히 "게임" 화면에서
-  // 진행하므로, 그 두 단계에서는 안내 문구만 보여주고 실제 UI는 게임 화면 쪽에만 그린다.
+  // "라운드 중 6×6 처소 칸 열기"뿐이다. SETUP/MID_SETUP(독 설치)과 미니게임은 여전히 "게임"
+  // 화면에서 진행하므로, 그 단계들에서는 안내 문구만 보여주고 실제 UI는 게임 화면 쪽에만 그린다.
   if (APP_ROLE === 'pick') {
     if (state.phase === 'SETUP') return renderPickWaiting('🧪 독 설치는 게임 화면에서 진행합니다.');
+    if (state.phase === 'MID_SETUP') return renderPickWaiting('🧪 중반 독 추가 설치는 게임 화면에서 진행합니다.');
     if (state.phase === 'ROUND_MINIGAME') return renderPickWaiting('🎲 미니게임이 게임 화면에서 진행 중입니다...');
     if (state.phase === 'ROUND_ACTION') return renderPickView(state);
     return renderPickWaiting('대기 중...');
   }
   if (state.phase === 'SETUP') return renderSetup(state);
+  if (state.phase === 'MID_SETUP') return renderMidSetup(state);
   return renderMain(state);
 }
 
@@ -602,44 +608,45 @@ function renderLobby(state) {
 }
 
 // ---------------------------- SETUP ----------------------------
+// 전반은 6×ROWS_FIRST_HALF(기본 4줄 = 24칸)만 사용한다. 가문의 문장은 이 시점엔 아직 어디에도
+// 배치되지 않은 상태다(독을 다 심은 뒤, 서버가 몰래 무작위로 5~6개를 흩뿌린다) — 그래서 이
+// 화면에는 문장 표시가 전혀 없다. 몇 개가 어디에 들어갈지는 두 사람 모두, 심지어 본인조차 모른다.
 function renderSetup(state) {
   const p = el('section', 'panel');
-  p.appendChild(el('h2', null, '셋업 — 상대 왕자의 처소에 독 술잔 3개를 몰래 지정하세요'));
-  p.appendChild(el('p', 'hint', `아래 그리드는 상대(${state.opp ? state.opp.name : '상대'})의 빈 처소입니다. 독을 심을 칸 ${state.config.COUNTS.P}개를 고른 뒤 확정하세요. 확정 후에는 바꿀 수 없습니다. 보라색으로 표시된 가문의 문장 자리에는 독을 심을 수 없습니다.`));
+  p.appendChild(el('h2', null, '셋업 — 상대 왕자의 처소에 독 술잔을 몰래 지정하세요'));
+  p.appendChild(el('p', 'hint', `아래 그리드는 상대(${state.opp ? state.opp.name : '상대'})의 빈 처소(전반 6×${state.config.ROWS_FIRST_HALF}칸)입니다. 독을 심을 칸 ${state.config.POISON_INITIAL}개를 고른 뒤 확정하세요. 확정 후에는 바꿀 수 없습니다. 가문의 문장은 독 설치가 끝난 뒤 무작위 자리에 몰래 흩뿌려지므로, 본인도 어디에 몇 개나 있는지 알 수 없습니다.`));
 
-  const crestSet = new Set((state.crestCells || []).map((c) => c.row + '_' + c.col));
   const already = state.setupDone.me;
   const grid = el('div', 'grid6');
-  for (let r = 0; r < state.config.GRID; r++) {
+  grid.style.gridTemplateRows = `repeat(${state.config.ROWS_FIRST_HALF}, 1fr)`;
+  for (let r = 0; r < state.config.ROWS_FIRST_HALF; r++) {
     for (let c = 0; c < state.config.GRID; c++) {
       const cell = el('div', 'cell');
-      const isCrest = crestSet.has(r + '_' + c);
-      if (isCrest) cell.classList.add('crestSpot');
       const isSel = setupSelection.some((s) => s.row === r && s.col === c);
       if (isSel) cell.classList.add('selected');
-      if (!already && !isCrest) {
+      if (!already) {
         cell.classList.add('pickable');
         cell.onclick = () => {
           const idx = setupSelection.findIndex((s) => s.row === r && s.col === c);
           if (idx >= 0) setupSelection.splice(idx, 1);
-          else if (setupSelection.length < state.config.COUNTS.P) setupSelection.push({ row: r, col: c });
+          else if (setupSelection.length < state.config.POISON_INITIAL) setupSelection.push({ row: r, col: c });
           // 관리자 화면에서 실시간으로 "누가 어디를 찍고 있는지" 보이도록, 확정 전에도 매번 미리보기를 보낸다.
           socket.emit('setup:preview', { cells: setupSelection });
           render(lastState);
         };
       }
-      cell.innerHTML = isSel ? selectionMarkSVG() : (isCrest ? '<span class="crestMark">🐉</span>' : '');
+      cell.innerHTML = isSel ? selectionMarkSVG() : '';
       grid.appendChild(cell);
     }
   }
   p.appendChild(grid);
 
-  const info = el('p', 'hint', `선택됨: ${setupSelection.length} / ${state.config.COUNTS.P}`);
+  const info = el('p', 'hint', `선택됨: ${setupSelection.length} / ${state.config.POISON_INITIAL}`);
   p.appendChild(info);
 
   if (!already) {
     const btn = el('button', 'action primary', '독 설치 확정');
-    btn.disabled = setupSelection.length !== state.config.COUNTS.P;
+    btn.disabled = setupSelection.length !== state.config.POISON_INITIAL;
     btn.onclick = () => socket.emit('setup:confirm', { cells: setupSelection });
     p.appendChild(btn);
   } else {
@@ -649,6 +656,65 @@ function renderSetup(state) {
   const statusP = el('p', 'hint', `나: ${state.setupDone.me ? '완료' : '진행 중'} · 상대: ${state.setupDone.opp ? '완료' : '진행 중'}`);
   p.appendChild(statusP);
 
+  app.appendChild(p);
+}
+
+// ---------------------------- MID_SETUP (전반 종료 → 중반 독 추가 설치) ----------------------------
+// 처소가 6×4에서 6×6으로 확장되는 시점 — 서로 상대 처소에서 "아직 안 연 칸" 중 2곳을 골라
+// 추가로 독을 심는다. 이미 연 칸(내용이 드러난 칸)은 대상이 될 수 없으므로 회색으로 막아둔다.
+function renderMidSetup(state) {
+  const p = el('section', 'panel');
+  p.appendChild(el('h2', null, '중반 재설치 — 처소가 6×6으로 확장됩니다'));
+  p.appendChild(el('p', 'hint', `상대(${state.opp ? state.opp.name : '상대'})의 처소에서 아직 열리지 않은 칸 중 ${state.config.POISON_MID}곳을 골라 독을 추가로 몰래 심으세요. 회색 칸은 상대가 이미 연 칸이라 대상이 될 수 없습니다. 후반에 새로 열리는 문장 조각도 이 배치가 끝난 뒤에 무작위로 흩뿌려집니다.`));
+
+  const openedMask = state.oppOpenedMask || [];
+  const already = state.midSetupDone && state.midSetupDone.me;
+  const grid = el('div', 'grid6');
+  for (let r = 0; r < state.config.ROWS_TOTAL; r++) {
+    for (let c = 0; c < state.config.GRID; c++) {
+      const cell = el('div', 'cell');
+      const isOpened = !!(openedMask[r] && openedMask[r][c]);
+      const isSel = midSetupSelection.some((s) => s.row === r && s.col === c);
+      if (isOpened) cell.classList.add('blockedSpot');
+      if (isSel) cell.classList.add('selected');
+      if (!already && !isOpened) {
+        cell.classList.add('pickable');
+        cell.onclick = () => {
+          const idx = midSetupSelection.findIndex((s) => s.row === r && s.col === c);
+          if (idx >= 0) midSetupSelection.splice(idx, 1);
+          else if (midSetupSelection.length < state.config.POISON_MID) midSetupSelection.push({ row: r, col: c });
+          render(lastState);
+        };
+      }
+      cell.innerHTML = isSel ? selectionMarkSVG() : (isOpened ? '<span class="emptyMark">✕</span>' : '');
+      grid.appendChild(cell);
+    }
+  }
+  p.appendChild(grid);
+
+  const info = el('p', 'hint', `선택됨: ${midSetupSelection.length} / ${state.config.POISON_MID}`);
+  p.appendChild(info);
+
+  if (!already) {
+    const btn = el('button', 'action primary', '중반 독 추가 설치 확정');
+    btn.disabled = midSetupSelection.length !== state.config.POISON_MID;
+    btn.onclick = () => socket.emit('mid_setup:confirm', { cells: midSetupSelection });
+    p.appendChild(btn);
+  } else {
+    p.appendChild(el('p', 'hint', '✅ 설치 완료. 상대방을 기다리는 중...'));
+  }
+
+  const statusP = el('p', 'hint', `나: ${state.midSetupDone && state.midSetupDone.me ? '완료' : '진행 중'} · 상대: ${state.midSetupDone && state.midSetupDone.opp ? '완료' : '진행 중'}`);
+  p.appendChild(statusP);
+
+  app.appendChild(p);
+}
+
+// 중반 재설치(독 추가 + 처소 확장) 완료 안내 — SETUP_DONE/ROUND_DONE과 같은 패턴.
+function renderMidSetupDone(state) {
+  const p = el('section', 'panel center countdownPanel');
+  p.appendChild(el('h2', null, '🏰 처소가 6×6으로 확장되었습니다'));
+  p.appendChild(el('p', 'hint', '잠시 후 후반전이 시작됩니다 — 마음의 준비를 하세요!'));
   app.appendChild(p);
 }
 
@@ -719,7 +785,7 @@ function renderTabBar(state) {
   bar.appendChild(gameBtn);
 
   const roomBtn = el('button', 'tabBtn' + (activeTab === 'ROOM' ? ' active' : ''),
-    '🚪 내 처소 (6×6)' + (needsRoom && activeTab !== 'ROOM' ? '<span class="tabDot"></span>' : ''));
+    `🚪 내 처소 (${roomDimsLabel(state)})` + (needsRoom && activeTab !== 'ROOM' ? '<span class="tabDot"></span>' : ''));
   roomBtn.onclick = () => { activeTab = 'ROOM'; render(lastState); };
   bar.appendChild(roomBtn);
 
@@ -808,8 +874,10 @@ function statGrid(p) {
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
   if (p.crestOpened != null) {
-    const total = lastState.crestTotal || 9;
-    g.appendChild(statBox('crest', `${p.crestOpened}/${total}`, '가문의 문장', p.crestOpened >= total - 2 && p.crestOpened < total));
+    // 총 몇 조각인지는 게임이 끝나기 전까지 비공개(서프라이즈 요소)라, 완성 전에는 분모 없이
+    // 발견한 개수만 보여준다. 서버가 END에서만 crestTotal을 내려준다.
+    const label = p.crestTotal != null ? `${p.crestOpened} / ${p.crestTotal}` : `${p.crestOpened}`;
+    g.appendChild(statBox('crest', label, '가문의 문장 조각'));
   }
   return g;
 }
@@ -820,13 +888,21 @@ function statBox(cls, v, label, danger) {
   return d;
 }
 
+// 전반(6×4)인지 후반(6×6)인지 화면 라벨용으로 판별한다 — state.me.room의 후반 전용 줄이
+// 아직 잠겨 있으면 전반, 아니면 후반으로 본다.
+function roomDimsLabel(state) {
+  const room = state && state.me && state.me.room;
+  const cfg = state && state.config;
+  if (!room || !cfg) return '6×6';
+  const firstLockedRow = room[cfg.ROWS_FIRST_HALF];
+  const stillFirstHalf = firstLockedRow && firstLockedRow[0] && firstLockedRow[0].locked;
+  return stillFirstHalf ? `6×${cfg.ROWS_FIRST_HALF}` : `6×${cfg.ROWS_TOTAL}`;
+}
+
 // 6×6 그리드 하나를 그린다 — "내 처소"(게임 화면·고르기 화면 모두)와 고르기 화면의
 // "상대 처소"(보기 전용) 양쪽에서 재사용하는 공용 빌더.
 // opts.pickMode: 안 연 칸을 클릭 가능하게 할지. opts.onOpen(row,col): 클릭 시 호출.
 // opts.flashRoom: 섬광 정찰(철가방) 오버레이용 배열(내 처소에서만 쓰임).
-function crestSetFromState(state) {
-  return new Set((state.crestCells || []).map((c) => c.row + '_' + c.col));
-}
 function buildRoomGrid(room, opts) {
   opts = opts || {};
   const gridHolder = el('div', 'roomGridHolder');
@@ -835,7 +911,11 @@ function buildRoomGrid(room, opts) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
       const cell = el('div', 'cell');
-      if (data.opened) {
+      if (data.locked) {
+        // 후반에야 열리는 줄 — 전반 동안은 존재 자체를 아직 알 수 없는 잠긴 구역으로 표시한다.
+        cell.classList.add('lockedSpot');
+        cell.innerHTML = '<span class="lockedMark">🔒</span>';
+      } else if (data.opened) {
         cell.classList.add('opened', data.type);
         // 빈 칸(E)은 아이콘이 없어 안 연 칸과 헷갈릴 수 있으므로, 큰 X로 "이미 열어봤음"을 표시한다.
         cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(data.type);
@@ -846,9 +926,8 @@ function buildRoomGrid(room, opts) {
         cell.innerHTML = opts.peekCell.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(opts.peekCell.type);
       } else {
         cell.textContent = '';
-        if (opts.crestSet && opts.crestSet.has(r + '_' + c)) cell.classList.add('crestSpot');
       }
-      if (opts.pickMode && !data.opened) {
+      if (opts.pickMode && !data.opened && !data.locked) {
         cell.classList.add('pickable');
         cell.onclick = () => opts.onOpen(r, c);
       }
@@ -862,7 +941,7 @@ function buildRoomGrid(room, opts) {
 
 function renderMyRoomPanel(state) {
   const p = el('div', 'panel');
-  p.appendChild(el('h2', null, '내 처소 (6×6)'));
+  p.appendChild(el('h2', null, `내 처소 (${roomDimsLabel(state)})`));
   // 4대 분리 모드의 "게임" 화면에서는 각 처소의 실제 상황(그리드·보상 결과 등)을 전혀
   // 보여주지 않는다 — 전부 "고르기" 화면에서만 확인·진행한다.
   if (APP_ROLE === 'game') {
@@ -873,7 +952,7 @@ function renderMyRoomPanel(state) {
   // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
-  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestSet: crestSetFromState(state) }));
+  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
   if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) p.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
   return p;
@@ -899,7 +978,7 @@ function renderPickView(state) {
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
-  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestSet: crestSetFromState(state) }));
+  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
   if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
   else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
@@ -1177,7 +1256,10 @@ function renderRewardPanel(state) {
   } else if (r.type === 'PEEK_CELL') {
     box.appendChild(el('div', 'desc', '내 처소에서 확인할 칸 1개를 고르세요 (아래는 내 처소의 좌표판입니다).'));
     const grid = el('div', 'grid6 pickerGrid');
-    for (let rr = 0; rr < state.config.GRID; rr++) {
+    // 후반에 열리는 줄(잠긴 칸)은 정찰 대상이 될 수 없으므로 좌표판에서도 제외한다.
+    const activeRows = (state.me.room[state.config.ROWS_FIRST_HALF] && state.me.room[state.config.ROWS_FIRST_HALF][0].locked)
+      ? state.config.ROWS_FIRST_HALF : state.config.ROWS_TOTAL;
+    for (let rr = 0; rr < activeRows; rr++) {
       for (let cc = 0; cc < state.config.GRID; cc++) {
         const cell = el('div', 'cell pickable');
         cell.onclick = () => socket.emit('reward:use', { row: rr, col: cc });
@@ -1187,7 +1269,8 @@ function renderRewardPanel(state) {
     box.appendChild(grid);
   } else if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
     const axisLabel = r.type === 'ROW_COUNT' ? '가로줄' : '세로줄';
-    box.appendChild(el('div', 'desc', `내 처소에서 확인할 술잔 종류를 고르세요 — 6개 ${axisLabel} 전부에 몇 개씩 있는지 한 번에 알려드립니다.`));
+    const axisCount = r.type === 'ROW_COUNT' ? state.config.ROWS_TOTAL : state.config.GRID;
+    box.appendChild(el('div', 'desc', `내 처소에서 확인할 술잔 종류를 고르세요 — ${axisCount}개 ${axisLabel} 전부에 몇 개씩 있는지 한 번에 알려드립니다. (아직 열리지 않은 줄은 0으로 표시됩니다)`));
     const typeRow = el('div', 'btnRow');
     Object.keys(state.clueCatNames).forEach((cat) => {
       const b = el('button', 'action', state.clueCatNames[cat]);

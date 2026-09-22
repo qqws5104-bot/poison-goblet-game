@@ -8,20 +8,26 @@ const path = require('path');
 const { Server } = require('socket.io');
 
 const CONFIG = {
-  GRID: 6,
-  // 금/은 두 등급이던 보석을 "보석(GEM) 1종 1점"으로 통합하고, 가문의 문장(CREST) 9칸을
-  // 새로 추가했다 — 문장 칸은 CREST_CELLS 좌표에 고정 배치되며 이 COUNTS 풀에는 포함되지 않는다.
-  COUNTS: { P: 3, GEM: 6, A: 6, E: 12 }, // 독/보석/해독제/빈칸 — 36칸 중 문장 9칸+독 3칸을 뺀 24칸에 배치
+  GRID: 6,                // 가로(열) 칸 수는 항상 6
+  ROWS_FIRST_HALF: 4,     // 전반전에 활성화된 줄 수 — 6×4 = 24칸
+  ROWS_TOTAL: 6,          // 후반전에 확장된 뒤의 전체 줄 수 — 6×6 = 36칸
   GEM_PTS: 1,
   CREST_PTS: 2,           // 문장 칸 1칸을 열 때마다 획득하는 점수
-  CREST_BONUS: 3,         // 문장 9칸을 전부 열어 완성하면 추가로 받는 보너스 점수
+  CREST_BONUS: 3,         // 문장을 전부 열어 완성하면 추가로 받는 보너스 점수
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 독 1개당 -3점
-  ROUNDS: 10,             // 총 라운드 수 (고정)
+  ROUNDS_FIRST_HALF: 8,   // 전반(6×4) 라운드 수
+  ROUNDS_TOTAL: 15,       // 총 라운드 수(전반 8 + 후반 7)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
   ROUND_COUNTDOWN_MS: 3000, // 매 라운드 미니게임 시작 전 3-2-1 카운트다운 길이
   SETUP_DONE_MS: 5000, // 양쪽 다 독배 설치를 마친 직후, 본게임(1라운드 3-2-1 카운트다운)으로 넘어가기 전 대기 시간
+  MID_SETUP_DONE_MS: 5000, // 중반 재설치(독 추가+처소 확장) 완료 직후, 후반 첫 라운드로 넘어가기 전 대기 시간
   ROUND_DONE_MS: 5000, // 매 라운드 양쪽 다 칸을 다 연 직후, 다음 라운드 3-2-1 카운트다운으로 넘어가기 전 대기 시간
+  POISON_INITIAL: 3,      // 전반 셋업: 24칸 중 상대 처소에 몰래 지정하는 독 개수
+  POISON_MID: 2,          // 중반 재설치: 아직 안 연 칸 중 상대 처소에 추가로 지정하는 독 개수
+  CREST_WAVE1_MIN: 5, CREST_WAVE1_MAX: 6, // 전반 24칸 안에 무작위 배치되는 문장 조각 개수(본인도 비공개)
+  CREST_WAVE2_MIN: 3, CREST_WAVE2_MAX: 4, // 후반에 새로 열리는 12칸 안에 무작위 배치되는 문장 조각 개수
+  POOL_GEM_RATIO: 0.25, POOL_A_RATIO: 0.25, // 독·문장을 뺀 나머지 칸을 보석/해독제/빈칸으로 채울 때 비율(빈칸이 나머지)
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MS_MIN: 12000, BOMB_FUSE_MS_MAX: 20000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
@@ -47,8 +53,8 @@ const MINIGAME_NAMES = {
   BLUFF: '허세 배팅', LIAR_DIE: '라이어 주사위', GAMBIT: '황금 잔 허세 대결',
 };
 function buildMinigameOrder() {
-  const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS);
-  while (order.length < CONFIG.ROUNDS) {
+  const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS_TOTAL);
+  while (order.length < CONFIG.ROUNDS_TOTAL) {
     let pick = MINIGAME_SEQUENCE[randInt(0, MINIGAME_SEQUENCE.length - 1)];
     if (pick === order[order.length - 1]) {
       pick = MINIGAME_SEQUENCE.find((t) => t !== pick) || pick;
@@ -59,14 +65,12 @@ function buildMinigameOrder() {
 }
 const SIGIL_BEATS = { SWORD: 'POISON', POISON: 'SHIELD', SHIELD: 'SWORD' };
 const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
-// 가문의 문장(9칸) — 6×6 처소 정중앙 3×3 블록에 고정 배치된다(양쪽 처소 동일 위치).
-// 위치는 두 사람 모두에게 공개된 정보이므로 buildClientState에서 그대로 내려준다.
-const CREST_CELLS = [];
-for (let r = 2; r <= 4; r++) for (let c = 2; c <= 4; c++) CREST_CELLS.push({ row: r, col: c });
-const CREST_SET = new Set(CREST_CELLS.map((p) => p.row + '_' + p.col));
-function isCrestCell(row, col) { return CREST_SET.has(row + '_' + col); }
-const CLUE_CATS = ['P', 'GEM', 'A'];
-const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제' };
+// 가문의 문장은 더 이상 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸 중에서 매치마다
+// 무작위 위치·무작위 개수(전반 5~6개, 후반 3~4개)로 배치되고, 본인도 총 몇 개인지 모른 채
+// 칸을 열다가 우연히 발견한다(finalizeSetup/finalizeMidSetup에서 실제 배치). 위치·개수 모두
+// 비공개 정보이므로 buildClientState는 이를 내려주지 않는다.
+const CLUE_CATS = ['P', 'GEM', 'A', 'C'];
+const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', C: '가문의 문장' };
 const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸', C: '가문의 문장' };
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
@@ -104,11 +108,13 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 // ------------------------------ 상태 ---------------------------------------
+// 처소는 항상 6×ROWS_TOTAL(6×6=36칸) 배열로 만들되, 후반에 확장되는 아래쪽 줄들은
+// locked:true로 시작해 전반 동안은 열 수도, 보이지도 않는다(finalizeMidSetup에서 잠금 해제).
 function makeRoom() {
   const cells = [];
-  for (let r = 0; r < CONFIG.GRID; r++) {
+  for (let r = 0; r < CONFIG.ROWS_TOTAL; r++) {
     const row = [];
-    for (let c = 0; c < CONFIG.GRID; c++) row.push({ type: null, opened: false, cluedType: null, cluedNote: null });
+    for (let c = 0; c < CONFIG.GRID; c++) row.push({ type: null, opened: false, locked: r >= CONFIG.ROWS_FIRST_HALF, cluedType: null, cluedNote: null });
     cells.push(row);
   }
   return cells;
@@ -117,25 +123,47 @@ function newPlayer(id, name) {
   return {
     id, name, room: makeRoom(),
     poison: 0, antidote: 0, score: 0, finalScore: null,
-    crestOpened: 0, // 자기 처소에서 연 문장 칸 개수(0~9) — 9가 되면 즉시 승리
+    crestOpened: 0, // 자기 처소에서 연 문장 칸 개수
+    crestTotal: 0,  // 문장 조각 총 개수 — 전반(finalizeSetup)+후반(finalizeMidSetup) 배치가 끝나야 확정되고,
+                     // 완성 전까지는 본인에게도 공개하지 않는다(비공개 서프라이즈 요소).
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
     rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
   };
 }
+// 남은(타입이 아직 null인) 칸들을 보석/해독제/빈칸으로 비율대로 채운다 — 전반 풀 채우기와
+// 후반 풀 채우기 양쪽에서 재사용한다.
+function fillPoolProportional(room, cells) {
+  const n = cells.length;
+  if (n === 0) return;
+  const gemN = Math.round(n * CONFIG.POOL_GEM_RATIO);
+  const antN = Math.round(n * CONFIG.POOL_A_RATIO);
+  const emptyN = Math.max(0, n - gemN - antN);
+  const pool = shuffle([
+    ...Array(gemN).fill('GEM'),
+    ...Array(antN).fill('A'),
+    ...Array(emptyN).fill('E'),
+  ]);
+  cells.forEach(({ row, col }, i) => { room[row][col].type = pool[i]; });
+}
+function pickRandomCells(cells, n) { return shuffle(cells).slice(0, Math.max(0, Math.min(n, cells.length))); }
 let matchSeq = 0;
 function freshMatch() {
   matchSeq += 1;
   return {
     seq: matchSeq, // 새 매치(재대전 포함)마다 증가 — 클라이언트가 화면/입력 상태를 리셋하는 신호로 사용
-    phase: 'LOBBY', // LOBBY, SETUP, SETUP_DONE, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, ROUND_DONE, END
+    // LOBBY, SETUP, SETUP_DONE, ROUND_COUNTDOWN, ROUND_MINIGAME, ROUND_ACTION, ROUND_DONE,
+    // MID_SETUP(전반 종료 후 독 추가 설치), MID_SETUP_DONE, END
+    phase: 'LOBBY',
     players: {}, order: [],
     setupSelections: {},
     setupPreview: {}, // 확정 전 실시간 선택 상태 — 관리자 화면 전용(상대 플레이어에게는 절대 내려주지 않음)
+    midSetupSelections: {}, // 중반 독 추가 설치(각자 상대 처소에 2칸) 확정 상태
     round: 0, minigameOrder: buildMinigameOrder(), minigame: null,
     countdownEndsAt: null, // ROUND_COUNTDOWN 동안 3-2-1이 몇 시에 끝나는지(클라이언트가 직접 카운트다운을 그리는 기준)
     setupDoneEndsAt: null, // SETUP_DONE(양쪽 독배 설치 완료 안내) 대기가 몇 시에 끝나는지
+    midSetupDoneEndsAt: null, // MID_SETUP_DONE(중반 재설치 완료 안내) 대기가 몇 시에 끝나는지
     pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
@@ -174,39 +202,46 @@ function startSetup() {
   match.phase = 'SETUP';
   match.setupSelections = {};
   match.setupPreview = {};
-  log('셋업 시작 — 상대 왕자의 처소에 독 술잔 3개를 몰래 지정하세요.');
+  log(`셋업 시작 — 상대 왕자의 처소(전반 6×${CONFIG.ROWS_FIRST_HALF}칸)에 독 술잔 ${CONFIG.POISON_INITIAL}개를 몰래 지정하세요.`);
   broadcastState();
 }
 
 function finalizeSetup() {
-  // 가문의 문장(9칸)은 양쪽 처소 모두 정중앙에 고정 배치 — 독 배치보다 먼저 채워둔다.
-  for (const id of match.order) {
-    const room = match.players[id].room;
-    for (const { row, col } of CREST_CELLS) room[row][col].type = 'C';
-  }
-  // setupSelections[id] = 그 플레이어가 "상대방" 방에 지정한 독 좌표 3개(문장 칸은 이미 제외됨)
+  // 1) 독 배치 — setupSelections[id] = 그 플레이어가 "상대방" 처소(전반 24칸 안)에 지정한 좌표.
   for (const id of match.order) {
     const victim = otherId(id);
     const poisonCells = match.setupSelections[id];
     const room = match.players[victim].room;
     for (const { row, col } of poisonCells) room[row][col].type = 'P';
   }
-  // 나머지 24칸(문장 9·독 3을 뺀 칸)에 보석6·해독제6·빈칸12 랜덤 배치
+  // 2) 가문의 문장 1차 배치 — 독이 아닌 전반 24칸 중 무작위 5~6개. 매치·플레이어마다 독립적으로
+  //    무작위라 몇 개가 들어갔는지는 본인도 모른다(칸을 열어보며 우연히 발견하는 서프라이즈).
   for (const id of match.order) {
-    const room = match.players[id].room;
-    const pool = shuffle([
-      ...Array(CONFIG.COUNTS.GEM).fill('GEM'),
-      ...Array(CONFIG.COUNTS.A).fill('A'),
-      ...Array(CONFIG.COUNTS.E).fill('E'),
-    ]);
-    let k = 0;
-    for (let r = 0; r < CONFIG.GRID; r++) {
+    const player = match.players[id];
+    const room = player.room;
+    const candidates = [];
+    for (let r = 0; r < CONFIG.ROWS_FIRST_HALF; r++) {
       for (let c = 0; c < CONFIG.GRID; c++) {
-        if (room[r][c].type === null) room[r][c].type = pool[k++];
+        if (room[r][c].type === null) candidates.push({ row: r, col: c });
       }
     }
+    const crestCount = randInt(CONFIG.CREST_WAVE1_MIN, CONFIG.CREST_WAVE1_MAX);
+    const chosen = pickRandomCells(candidates, crestCount);
+    for (const { row, col } of chosen) room[row][col].type = 'C';
+    player.crestTotal += chosen.length;
   }
-  log(`양쪽 처소 구성 완료. 총 ${CONFIG.ROUNDS}라운드의 본게임을 시작합니다.`);
+  // 3) 나머지 전반 칸(독·문장을 뺀 칸)을 보석/해독제/빈칸으로 비율대로 채운다.
+  for (const id of match.order) {
+    const room = match.players[id].room;
+    const remaining = [];
+    for (let r = 0; r < CONFIG.ROWS_FIRST_HALF; r++) {
+      for (let c = 0; c < CONFIG.GRID; c++) {
+        if (room[r][c].type === null) remaining.push({ row: r, col: c });
+      }
+    }
+    fillPoolProportional(room, remaining);
+  }
+  log(`양쪽 처소(전반 6×${CONFIG.ROWS_FIRST_HALF}) 구성 완료. 총 ${CONFIG.ROUNDS_TOTAL}라운드(전반 ${CONFIG.ROUNDS_FIRST_HALF}·후반 ${CONFIG.ROUNDS_TOTAL - CONFIG.ROUNDS_FIRST_HALF})의 본게임을 시작합니다.`);
   // "선택하자마자 바로 게임으로 넘어가서 상황 인지가 어렵다"는 피드백 — 독배 설치가 끝났다는 걸
   // 잠깐 보여준 뒤(SETUP_DONE, 5초)에야 원래 있던 1라운드 3-2-1 카운트다운(startRound)으로 넘어간다.
   match.phase = 'SETUP_DONE';
@@ -220,6 +255,78 @@ function finalizeSetup() {
     match.round = 0;
     startRound();
   }, CONFIG.SETUP_DONE_MS);
+}
+
+// ------------------------------ 중반 재설치(처소 확장) ------------------------
+// 전반(8라운드)이 끝나면 처소가 6×4(24칸)에서 6×6(36칸)으로 확장되고, 서로의 처소에 독을
+// 2개씩 추가로 몰래 심는다 — 대상은 "아직 안 연 칸"(옛 24칸의 남은 칸 + 새로 열리는 12칸
+// 전부)이라, 상대가 모르고 고른 자리가 하필 이미 정해져 있던 문장 조각이었을 수도 있다.
+function startMidSetup() {
+  match.phase = 'MID_SETUP';
+  match.midSetupSelections = {};
+  log(`전반 종료 — 처소가 6×${CONFIG.ROWS_TOTAL}으로 확장됩니다. 상대 왕자의 아직 열리지 않은 칸 중 ${CONFIG.POISON_MID}곳에 독을 추가로 몰래 지정하세요.`);
+  broadcastState();
+}
+
+function finalizeMidSetup() {
+  // 1) 확장되는 12칸의 잠금을 먼저 해제한다(아직 타입은 null인 채로).
+  for (const id of match.order) {
+    const room = match.players[id].room;
+    for (let r = CONFIG.ROWS_FIRST_HALF; r < CONFIG.ROWS_TOTAL; r++) {
+      for (let c = 0; c < CONFIG.GRID; c++) room[r][c].locked = false;
+    }
+  }
+  // 2) 중반 독 배치 — 안 연 칸(옛 칸이든 새 칸이든) 중 상대가 고른 자리를 그대로 독으로 덮어쓴다.
+  //    하필 그 자리가 이미 정해져 있던 1차 문장 조각이었다면("문장 저격"), 그 조각은 독으로
+  //    사라지는 대신 crestTotal에서도 함께 빼줘야 한다 — 안 그러면 실제 처소에는 문장이
+  //    crestTotal개보다 적게 남는데도 목표치는 그대로라, 그 라운드부터는 아무리 다 찾아도
+  //    "문장 완성 즉시승리"를 영영 달성할 수 없는 상태가 되어버린다.
+  for (const id of match.order) {
+    const victim = otherId(id);
+    const victimPlayer = match.players[victim];
+    const cells = match.midSetupSelections[id] || [];
+    const room = victimPlayer.room;
+    for (const { row, col } of cells) {
+      if (room[row][col].type === 'C') victimPlayer.crestTotal -= 1;
+      room[row][col].type = 'P';
+    }
+  }
+  // 3) 가문의 문장 2차 배치 — 새로 열린 12칸 중, 방금 독이 되지 않은 칸에서만 무작위 3~4개.
+  for (const id of match.order) {
+    const player = match.players[id];
+    const room = player.room;
+    const candidates = [];
+    for (let r = CONFIG.ROWS_FIRST_HALF; r < CONFIG.ROWS_TOTAL; r++) {
+      for (let c = 0; c < CONFIG.GRID; c++) {
+        if (room[r][c].type === null) candidates.push({ row: r, col: c });
+      }
+    }
+    const crestCount = randInt(CONFIG.CREST_WAVE2_MIN, CONFIG.CREST_WAVE2_MAX);
+    const chosen = pickRandomCells(candidates, crestCount);
+    for (const { row, col } of chosen) room[row][col].type = 'C';
+    player.crestTotal += chosen.length;
+  }
+  // 4) 새 12칸 중 아직 안 정해진 나머지를 보석/해독제/빈칸으로 채운다(옛 24칸은 이미 다 채워져 있음).
+  for (const id of match.order) {
+    const room = match.players[id].room;
+    const remaining = [];
+    for (let r = CONFIG.ROWS_FIRST_HALF; r < CONFIG.ROWS_TOTAL; r++) {
+      for (let c = 0; c < CONFIG.GRID; c++) {
+        if (room[r][c].type === null) remaining.push({ row: r, col: c });
+      }
+    }
+    fillPoolProportional(room, remaining);
+  }
+  log(`중반 독 추가 설치 및 처소 확장 완료 — 후반 ${CONFIG.ROUNDS_TOTAL - CONFIG.ROUNDS_FIRST_HALF}라운드를 시작합니다.`);
+  match.phase = 'MID_SETUP_DONE';
+  match.midSetupDoneEndsAt = Date.now() + CONFIG.MID_SETUP_DONE_MS;
+  const seqAtMidDone = match.seq;
+  broadcastState();
+  setTimeout(() => {
+    if (match.seq !== seqAtMidDone || match.phase !== 'MID_SETUP_DONE') return;
+    match.midSetupDoneEndsAt = null;
+    startRound();
+  }, CONFIG.MID_SETUP_DONE_MS);
 }
 
 // ------------------------------ 라운드 / 미니게임 ----------------------------
@@ -236,7 +343,7 @@ function startRound() {
   match.countdownEndsAt = Date.now() + CONFIG.ROUND_COUNTDOWN_MS;
   const type = match.minigameOrder[match.round - 1];
   const roundAtCountdown = match.round;
-  log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 준비 : 미니게임 [${MINIGAME_NAMES[type]}] — 곧 시작합니다 ---`);
+  log(`--- ${match.round}/${CONFIG.ROUNDS_TOTAL}라운드 준비 : 미니게임 [${MINIGAME_NAMES[type]}] — 곧 시작합니다 ---`);
   broadcastState();
   setTimeout(() => {
     // 재대전 등으로 매치가 이미 다른 상태로 넘어갔다면 낡은 타이머이므로 무시한다.
@@ -244,7 +351,7 @@ function startRound() {
     match.phase = 'ROUND_MINIGAME';
     match.countdownEndsAt = null;
     match.minigame = initMinigame(type, match.round);
-    log(`--- ${match.round}/${CONFIG.ROUNDS}라운드 시작 : 미니게임 [${MINIGAME_NAMES[type]}] ---`);
+    log(`--- ${match.round}/${CONFIG.ROUNDS_TOTAL}라운드 시작 : 미니게임 [${MINIGAME_NAMES[type]}] ---`);
     broadcastState();
   }, CONFIG.ROUND_COUNTDOWN_MS);
 }
@@ -660,13 +767,17 @@ function doAction(id, kind, payload) {
   if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 몫을 다 열었음
   const player = match.players[id];
   const { row, col } = payload;
-  if (row == null || col == null || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
+  if (row == null || col == null || row < 0 || row >= CONFIG.ROWS_TOTAL || col < 0 || col >= CONFIG.GRID) return;
   const cell = player.room[row][col];
+  if (cell.locked) return; // 아직 후반에 열리지 않은(전반에는 존재하지 않는) 칸
   if (cell.opened) return;
+  if (cell.type == null) return; // 안전장치 — 아직 타입이 정해지지 않은 칸
   resolveOpen(player, row, col, cell);
   match.actionOpens[id] = opens + 1;
-  // 문장 9칸을 전부 열어 완성했다면 그 즉시 왕위를 차지한다 — 라운드 진행 중이어도 즉시 종료.
-  if (player.crestOpened >= CREST_CELLS.length) {
+  // 문장을 전부 열어 완성했다면 그 즉시 왕위를 차지한다 — 라운드 진행 중이어도 즉시 종료.
+  // crestTotal은 전반+후반 배치가 모두 끝나야 확정되므로, 0인 동안(예: 전반 셋업 직후에도
+  // 이론상 0일 수는 없지만 방어적으로) 오판하지 않도록 함께 확인한다.
+  if (player.crestTotal > 0 && player.crestOpened >= player.crestTotal) {
     return endMatch(`${player.name}이(가) 가문의 문장을 완성하여 왕위를 차지했습니다!`, player.id);
   }
   checkRoundActionDone();
@@ -688,8 +799,9 @@ function resolveOpen(player, row, col, cell) {
   } else if (t === 'C') {
     player.crestOpened += 1;
     player.score += CONFIG.CREST_PTS;
-    actionLog(player, `가문의 문장 한 조각 획득! (${player.crestOpened}/${CREST_CELLS.length})`);
-    if (player.crestOpened >= CREST_CELLS.length) {
+    // 총 몇 조각인지는 본인에게도 비공개이므로 분모 없이 발견 개수만 남긴다.
+    actionLog(player, `가문의 문장 조각을 발견했습니다! (지금까지 ${player.crestOpened}개째)`);
+    if (player.crestOpened >= player.crestTotal) {
       player.score += CONFIG.CREST_BONUS;
       actionLog(player, `문장 완성 보너스 +${CONFIG.CREST_BONUS}점!`);
     }
@@ -719,7 +831,8 @@ function handleRewardUse(id, payload) {
   // (섬광 정찰은 직접 사용하는 게 아니라 endMinigame()에서 무작위 시점에 자동 발동된다.)
   if (pr.type === 'PEEK_CELL') {
     const row = Number(payload.row), col = Number(payload.col);
-    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.GRID || col < 0 || col >= CONFIG.GRID) return;
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.ROWS_TOTAL || col < 0 || col >= CONFIG.GRID) return;
+    if (player.room[row][col].locked) return; // 아직 후반에 열리지 않은 칸은 정찰 대상이 될 수 없다
     pr.used = true;
     player.rewardUses.PEEK_CELL = (player.rewardUses.PEEK_CELL || 0) + 1;
     const type = player.room[row][col].type;
@@ -736,12 +849,17 @@ function handleRewardUse(id, payload) {
     if (!CLUE_CATS.includes(targetType)) return;
     pr.used = true;
     player.rewardUses[pr.type] = (player.rewardUses[pr.type] || 0) + 1;
+    // 가로줄(row) 개수는 전반/후반에 따라 4개 또는 6개로 달라지지만, 세로줄(col)은 늘 6개다.
+    // 아직 잠긴(후반에 열리는) 줄은 타입이 없어 자연히 0으로 집계된다.
+    const rowN = CONFIG.ROWS_TOTAL, colN = CONFIG.GRID;
+    const outerN = axis === 'row' ? rowN : colN;
+    const innerN = axis === 'row' ? colN : rowN;
     const counts = [];
-    for (let idx = 0; idx < CONFIG.GRID; idx++) {
+    for (let idx = 0; idx < outerN; idx++) {
       let count = 0;
-      for (let i = 0; i < CONFIG.GRID; i++) {
+      for (let i = 0; i < innerN; i++) {
         const cell = axis === 'row' ? player.room[idx][i] : player.room[i][idx];
-        if (cell.type === targetType) count += 1;
+        if (!cell.locked && cell.type === targetType) count += 1;
       }
       counts.push(count);
     }
@@ -761,7 +879,10 @@ function checkRoundActionDone() {
   if (match.phase !== 'ROUND_ACTION') return;
   const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN);
   if (!allDone) return;
-  if (match.round >= CONFIG.ROUNDS) return endMatchByScore();
+  if (match.round >= CONFIG.ROUNDS_TOTAL) return endMatchByScore();
+  // 전반 마지막 라운드가 끝나면 다음 라운드로 바로 넘어가지 않고, 처소 확장 + 중반 독 추가
+  // 설치(MID_SETUP)를 먼저 거친다.
+  if (match.round === CONFIG.ROUNDS_FIRST_HALF) return startMidSetup();
   // "칸을 다 열자마자 바로 다음 라운드로 넘어가서 상황 인지가 어렵다"는 피드백 — SETUP_DONE과
   // 같은 패턴으로, 이번 라운드가 끝났다는 걸 5초간 보여준 뒤에야 다음 라운드 3-2-1 카운트다운으로
   // 넘어간다. 마지막 라운드(위의 endMatchByScore 분기)는 "다음 라운드"가 없으므로 대상이 아니다.
@@ -785,13 +906,13 @@ function endMatchByScore() {
   let winner = null, reason;
   if (fa !== fb) {
     winner = fa > fb ? a : b;
-    reason = `${CONFIG.ROUNDS}라운드 종료 — 최종 점수 비교 승리 (독배 -${CONFIG.POISON_PENALTY}점 반영)`;
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 최종 점수 비교 승리 (독배 -${CONFIG.POISON_PENALTY}점 반영)`;
   } else if (pa.poison !== pb.poison) {
     // 최종 점수가 완전히 같으면, 무효화하지 못한 독을 더 적게 마신 쪽(더 안전하게 버틴 쪽)이 승리한다.
     winner = pa.poison < pb.poison ? a : b;
-    reason = `${CONFIG.ROUNDS}라운드 종료 — 점수 동률, 무효화하지 못한 독 개수로 승부 판정`;
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수 동률, 무효화하지 못한 독 개수로 승부 판정`;
   } else {
-    reason = `${CONFIG.ROUNDS}라운드 종료 — 점수·독 개수 완전 동률(무승부)`;
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독 개수 완전 동률(무승부)`;
   }
   endMatch(reason, winner);
 }
@@ -841,6 +962,7 @@ function buildClientState(forId) {
   const sanitizeRoom = (room, revealAll) =>
     room.map((row) => row.map((cell) => ({
       opened: cell.opened,
+      locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
     })));
@@ -850,7 +972,8 @@ function buildClientState(forId) {
     seq: match.seq,
     phase: match.phase,
     round: match.round,
-    roundsTotal: CONFIG.ROUNDS,
+    roundsTotal: CONFIG.ROUNDS_TOTAL,
+    roundsFirstHalf: CONFIG.ROUNDS_FIRST_HALF,
     minigame: match.minigame && {
       type: match.minigame.type,
       name: MINIGAME_NAMES[match.minigame.type],
@@ -886,11 +1009,12 @@ function buildClientState(forId) {
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
-    crestCells: CREST_CELLS, // 문장 9칸의 좌표 — 위치 자체는 양쪽 모두에게 공개된 정보
-    crestTotal: CREST_CELLS.length,
+    // 문장의 위치·총 개수는 매치마다 무작위로 정해지는 비공개 정보라 미리 내려주지 않는다 —
+    // 게임이 끝나야(전부 공개되거나, 완성해서 즉시 승리하거나) me/opp.crestTotal이 채워진다.
     me: me && {
       name: me.name, poison: me.poison, antidote: me.antidote, score: me.score, finalScore: me.finalScore,
       crestOpened: me.crestOpened,
+      crestTotal: match.phase === 'END' ? me.crestTotal : null,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
@@ -898,10 +1022,14 @@ function buildClientState(forId) {
     // (콘솔로 훔쳐보기 방지). 4대 분리 모드에서도 "고르기" 화면은 이제 본인 처소만 보여주므로,
     // 레거시 2인 모드와 동일하게 상대 처소는 계속 비공개다 — "서로 뭘 골랐는지"는 화면을
     // 소프트웨어로 합쳐 보여주는 대신, 컴퓨터를 마주보게 배치하는 물리적 방식으로 해결한다.
+    // MID_SETUP 동안만은 예외로, 상대 처소의 "이미 열렸는지 여부"만(내용은 여전히 비공개) 알려줘야
+    // 중반 독 추가 설치에서 이미 연 칸을 고르지 못하게 화면에서 걸러줄 수 있다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      ? { name: opp.name, poison: opp.poison, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, crestTotal: opp.crestTotal, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null }),
+    oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
+    midSetupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.midSetupSelections[id]; return acc; }, {}),
     winner: match.winner ? (match.winner === forId ? 'me' : 'opp') : (match.phase === 'END' ? 'draw' : null),
     endReason: match.endReason,
     rematchReady: { me: !!match.rematchReady[forId], opp: !!match.rematchReady[otherId(forId)] },
@@ -1015,7 +1143,7 @@ function buildAdminState() {
   return {
     phase: match.phase,
     round: match.round,
-    roundsTotal: CONFIG.ROUNDS,
+    roundsTotal: CONFIG.ROUNDS_TOTAL,
     minigame: match.minigame ? {
       type: match.minigame.type,
       name: MINIGAME_NAMES[match.minigame.type],
@@ -1026,17 +1154,22 @@ function buildAdminState() {
       confirmed: !!match.setupSelections[id],
       cells: match.setupSelections[id] || match.setupPreview[id] || [],
     })) : null,
+    midSetupPreview: match.phase === 'MID_SETUP' ? match.order.map((id) => ({
+      name: match.players[id].name,
+      confirmed: !!match.midSetupSelections[id],
+      cells: match.midSetupSelections[id] || [],
+    })) : null,
     players: match.order.map((id) => {
       const p = match.players[id];
       return {
         name: p.name,
         connected: p.connected,
         poison: p.poison, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
-        crestOpened: p.crestOpened, crestTotal: CREST_CELLS.length,
+        crestOpened: p.crestOpened, crestTotal: p.crestTotal,
         opens: match.actionOpens[id] || 0,
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
-        room: p.room.map((row) => row.map((cell) => ({ type: cell.opened ? cell.type : null, opened: cell.opened }))),
+        room: p.room.map((row) => row.map((cell) => ({ type: cell.opened ? cell.type : null, opened: cell.opened, locked: cell.locked }))),
       };
     }),
   };
@@ -1108,16 +1241,14 @@ io.on('connection', (socket) => {
   socket.on('setup:confirm', (payload) => {
     if (match.phase !== 'SETUP') return;
     const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
-    if (cells.length !== CONFIG.COUNTS.P) return socket.emit('error', { message: `정확히 ${CONFIG.COUNTS.P}칸을 선택해야 합니다.` });
+    if (cells.length !== CONFIG.POISON_INITIAL) return socket.emit('error', { message: `정확히 ${CONFIG.POISON_INITIAL}칸을 선택해야 합니다.` });
     const seen = new Set();
     for (const cell of cells) {
-      if (cell.row < 0 || cell.row >= CONFIG.GRID || cell.col < 0 || cell.col >= CONFIG.GRID)
+      if (cell.row < 0 || cell.row >= CONFIG.ROWS_FIRST_HALF || cell.col < 0 || cell.col >= CONFIG.GRID)
         return socket.emit('error', { message: '유효하지 않은 좌표입니다.' });
-      if (isCrestCell(cell.row, cell.col))
-        return socket.emit('error', { message: '가문의 문장 자리에는 독을 설치할 수 없습니다.' });
       seen.add(cell.row + '_' + cell.col);
     }
-    if (seen.size !== CONFIG.COUNTS.P) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
+    if (seen.size !== CONFIG.POISON_INITIAL) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
     match.setupSelections[slot] = cells;
     delete match.setupPreview[slot];
     log(`${match.players[slot].name} 독 설치 완료`);
@@ -1130,9 +1261,33 @@ io.on('connection', (socket) => {
   socket.on('setup:preview', (payload) => {
     if (match.phase !== 'SETUP') return;
     const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
-    const valid = cells.filter((cell) => cell && cell.row >= 0 && cell.row < CONFIG.GRID && cell.col >= 0 && cell.col < CONFIG.GRID);
+    const valid = cells.filter((cell) => cell && cell.row >= 0 && cell.row < CONFIG.ROWS_FIRST_HALF && cell.col >= 0 && cell.col < CONFIG.GRID);
     match.setupPreview[slot] = valid;
     broadcastAdminState();
+  });
+
+  // 중반 독 추가 설치 — 대상은 상대 처소에서 "아직 안 연 칸"(옛 24칸의 남은 칸 + 새로 열리는
+  // 12칸 전부) 중 아무 곳이나. 이미 연 칸은 내용이 이미 드러나 있어 대상이 될 수 없다.
+  socket.on('mid_setup:confirm', (payload) => {
+    if (match.phase !== 'MID_SETUP') return;
+    const victimId = otherId(slot);
+    const victimRoom = victimId && match.players[victimId] && match.players[victimId].room;
+    if (!victimRoom) return;
+    const cells = Array.isArray(payload && payload.cells) ? payload.cells : [];
+    if (cells.length !== CONFIG.POISON_MID) return socket.emit('error', { message: `정확히 ${CONFIG.POISON_MID}칸을 선택해야 합니다.` });
+    const seen = new Set();
+    for (const cell of cells) {
+      if (cell.row < 0 || cell.row >= CONFIG.ROWS_TOTAL || cell.col < 0 || cell.col >= CONFIG.GRID)
+        return socket.emit('error', { message: '유효하지 않은 좌표입니다.' });
+      if (victimRoom[cell.row][cell.col].opened)
+        return socket.emit('error', { message: '이미 연 칸에는 독을 심을 수 없습니다.' });
+      seen.add(cell.row + '_' + cell.col);
+    }
+    if (seen.size !== CONFIG.POISON_MID) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
+    match.midSetupSelections[slot] = cells;
+    log(`${match.players[slot].name} 중반 독 추가 설치 완료`);
+    broadcastState();
+    if (match.order.every((id) => match.midSetupSelections[id])) finalizeMidSetup();
   });
 
   socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));

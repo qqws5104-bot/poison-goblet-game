@@ -201,9 +201,13 @@ button { font-family: inherit; cursor: pointer; }
 .stat.score .v { color: var(--gold); }
 .stat.crest .v { color: #b98be0; font-size: 17px; }
 
-/* 가문의 문장 자리 — 아직 열지 않았어도 위치 자체는 공개 정보이므로 은은하게 표시한다 */
-.cell.crestSpot { outline: 1.5px solid rgba(185,139,224,0.55); outline-offset: -1.5px; }
-.crestMark { font-size: 16px; opacity: 0.65; }
+/* 아직 후반부가 열리지 않아 잠겨 있는 칸 — 6x4에서 6x6으로 확장되기 전까지 표시된다 */
+.cell.lockedSpot { background: #100a0d; border-style: dashed; cursor: not-allowed; opacity: 0.55; }
+.lockedMark { font-size: 20px; opacity: 0.5; }
+
+/* 중반부 독 심기: 상대가 이미 연 칸이라 더 이상 노릴 수 없는 칸 */
+.cell.blockedSpot { background: #150c10; opacity: 0.4; cursor: not-allowed; }
+.cell.blockedSpot:hover { border-color: var(--border); box-shadow: none; }
 
 .btnRow { display:flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 button.action {
