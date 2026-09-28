@@ -12,11 +12,19 @@ const CONFIG = {
   ROWS_FIRST_HALF: 4,     // 전반전에 활성화된 줄 수 — 6×4 = 24칸
   ROWS_TOTAL: 6,          // 후반전에 확장된 뒤의 전체 줄 수 — 6×6 = 36칸
   GEM_PTS: 1,
-  CREST_PTS: 2,           // 문장 칸 1칸을 열 때마다 획득하는 점수
-  CREST_BONUS: 3,         // 문장을 전부 열어 완성하면 추가로 받는 보너스 점수
+  CREST_PTS: 1,           // 문장 조각 1개를 "발견"(칸을 여는 순간)할 때 즉시 획득하는 점수
+  // 가문의 문장 확장판 — 문장이 더 이상 "하나의 큰 그림"이 아니라, 2x2(4조각)짜리 세트 3개로
+  // 나뉜다(총 12조각). 조각을 찾는 것(칸 열기)과 조립하는 것(조립 구역에 배치)이 서로 다른
+  // 행동으로 분리되어, 매 라운드 2번의 행동을 "열기"와 "조립" 사이에서 나눠 써야 한다.
+  CREST_SET_COUNT: 3,     // 문장 세트 개수
+  CREST_SET_SIZE: 4,      // 세트 하나당 조각 수(2x2 고정) — 다시 뺄 수 없다
+  CREST_TOTAL: 12,        // = CREST_SET_COUNT * CREST_SET_SIZE
+  CREST_ZONES: 2,         // 동시에 진행 가능한 조립 구역 수(3세트인데 구역은 2개뿐이라 우선순위 고민이 생김) —
+                           // 구역이 4/4로 완성되면 즉시 비워져 다음 세트를 받을 수 있다(한 번에 최대 2개 진행 중).
+  CREST_SET_BONUS: 3,     // 그 세트를 "상대보다 먼저" 완성한 사람만 받는 보너스(세트별로 딱 한 번, 최대 3세트 x 3점)
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
-  POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -3점
-  POISON_PENALTY_MID: 5,  // 종료 시, 무효화되지 않은 "2차(중반 재설치)" 독 1개당 -5점 — 후반에 심는
+  POISON_PENALTY: 2,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -2점
+  POISON_PENALTY_MID: 3,  // 종료 시, 무효화되지 않은 "2차(중반 재설치)" 독 1개당 -3점 — 후반에 심는
                            // 독이 더 아파야 중반 재설치가 실제로 위협적으로 느껴진다는 피드백. 해독은
                            // (checkNeutralize에서) 항상 더 비싼 2차 독부터 자동으로 상쇄된다.
   ROUNDS_FIRST_HALF: 8,   // 전반(6×4) 라운드 수
@@ -28,10 +36,9 @@ const CONFIG = {
   ROUND_DONE_MS: 5000, // 매 라운드 양쪽 다 칸을 다 연 직후, 다음 라운드 3-2-1 카운트다운으로 넘어가기 전 대기 시간
   POISON_INITIAL: 3,      // 전반 셋업: 24칸 중 상대 처소에 몰래 지정하는 독 개수
   POISON_MID: 2,          // 중반 재설치: 아직 안 연 칸 중 상대 처소에 추가로 지정하는 독 개수
-  CREST_TOTAL: 9, // 가문의 문장 조각 총 개수 — 3x3 이미지 한 장을 조각내는 구조라 항상 정확히 9개로 고정
-  CREST_WAVE1_MIN: 5, CREST_WAVE1_MAX: 6, // 전반 24칸 안에 무작위 배치되는 1차 조각 개수(본인도 비공개) — 나머지(9-이 값)는 후반에 배치
-  // CREST_WAVE2는 더 이상 독립적으로 무작위가 아니다 — 총량이 9로 고정됐으므로 후반 배치 개수는
-  // finalizeMidSetup()에서 CREST_TOTAL - player.crestWave1Count로 계산한다(위 1차 개수의 나머지).
+  CREST_WAVE1_MIN: 7, CREST_WAVE1_MAX: 8, // 전반 24칸 안에 무작위 배치되는 1차 조각 개수(본인도 비공개) — 나머지(12-이 값)는 후반에 배치
+  // CREST_WAVE2는 독립적으로 무작위가 아니다 — 총량이 CREST_TOTAL(12)로 고정이므로 후반 배치
+  // 개수는 finalizeMidSetup()에서 CREST_TOTAL - player.crestWave1Count로 계산한다(1차의 나머지).
   POOL_GEM_RATIO: 0.25, POOL_A_RATIO: 0.25, // 독·문장을 뺀 나머지 칸을 보석/해독제/빈칸으로 채울 때 비율(빈칸이 나머지)
   NIM_LIMIT_MIN: 12, NIM_LIMIT_MAX: 20, // 독배 채우기: 이 숫자(매판 무작위)에 도달/초과시키면 그 사람이 패배
   BOMB_FUSE_MS_MIN: 12000, BOMB_FUSE_MS_MAX: 20000, // 폭탄 눈치 넘기기: 실시간(ms) 퓨즈 — 이 시간 후 터짐
@@ -41,10 +48,6 @@ const CONFIG = {
   REWARD_FLASH_MS_MIN: 0, REWARD_FLASH_MS_MAX: 10000, // 섬광 정찰 보상: 획득 후 이 구간(ms) 안의 무작위 순간에 자동 발동
   REWARD_FLASH_REVEAL_MS: 300, // 섬광 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
   REWARD_USE_LIMIT: 3, // 보상 종류별로 한 사람이 실제로 사용할 수 있는 최대 횟수
-  ROW_COL_REWARD_EARLY_ROUNDS: 3, // 세로줄/가로줄 정찰 보상은 "아직 안 연 칸"의 내용까지 그대로
-  // 알려주는 강력한 정보라, 각 절반(전반/후반)이 시작된 지 이 라운드 수 이내에는 보상 후보에서
-  // 아예 제외한다("초반 라운드에는 안 연 칸 정보를 알려주지 말자"는 피드백). 후반(중반 재설치
-  // 이후)도 새로 12칸이 열리는 순간이라 다시 "초반"으로 취급해 동일하게 적용한다.
 };
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
@@ -88,19 +91,22 @@ function buildMinigameOrder() {
 }
 const SIGIL_BEATS = { SWORD: 'POISON', POISON: 'SHIELD', SHIELD: 'SWORD' };
 const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
-// 가문의 문장은 더 이상 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸 중에서 매치마다
-// 무작위 위치·무작위 개수(전반 5~6개, 후반 3~4개)로 배치되고, 본인도 총 몇 개인지 모른 채
-// 칸을 열다가 우연히 발견한다(finalizeSetup/finalizeMidSetup에서 실제 배치). 위치·개수 모두
-// 비공개 정보이므로 buildClientState는 이를 내려주지 않는다.
+// 가문의 문장은 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸 중에서 매치마다 무작위 위치로
+// 배치되고(전반 7~8조각, 후반 4~5조각), 본인도 어디 있는지 모른 채 칸을 열다가 우연히 발견한다
+// (finalizeSetup/finalizeMidSetup에서 실제 배치). 다만 "총 몇 세트, 세트당 몇 조각"이라는
+// 구조 자체는 더 이상 비공개가 아니다(CREST_SET_COUNT=3, CREST_SET_SIZE=4로 고정) — 실제
+// 조립 UI를 보여줘야 하는 이상 세트 구조를 숨길 이유가 없다. 위치만 여전히 비공개 정보다.
 const CLUE_CATS = ['P', 'GEM', 'A', 'C'];
 const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', C: '가문의 문장' };
 const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸', C: '가문의 문장' };
+// 문장 세트 3개 — 각각 실제 문장 그림(그리핀/사자/드래곤)을 2x2로 잘라 쓴다.
+const CREST_SET_NAMES = { 1: '그리핀 문장', 2: '사자 문장', 3: '드래곤 문장' };
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
   FLASH_ALL: '철가방 정찰 — 무작위 순간, 내 처소 전체가 뚜껑처럼 확 열렸다가 저절로 잠깐 드러남',
   PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
-  ROW_COUNT: '가로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 가로줄 전부에 몇 개씩 있는지 확인',
+  ROW_COUNT: '가로줄 정찰 — 내 처소에서 종류 하나를 고르면, 현재 열려 있는 가로줄 전부에 몇 개씩 있는지 확인',
   COL_COUNT: '세로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 세로줄 전부에 몇 개씩 있는지 확인',
 };
 
@@ -148,15 +154,19 @@ function newPlayer(id, name) {
     // 독은 언제 심어졌는지(1차/2차)에 따라 종료 시 감점이 다르므로 따로 센다 — 합계가 필요한
     // 곳(화면에 늘 보이는 총 독 개수 등)은 poisonTotal(player)로 구한다.
     poisonInitial: 0, poisonMid: 0, antidote: 0, score: 0, finalScore: null,
-    crestOpened: 0, // 자기 처소에서 연 문장 칸 개수
-    crestTotal: 0,  // 실제로 처소에 배치된 문장 조각 개수 — 기본은 CREST_TOTAL(9)이지만 중반 저격으로
-                     // 줄어들 수 있다. 전반(finalizeSetup)+후반(finalizeMidSetup) 배치가 끝나야 확정되고,
-                     // 완성 전까지는 본인에게도 공개하지 않는다(비공개 서프라이즈 요소).
-    crestWave1Count: 0, // 1차(전반)에 배치된 조각 개수 — 2차(후반) 배치 개수(9-이 값)를 계산하는 데 쓰임
-    // 문장 이미지를 3x3=9조각으로 잘라 쓰므로, 조각 번호(1~9) 9개를 무작위 순서로 섞어뒀다가
-    // 칸에 배치되는 순서대로 하나씩 소비한다 — 그래야 9칸이 전부 열렸을 때 정확히 9개 조각이
-    // 정확히 1번씩 나온다(위치가 무작위라 어느 조각이 먼저 나올지는 매치마다 다름).
-    crestPieceOrder: shuffle([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    crestOpened: 0, // 자기 처소에서 연 문장 조각 칸 개수(발견 즉시 CREST_PTS를 받는다)
+    crestWave1Count: 0, // 1차(전반)에 배치된 조각 개수 — 2차(후반) 배치 개수(CREST_TOTAL-이 값)를 계산하는 데 쓰임
+    // 문장 조각(crestId 1~3, piecePos 1~4)을 12개 섞어뒀다가, 칸에 배치되는 순서대로 하나씩
+    // 소비한다 — 그래야 12칸이 전부 열렸을 때 세트별로 정확히 4조각(1~4번)이 1번씩 나온다.
+    crestPieceOrder: shuffle(
+      Array.from({ length: CONFIG.CREST_SET_COUNT }, (_, si) => si + 1)
+        .flatMap((crestId) => Array.from({ length: CONFIG.CREST_SET_SIZE }, (_, pi) => ({ crestId, piecePos: pi + 1 })))
+    ),
+    heldPieces: [], // 칸을 열어 "발견"했지만 아직 조립 구역에 "배치"하지 않은 조각들 — {crestId, piecePos}
+    // 조립 구역(총 CREST_ZONES개) — 세트 하나가 4/4로 완성되면 즉시 비워져 다음 세트를 받을 수 있다.
+    zones: Array.from({ length: CONFIG.CREST_ZONES }, () => ({ crestId: null, pieces: [] })),
+    crestSetsCompleted: [], // 본인이 직접 완성한 세트 번호들(보너스를 받았는지와 무관하게 기록)
+    crestSniped: [], // 중반 재설치로 상대가 저격해 영영 잃어버린 조각들 — {crestId, piecePos}
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
@@ -198,6 +208,10 @@ function freshMatch() {
     pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
+    // 문장 세트(1~3)별로 "누가 먼저 완성했는지" — 매치 전체에서 세트당 딱 한 번만 채워지고,
+    // 그 사람만 CREST_SET_BONUS를 받는다. 두 플레이어 모두 각자 완성은 가능하지만 두 번째로
+    // 완성한 쪽은 보너스가 없다.
+    crestFirstFinisher: { 1: null, 2: null, 3: null },
     rematchReady: {},
     log: [], winner: null, endReason: null,
     // 4대 분리 모드(/game/A, /pick/A, /game/B, /pick/B로 접속) 여부 — 이 모드일 때만 처소 열기
@@ -247,7 +261,7 @@ function finalizeSetup() {
     const room = match.players[victim].room;
     for (const { row, col } of poisonCells) { room[row][col].type = 'P'; room[row][col].poisonWave = 1; }
   }
-  // 2) 가문의 문장 1차 배치 — 독이 아닌 전반 24칸 중 무작위 5~6개. 매치·플레이어마다 독립적으로
+  // 2) 가문의 문장 1차 배치 — 독이 아닌 전반 24칸 중 무작위 개수. 매치·플레이어마다 독립적으로
   //    무작위라 몇 개가 들어갔는지는 본인도 모른다(칸을 열어보며 우연히 발견하는 서프라이즈).
   for (const id of match.order) {
     const player = match.players[id];
@@ -262,9 +276,10 @@ function finalizeSetup() {
     const chosen = pickRandomCells(candidates, crestCount);
     chosen.forEach(({ row, col }, i) => {
       room[row][col].type = 'C';
-      room[row][col].piece = player.crestPieceOrder[i]; // 1차분: 섞어둔 조각 번호의 앞쪽부터 소비
+      const piece = player.crestPieceOrder[i]; // 1차분: 섞어둔 조각 순서의 앞쪽부터 소비
+      room[row][col].crestId = piece.crestId;
+      room[row][col].piecePos = piece.piecePos;
     });
-    player.crestTotal += chosen.length;
     player.crestWave1Count = chosen.length;
   }
   // 3) 나머지 전반 칸(독·문장을 뺀 칸)을 보석/해독제/빈칸으로 비율대로 채운다.
@@ -317,22 +332,22 @@ function finalizeMidSetup() {
   //    이 2차 독은 1차보다 종료 시 감점이 더 크다(POISON_PENALTY_MID > POISON_PENALTY) — 중반
   //    재설치가 실제로 더 위협적으로 느껴지게 하기 위함.
   //    하필 그 자리가 이미 정해져 있던 1차 문장 조각이었다면("문장 저격"), 그 조각은 독으로
-  //    사라지는 대신 crestTotal에서도 함께 빼줘야 한다 — 안 그러면 실제 처소에는 문장이
-  //    crestTotal개보다 적게 남는데도 목표치는 그대로라, 완성 보너스 점수를 영영 받을 수 없는
-  //    상태가 되어버린다(문장 완성은 더 이상 즉시승리가 아니라 보너스 점수일 뿐이지만, 그래도
-  //    받을 수 있어야 공정하다).
+  //    영영 사라진다 — crestSniped에 기록해둔다. 이제 문장은 "세트당 정확히 4개 지정 자리"라,
+  //    한 조각이라도 사라지면 그 세트는 해당 플레이어에게 영영 완성 불가능해진다(실제 퍼즐처럼).
   for (const id of match.order) {
     const victim = otherId(id);
     const victimPlayer = match.players[victim];
     const cells = match.midSetupSelections[id] || [];
     const room = victimPlayer.room;
     for (const { row, col } of cells) {
-      if (room[row][col].type === 'C') victimPlayer.crestTotal -= 1;
+      if (room[row][col].type === 'C') {
+        victimPlayer.crestSniped.push({ crestId: room[row][col].crestId, piecePos: room[row][col].piecePos });
+      }
       room[row][col].type = 'P';
       room[row][col].poisonWave = 2;
     }
   }
-  // 3) 가문의 문장 2차 배치 — 새로 열린 12칸 중, 방금 독이 되지 않은 칸에서만 무작위 3~4개.
+  // 3) 가문의 문장 2차 배치 — 새로 열린 12칸 중, 방금 독이 되지 않은 칸에서만 배치.
   for (const id of match.order) {
     const player = match.players[id];
     const room = player.room;
@@ -342,17 +357,17 @@ function finalizeMidSetup() {
         if (room[r][c].type === null) candidates.push({ row: r, col: c });
       }
     }
-    // 총량은 9로 고정이므로, 2차 배치 개수는 "9 - 1차에 이미 배치한 개수"로 정해진다(무작위 아님) —
-    // 1차가 5개였으면 2차는 4개, 1차가 6개였으면 2차는 3개. 그래야 두 웨이브를 합쳐 정확히 9조각이
-    // 나온다(사용자 확인: "총 개수는 9개 고정, 5개냐 6개냐는 1차 배치분만 랜덤").
+    // 총량은 CREST_TOTAL(12)로 고정이므로, 2차 배치 개수는 "12 - 1차에 이미 배치한 개수"로
+    // 정해진다(무작위 아님) — 두 웨이브를 합쳐 정확히 12조각(세트당 4개)이 나온다.
     const crestCount = CONFIG.CREST_TOTAL - player.crestWave1Count;
     const chosen = pickRandomCells(candidates, crestCount);
     chosen.forEach(({ row, col }, i) => {
       room[row][col].type = 'C';
-      // 2차분: 섞어둔 조각 번호 중 1차에서 쓰고 남은 뒷부분을 이어서 소비
-      room[row][col].piece = player.crestPieceOrder[player.crestWave1Count + i];
+      // 2차분: 섞어둔 조각 순서 중 1차에서 쓰고 남은 뒷부분을 이어서 소비
+      const piece = player.crestPieceOrder[player.crestWave1Count + i];
+      room[row][col].crestId = piece.crestId;
+      room[row][col].piecePos = piece.piecePos;
     });
-    player.crestTotal += chosen.length;
   }
   // 4) 새 12칸 중 아직 안 정해진 나머지를 보석/해독제/빈칸으로 채운다(옛 24칸은 이미 다 채워져 있음).
   for (const id of match.order) {
@@ -502,15 +517,9 @@ function endMinigame(winnerId) {
   // 네 종류를 전부 다 써버린 극단적인 경우(이론상 라운드 수가 아주 많아야 가능)에는 선택지가
   // 텅 비는 것보다는, 그냥 모든 종류를 다시 후보로 열어주는 쪽이 안전하다.
   if (availableTypes.length === 0) availableTypes = REWARD_TYPES.slice();
-  // 가로줄/세로줄 정찰(ROW_COUNT/COL_COUNT)은 "아직 안 연 칸"의 내용까지 그대로 알려주는 강력한
-  // 정보라, 각 절반(전반/후반)이 시작된 지 얼마 안 된 "초반 라운드"에는 후보에서 아예 뺀다 —
-  // 그 시점엔 실제로 열어본 칸이 거의 없어서 사실상 처소 전체를 공짜로 스캔해주는 셈이 되기
-  // 때문. 후반(중반 재설치 이후)도 새 12칸이 열리는 순간이라 다시 "초반"으로 취급한다.
-  const roundsIntoHalf = match.round <= CONFIG.ROUNDS_FIRST_HALF ? match.round : match.round - CONFIG.ROUNDS_FIRST_HALF;
-  if (roundsIntoHalf <= CONFIG.ROW_COL_REWARD_EARLY_ROUNDS) {
-    const withoutRowCol = availableTypes.filter((t) => t !== 'ROW_COUNT' && t !== 'COL_COUNT');
-    if (withoutRowCol.length > 0) availableTypes = withoutRowCol;
-  }
+  // 가로줄/세로줄 정찰(ROW_COUNT/COL_COUNT)은 항상 후보에 포함한다. "아직 안 연 칸"의 내용을
+  // 그대로 알려주는 정보이긴 하나, handleRewardUse()에서 실제로 활성화된 줄 수만큼만 집계하므로
+  // (전반엔 4개 가로줄, 후반엔 6개) 아직 존재하지 않는 줄에 대한 정보가 새는 일은 없다.
   match.pendingReward = {
     winnerId,
     choices: shuffle(availableTypes),
@@ -811,8 +820,9 @@ function handlePact(id, payload, mg) {
 }
 
 // ------------------------------ 본행동(액션) ---------------------------------
-// 본행동: 내 턴이 되면 내 처소에서 술잔 CONFIG.OPENS_PER_TURN(기본 2)개를 직접 골라 연다.
-// (아이템/단서 획득 같은 별도 행동 선택 없이, 정찰은 미니게임 보상으로만 얻는다.)
+// 본행동: 라운드마다 CONFIG.OPENS_PER_TURN(기본 2)번의 행동 예산을 "칸 열기"(doAction)와
+// "문장 조각 조립"(handleCrestPlace) 사이에서 자유롭게 나눠 쓴다. 둘 다 같은 match.actionOpens
+// 카운터를 공유하므로, 라운드 끝나기 전에 뭘 먼저 할지 고민하게 된다.
 function doAction(id, kind, payload) {
   if (match.phase !== 'ROUND_ACTION') return;
   if (kind !== 'OPEN') return;
@@ -831,9 +841,9 @@ function doAction(id, kind, payload) {
   if (cell.type == null) return; // 안전장치 — 아직 타입이 정해지지 않은 칸
   resolveOpen(player, row, col, cell);
   match.actionOpens[id] = opens + 1;
-  // 문장을 전부 모아도 즉시승리는 아니다 — "15라운드까지 다 진행해야 한다"는 피드백에 따라
-  // 완성은 CREST_BONUS 점수만 주고(resolveOpen 안에서 처리), 승부는 여전히 15라운드가 끝난 뒤
-  // 최종 점수 비교(endMatchByScore)로만 가린다.
+  // 문장 세트를 아무리 완성해도 즉시승리는 아니다 — "15라운드까지 다 진행해야 한다"는 피드백에
+  // 따라, 완성 보너스(CREST_SET_BONUS)는 handleCrestPlace에서 처리되고 승부는 여전히 15라운드가
+  // 끝난 뒤 최종 점수 비교(endMatchByScore)로만 가린다.
   checkRoundActionDone();
 }
 
@@ -857,13 +867,55 @@ function resolveOpen(player, row, col, cell) {
   } else if (t === 'C') {
     player.crestOpened += 1;
     player.score += CONFIG.CREST_PTS;
-    // 총 몇 조각인지는 본인에게도 비공개이므로 분모 없이 발견 개수만 남긴다.
-    actionLog(player, `가문의 문장 조각을 발견했습니다! (지금까지 ${player.crestOpened}개째)`);
-    if (player.crestOpened >= player.crestTotal) {
-      player.score += CONFIG.CREST_BONUS;
-      actionLog(player, `문장 완성 보너스 +${CONFIG.CREST_BONUS}점! (왕위는 15라운드 종료 후 점수로 가립니다)`);
+    // 조각을 발견하는 즉시 CREST_PTS를 받고, 본인의 "보유(미배치)" 목록에 들어간다 — 이후
+    // 조립 구역에 실제로 배치해야만(handleCrestPlace) 세트 완성/보너스로 이어진다. 어느 세트·
+    // 몇 번 조각인지는 본인 처소 안에서는 숨길 이유가 없으므로 바로 알려준다.
+    player.heldPieces.push({ crestId: cell.crestId, piecePos: cell.piecePos });
+    actionLog(player, `가문의 문장 조각을 발견했습니다! (${crestSetLabel(cell.crestId)} · ${cell.piecePos}번 조각, +${CONFIG.CREST_PTS}점) — 조립 구역에 배치하면 세트를 완성할 수 있습니다.`);
+  }
+}
+
+function crestSetLabel(crestId) { return CREST_SET_NAMES[crestId] || `문장 ${crestId}세트`; }
+
+// ------------------------------ 문장 조각 조립 --------------------------------
+// 술잔 칸을 여는 것(OPEN)과 마찬가지로 라운드당 행동 예산(OPENS_PER_TURN)을 함께 나눠 쓴다 —
+// "열기"와 "조립"을 같은 예산에서 골라 쓰게 해, 매 라운드 무엇을 우선할지 고민하게 만든다.
+function handleCrestPlace(id, payload) {
+  if (match.phase !== 'ROUND_ACTION') return;
+  const opens = match.actionOpens[id] || 0;
+  if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 행동 예산을 다 썼음
+  const player = match.players[id];
+  const crestId = Number(payload && payload.crestId);
+  const piecePos = Number(payload && payload.piecePos);
+  const zoneIndex = Number(payload && payload.zoneIndex);
+  if (!Number.isInteger(crestId) || crestId < 1 || crestId > CONFIG.CREST_SET_COUNT) return;
+  if (!Number.isInteger(piecePos) || piecePos < 1 || piecePos > CONFIG.CREST_SET_SIZE) return;
+  if (!Number.isInteger(zoneIndex) || zoneIndex < 0 || zoneIndex >= CONFIG.CREST_ZONES) return;
+  const heldIdx = player.heldPieces.findIndex((p) => p.crestId === crestId && p.piecePos === piecePos);
+  if (heldIdx === -1) return; // 보유하지 않은 조각
+  const zone = player.zones[zoneIndex];
+  if (zone.crestId != null && zone.crestId !== crestId) return; // 이미 다른 세트가 배정된 구역
+  if (zone.pieces.includes(piecePos)) return; // 방어적 체크 — 정상 흐름에선 발생하지 않음
+  player.heldPieces.splice(heldIdx, 1);
+  zone.crestId = crestId;
+  zone.pieces.push(piecePos);
+  match.actionOpens[id] = opens + 1;
+  actionLog(player, `${crestSetLabel(crestId)} 조각을 ${zoneIndex + 1}번 조립 구역에 배치 (${zone.pieces.length}/${CONFIG.CREST_SET_SIZE}) — 한 번 놓으면 뺄 수 없습니다.`);
+  if (zone.pieces.length >= CONFIG.CREST_SET_SIZE) {
+    player.crestSetsCompleted.push(crestId);
+    zone.crestId = null;
+    zone.pieces = []; // 완성 즉시 구역이 비워져 다음 세트를 받을 수 있다
+    if (!match.crestFirstFinisher[crestId]) {
+      match.crestFirstFinisher[crestId] = id;
+      player.score += CONFIG.CREST_SET_BONUS;
+      actionLog(player, `${crestSetLabel(crestId)} 완성! 상대보다 먼저 맞춰 보너스 +${CONFIG.CREST_SET_BONUS}점!`);
+      log(`${player.name}이(가) ${crestSetLabel(crestId)}을(를) 가장 먼저 완성했습니다!`);
+    } else {
+      actionLog(player, `${crestSetLabel(crestId)} 완성! (상대가 이미 먼저 맞춰 보너스는 없음)`);
+      log(`${player.name}이(가) ${crestSetLabel(crestId)}을(를) 완성했습니다. (보너스는 상대가 이미 가져감)`);
     }
   }
+  checkRoundActionDone();
 }
 
 function checkNeutralize(player) {
@@ -910,8 +962,11 @@ function handleRewardUse(id, payload) {
     pr.used = true;
     player.rewardUses[pr.type] = (player.rewardUses[pr.type] || 0) + 1;
     // 가로줄(row) 개수는 전반/후반에 따라 4개 또는 6개로 달라지지만, 세로줄(col)은 늘 6개다.
-    // 아직 잠긴(후반에 열리는) 줄은 타입이 없어 자연히 0으로 집계된다.
-    const rowN = CONFIG.ROWS_TOTAL, colN = CONFIG.GRID;
+    // 아직 후반에 열리지 않은 줄은 애초에 집계 대상에서 뺀다 — "아직 안 연 칸" 정보가
+    // 0으로라도 섞여 나가지 않도록, 실제로 활성화된 줄 수만큼만 돈다.
+    const activeRows = (player.room[CONFIG.ROWS_FIRST_HALF] && player.room[CONFIG.ROWS_FIRST_HALF][0].locked)
+      ? CONFIG.ROWS_FIRST_HALF : CONFIG.ROWS_TOTAL;
+    const rowN = activeRows, colN = CONFIG.GRID;
     const outerN = axis === 'row' ? rowN : colN;
     const innerN = axis === 'row' ? colN : rowN;
     const counts = [];
@@ -1025,8 +1080,9 @@ function buildClientState(forId) {
       locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
-      // 문장 조각 번호(1~9)는 실제로 공개된 문장 칸일 때만 내려준다 — 3x3 이미지 조각 렌더링용.
-      piece: (cell.opened || revealAll) && cell.type === 'C' ? cell.piece : null,
+      // 세트 번호(1~3)·조각 위치(1~4)는 실제로 공개된 문장 칸일 때만 내려준다 — 2x2 이미지 렌더링용.
+      crestId: (cell.opened || revealAll) && cell.type === 'C' ? cell.crestId : null,
+      piecePos: (cell.opened || revealAll) && cell.type === 'C' ? cell.piecePos : null,
     })));
 
   const pr = match.pendingReward;
@@ -1071,16 +1127,17 @@ function buildClientState(forId) {
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
-    // 문장의 위치·총 개수는 매치마다 무작위로 정해지는 비공개 정보라 미리 내려주지 않는다 —
-    // 게임이 끝나야(전부 공개돼야) me/opp.crestTotal이 채워진다(완성해도 즉시승리는 아니다).
-    // 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/poisonMid —
-    // 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
+    // 세트 구조(3세트x4조각) 자체는 이제 공개 정보지만, 어느 칸에 무슨 조각이 있는지는 여전히
+    // 비공개다. 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/
+    // poisonMid — 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
     me: me && {
       name: me.name, poison: poisonTotal(me), antidote: me.antidote, score: me.score, finalScore: me.finalScore,
       poisonInitial: match.phase === 'END' ? me.poisonInitial : null,
       poisonMid: match.phase === 'END' ? me.poisonMid : null,
       crestOpened: me.crestOpened,
-      crestTotal: match.phase === 'END' ? me.crestTotal : null,
+      heldPieces: me.heldPieces,
+      zones: me.zones,
+      crestSetsCompleted: me.crestSetsCompleted,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
@@ -1091,8 +1148,14 @@ function buildClientState(forId) {
     // MID_SETUP 동안만은 예외로, 상대 처소의 "이미 열렸는지 여부"만(내용은 여전히 비공개) 알려줘야
     // 중반 독 추가 설치에서 이미 연 칸을 고르지 못하게 화면에서 걸러줄 수 있다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, crestTotal: opp.crestTotal, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, crestOpened: opp.crestOpened, crestSetsCompleted: opp.crestSetsCompleted, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null }),
+    // 세트별 "누가 먼저 완성했는지" 경쟁 현황 — 구체적인 진행률(몇 조각 모았는지)은 안 새지만,
+    // 그 세트의 보너스가 이미 사라졌는지는 알아야 다음에 뭘 조립할지 전략적으로 판단할 수 있다.
+    crestRace: Object.fromEntries(Object.keys(match.crestFirstFinisher).map((cid) => {
+      const winner = match.crestFirstFinisher[cid];
+      return [cid, winner == null ? null : (winner === forId ? 'me' : 'opp')];
+    })),
     oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     setupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.setupSelections[id]; return acc; }, {}),
     midSetupDone: match.order.reduce((acc, id) => { acc[id === forId ? 'me' : 'opp'] = !!match.midSetupSelections[id]; return acc; }, {}),
@@ -1222,17 +1285,23 @@ function buildAdminState() {
       confirmed: !!match.midSetupSelections[id],
       cells: match.midSetupSelections[id] || [],
     })) : null,
+    crestFirstFinisher: Object.fromEntries(Object.entries(match.crestFirstFinisher).map(([cid, pid]) => [cid, pid ? match.players[pid].name : null])),
     players: match.order.map((id) => {
       const p = match.players[id];
       return {
         name: p.name,
         connected: p.connected,
         poison: poisonTotal(p), poisonInitial: p.poisonInitial, poisonMid: p.poisonMid, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
-        crestOpened: p.crestOpened, crestTotal: p.crestTotal,
+        crestOpened: p.crestOpened, heldPieces: p.heldPieces, zones: p.zones,
+        crestSetsCompleted: p.crestSetsCompleted, crestSniped: p.crestSniped,
         opens: match.actionOpens[id] || 0,
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
-        room: p.room.map((row) => row.map((cell) => ({ type: cell.opened ? cell.type : null, opened: cell.opened, locked: cell.locked }))),
+        room: p.room.map((row) => row.map((cell) => ({
+          type: cell.opened ? cell.type : null, opened: cell.opened, locked: cell.locked,
+          crestId: cell.opened && cell.type === 'C' ? cell.crestId : null,
+          piecePos: cell.opened && cell.type === 'C' ? cell.piecePos : null,
+        }))),
       };
     }),
   };
@@ -1344,6 +1413,8 @@ io.on('connection', (socket) => {
         return socket.emit('error', { message: '유효하지 않은 좌표입니다.' });
       if (victimRoom[cell.row][cell.col].opened)
         return socket.emit('error', { message: '이미 연 칸에는 독을 심을 수 없습니다.' });
+      if (victimRoom[cell.row][cell.col].type === 'P')
+        return socket.emit('error', { message: '이미 독이 있는 칸에는 다시 심을 수 없습니다.' });
       seen.add(cell.row + '_' + cell.col);
     }
     if (seen.size !== CONFIG.POISON_MID) return socket.emit('error', { message: '중복되지 않게 선택해야 합니다.' });
@@ -1355,6 +1426,7 @@ io.on('connection', (socket) => {
 
   socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));
   socket.on('action:open', (p) => doAction(slot, 'OPEN', p || {}));
+  socket.on('action:place', (p) => handleCrestPlace(slot, p || {}));
   socket.on('reward:use', (p) => handleRewardUse(slot, p || {}));
   socket.on('reward:choose', (p) => handleRewardChoose(slot, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(slot));

@@ -118,8 +118,8 @@ function onState(label, socket, s) {
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
     console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10, max possible per match = min(10,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
-    // 문장 총량은 게임 끝까지 본인도 모르는 값이었다가, END 시점에만 me.crestTotal로 공개된다.
-    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, crestOpened: s.me.crestOpened, crestTotal: s.me.crestTotal });
+    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, crestOpened: s.me.crestOpened, crestSetsCompleted: s.me.crestSetsCompleted, zones: s.me.zones });
+    console.log('crestRace(' + label + '):', JSON.stringify(s.crestRace));
     setTimeout(() => process.exit(0), 200);
   }
 }
@@ -228,9 +228,23 @@ function randomUniqueDigits(n, avoidSet) {
 }
 
 function doRandomAction(label, socket, s) {
-  // 본행동은 이제 단순히 "내 처소에서 칸 열기"뿐 — 아이템/단서 시스템은 제거되었다.
+  // 본행동은 "칸 열기" 또는 "보유 중인 문장 조각을 조립 구역에 놓기" 둘 중 하나 — 같은
+  // 행동 예산(opensRemaining)을 공유하므로, 놓을 수 있는 조각이 있으면 절반의 확률로 조립도
+  // 시도하게 해서(항상 조립만 하지도, 항상 칸만 열지도 않게) 두 행동 경로를 골고루 검증한다.
+  const held = s.me.heldPieces || [];
+  let placeTarget = null;
+  for (const piece of held) {
+    let zoneIndex = s.me.zones.findIndex((z) => z.crestId === piece.crestId);
+    if (zoneIndex === -1) zoneIndex = s.me.zones.findIndex((z) => z.crestId === null);
+    if (zoneIndex !== -1) { placeTarget = { piece, zoneIndex }; break; }
+  }
+  if (placeTarget && Math.random() < 0.5) {
+    socket.emit('action:place', { crestId: placeTarget.piece.crestId, piecePos: placeTarget.piece.piecePos, zoneIndex: placeTarget.zoneIndex });
+    return;
+  }
   const target = findUnopened(s.me.room);
   if (target) socket.emit('action:open', target);
+  else if (placeTarget) socket.emit('action:place', { crestId: placeTarget.piece.crestId, piecePos: placeTarget.piece.piecePos, zoneIndex: placeTarget.zoneIndex });
 }
 
 function findUnopened(room) {

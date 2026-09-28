@@ -105,37 +105,78 @@ function cellIconSVG(type) {
     ${inner}
   </svg>`;
 }
-// 가문의 문장(C) 칸은 실제로 "연" 순간부터는 범용 방패 아이콘 대신, 서버가 함께 내려준 조각
-// 번호(1~9)에 해당하는 실제 이미지 조각(/crest/{gold|silver}_{1..9}.png)을 보여준다 — 9조각을
-// 다 모으면 원본 그림 한 장이 완성되는 구조. 장남은 금색, 차남은 은색 문장을 쓴다(추천안대로
-// 서로 다른 이미지). 아직 열지 않았거나(정찰로 살짝 엿본 것뿐인) 서버가 조각 번호를 내려주지
-// 않은 경우엔 기존 방패 아이콘으로 대체한다(정찰은 "문장이 있다"는 정보만 주고, 정확히 몇 번
-// 조각인지는 실제로 열어야만 알 수 있게 해 정찰의 가치를 낮추지 않는다).
-function crestFamilyFor(name) { return name === '장남' ? 'gold' : 'silver'; }
-function crestTileImgHTML(piece, family) {
-  return `<img class="crestTile" src="/crest/${family}_${piece}.png" alt="가문의 문장 조각 ${piece}/9"/>`;
+// 가문의 문장은 3세트(그리핀/사자/드래곤), 세트당 2x2=4조각. 칸을 "연" 순간 그 조각의 실제
+// 이미지(/crest/crest{세트번호}_{조각위치}.png)를 보여준다 — 아직 안 열었거나(정찰로 엿본
+// 것뿐인) 서버가 세트/위치를 내려주지 않은 경우엔 기존 방패 아이콘으로 대체한다.
+const CREST_LABELS = { 1: '그리핀', 2: '사자', 3: '드래곤' };
+function crestTileImgHTML(crestId, piecePos) {
+  const label = CREST_LABELS[crestId] || `${crestId}번`;
+  return `<img class="crestTile" src="/crest/crest${crestId}_${piecePos}.png" alt="${label} 문장 조각 ${piecePos}/4"/>`;
 }
-function cellVisualHTML(type, piece, family) {
-  if (type === 'C' && piece && family) return crestTileImgHTML(piece, family);
+function cellVisualHTML(type, crestId, piecePos) {
+  if (type === 'C' && crestId && piecePos) return crestTileImgHTML(crestId, piecePos);
   return cellIconSVG(type);
 }
-// 처소 그리드 한쪽(9칸 중 지금까지 실제로 연 문장 조각들)을 3x3 조립판으로 보여준다 — 아직
-// 못 찾은 조각은 물음표로, 저격당해 영영 못 찾는 조각도 그냥 물음표로 남는다(본인은 그게
-// 저격당한 건지 아직 안 나온 건지 구분할 수 없다 — 히든정보 원칙 유지).
-function crestAssemblyWidget(room, family) {
-  const collected = {};
-  for (const row of room) for (const cell of row) {
-    if (cell.opened && cell.type === 'C' && cell.piece) collected[cell.piece] = true;
+function crestZoneSlotsHTML(zone) {
+  let html = '';
+  for (let pos = 1; pos <= 4; pos++) {
+    const filled = zone && zone.crestId && zone.pieces.includes(pos);
+    html += `<div class="crestZoneSlot${filled ? ' filled' : ''}">${filled ? crestTileImgHTML(zone.crestId, pos) : '<span class="crestSlotQ">?</span>'}</div>`;
   }
-  const wrap = el('div', 'crestAssembly');
-  wrap.appendChild(el('h3', null, `가문의 문장 조각 (${Object.keys(collected).length}/9)`));
-  const grid = el('div', 'crestAssemblyGrid');
-  for (let i = 1; i <= 9; i++) {
-    const slot = el('div', 'crestAssemblySlot' + (collected[i] ? ' filled' : ''));
-    slot.innerHTML = collected[i] ? crestTileImgHTML(i, family) : '<span class="crestSlotQ">?</span>';
-    grid.appendChild(slot);
+  return html;
+}
+// 처소 패널 안에 "조립 구역 2개 + 보유(미배치) 조각 + 세트별 경쟁 현황"을 함께 보여주는 위젯.
+// 조립은 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 공유하므로, 예산이 없으면 배치
+// 버튼도 함께 비활성화된다.
+function crestBoardWidget(state) {
+  const me = state.me;
+  const race = state.crestRace || {};
+  const canPlace = state.phase === 'ROUND_ACTION' && (state.opensRemaining || 0) > 0;
+  const wrap = el('div', 'crestBoard');
+  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 완성되면 비워져 다음 세트를 받습니다)'));
+
+  const raceRow = el('div', 'crestRaceRow');
+  [1, 2, 3].forEach((cid) => {
+    const status = race[cid];
+    const cls = status === 'me' ? 'won' : status === 'opp' ? 'lost' : 'open';
+    const label = status === 'me' ? '내가 먼저 완성' : status === 'opp' ? '상대가 먼저 완성' : '미완성';
+    raceRow.appendChild(el('div', `crestRaceBadge ${cls}`, `${CREST_LABELS[cid]}: ${label}`));
+  });
+  wrap.appendChild(raceRow);
+
+  const zonesRow = el('div', 'crestZonesRow');
+  (me.zones || []).forEach((zone, zoneIndex) => {
+    const box = el('div', 'crestZoneBox' + (zone.crestId ? '' : ' empty'));
+    box.appendChild(el('div', 'crestZoneLabel', zone.crestId ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${zone.pieces.length}/4)` : `${zoneIndex + 1}번 구역 (비어있음)`));
+    box.appendChild(el('div', 'crestZoneGrid', crestZoneSlotsHTML(zone)));
+    zonesRow.appendChild(box);
+  });
+  wrap.appendChild(zonesRow);
+
+  const held = me.heldPieces || [];
+  const heldWrap = el('div', 'crestHeldWrap');
+  heldWrap.appendChild(el('div', 'crestHeldLabel', held.length > 0
+    ? `보유 중인 조각 (${held.length}개) — 조립 구역에 배치하세요. 한 번 놓으면 뺄 수 없습니다.`
+    : '보유 중인 조각 없음 — 칸을 열어 문장 조각을 찾아보세요.'));
+  if (held.length > 0) {
+    const heldRow = el('div', 'crestHeldRow');
+    held.forEach((piece) => {
+      const item = el('div', 'crestHeldItem');
+      item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos);
+      const btnRow = el('div', 'crestHeldBtns');
+      (me.zones || []).forEach((zone, zoneIndex) => {
+        const blocked = zone.crestId != null && zone.crestId !== piece.crestId;
+        const b = el('button', 'action small', `${zoneIndex + 1}번 구역에 놓기`);
+        b.disabled = !canPlace || blocked;
+        b.onclick = () => socket.emit('action:place', { crestId: piece.crestId, piecePos: piece.piecePos, zoneIndex });
+        btnRow.appendChild(b);
+      });
+      item.appendChild(btnRow);
+      heldRow.appendChild(item);
+    });
+    heldWrap.appendChild(heldRow);
   }
-  wrap.appendChild(grid);
+  wrap.appendChild(heldWrap);
   return wrap;
 }
 // 셋업 화면에서 "이 칸에 독을 심겠다"고 표시만 하는 노란색 마커 — 실제 독 술잔(P) 아이콘과는
@@ -316,7 +357,7 @@ function detectImpacts(prev, next) {
           // "칸을 열자마자 바로 다음으로 넘어가 뭘 열었는지 놓친다"는 피드백 — 이번 라운드에
           // 새로 연 칸을 전부 기록해뒀다가, ROUND_DONE(5초 대기) 화면에서 한눈에 보여준다.
           if (next.round !== roundOpenSummaryRound) { roundOpenSummary = []; roundOpenSummaryRound = next.round; }
-          roundOpenSummary.push({ row: r, col: c, type: after.type, piece: after.piece || null });
+          roundOpenSummary.push({ row: r, col: c, type: after.type, crestId: after.crestId || null, piecePos: after.piecePos || null });
         }
       }
     }
@@ -583,11 +624,10 @@ function renderRoundDone(state) {
   if (summary.length) {
     p.appendChild(el('p', 'hint', '이번 라운드에 내가 연 칸:'));
     const row = el('div', 'roundOpenSummaryRow');
-    const myFamily = state.me ? crestFamilyFor(state.me.name) : null;
-    summary.forEach(({ row: r, col: c, type, piece }) => {
+    summary.forEach(({ row: r, col: c, type, crestId, piecePos }) => {
       const item = el('div', 'roundOpenSummaryItem');
       const icon = el('div', 'roundOpenSummaryIcon' + (type === 'E' ? '' : ' cellIcon-' + type));
-      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type, piece, myFamily);
+      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type, crestId, piecePos);
       item.appendChild(icon);
       item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${type === 'E' ? '빈 칸' : CELL_NAME[type]}`));
       row.appendChild(item);
@@ -914,7 +954,7 @@ function renderStatsPanel(state) {
 
   const mine = el('div', 'col');
   mine.appendChild(el('h3', null, `내 처소 (${state.me.name})`));
-  mine.appendChild(statGrid(state.me));
+  mine.appendChild(statGrid(state.me, state.config));
   wrap.appendChild(mine);
 
   // 상대의 점수/독/해독제 현황은 게임이 끝나기 전까지 비공개 — 서로의 패를 못 보게 하는 것이
@@ -940,7 +980,7 @@ function poisonBreakdownText(p, config) {
   return `술잔 점수 ${p.score} − 1차 독 ${p.poisonInitial}개×${config.POISON_PENALTY}(-${initPenalty}) − 2차 독 ${p.poisonMid}개×${config.POISON_PENALTY_MID}(-${midPenalty})`;
 }
 
-function statGrid(p) {
+function statGrid(p, config) {
   const g = el('div', 'statgrid');
   // 독이 2개 이상 쌓이면 위험하다는 긴장감을 시각적으로 준다. 1차/2차 독의 정확한 감점 액수는
   // 서로 달라서(2차가 더 아픔) 게임이 끝나야 공개되므로, 여기서는 구체적 숫자 없이 뭉뚱그려 표시한다.
@@ -948,10 +988,12 @@ function statGrid(p) {
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
   if (p.crestOpened != null) {
-    // 총 몇 조각인지는 게임이 끝나기 전까지 비공개(서프라이즈 요소)라, 완성 전에는 분모 없이
-    // 발견한 개수만 보여준다. 서버가 END에서만 crestTotal을 내려준다.
-    const label = p.crestTotal != null ? `${p.crestOpened} / ${p.crestTotal}` : `${p.crestOpened}`;
-    g.appendChild(statBox('crest', label, '가문의 문장 조각'));
+    // 문장 세트 구조(총 3세트×4조각=12개)는 이제 공개 정보이므로 분모를 항상 보여준다.
+    const total = (config && config.CREST_TOTAL) || 12;
+    g.appendChild(statBox('crest', `${p.crestOpened} / ${total}`, '가문의 문장 조각'));
+  }
+  if (p.crestSetsCompleted != null) {
+    g.appendChild(statBox('crestSet', p.crestSetsCompleted.length, '완성한 문장 세트'));
   }
   return g;
 }
@@ -992,7 +1034,7 @@ function buildRoomGrid(room, opts) {
       } else if (data.opened) {
         cell.classList.add('opened', data.type);
         // 빈 칸(E)은 아이콘이 없어 안 연 칸과 헷갈릴 수 있으므로, 큰 X로 "이미 열어봤음"을 표시한다.
-        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type, data.piece, opts.crestFamily);
+        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type, data.crestId, data.piecePos);
       } else if (opts.peekCell && opts.peekCell.row === r && opts.peekCell.col === c) {
         // 한 칸 정찰 보상: 실제로 연 것은 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
@@ -1026,11 +1068,10 @@ function renderMyRoomPanel(state) {
   // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
-  const myFamily = crestFamilyFor(state.me.name);
-  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestFamily: myFamily }));
+  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
   if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) p.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
-  p.appendChild(crestAssemblyWidget(state.me.room, myFamily));
+  p.appendChild(crestBoardWidget(state));
   return p;
 }
 
@@ -1054,12 +1095,11 @@ function renderPickView(state) {
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
-  const myFamily = crestFamilyFor(state.me.name);
-  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell, crestFamily: myFamily }));
-  if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
+  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
+  if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하거나, 아래에서 보유한 문장 조각을 조립 구역에 놓으세요. (이번 턴에 ${state.opensRemaining}개 더 행동할 수 있습니다)`));
   else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
   else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
-  mine.appendChild(crestAssemblyWidget(state.me.room, myFamily));
+  mine.appendChild(crestBoardWidget(state));
   wrap.appendChild(mine);
 
   app.appendChild(wrap);
@@ -1349,8 +1389,12 @@ function renderRewardPanel(state) {
     box.appendChild(grid);
   } else if (r.type === 'ROW_COUNT' || r.type === 'COL_COUNT') {
     const axisLabel = r.type === 'ROW_COUNT' ? '가로줄' : '세로줄';
-    const axisCount = r.type === 'ROW_COUNT' ? state.config.ROWS_TOTAL : state.config.GRID;
-    box.appendChild(el('div', 'desc', `내 처소에서 확인할 술잔 종류를 고르세요 — ${axisCount}개 ${axisLabel} 전부에 몇 개씩 있는지 한 번에 알려드립니다. (아직 열리지 않은 줄은 0으로 표시됩니다)`));
+    // 가로줄 개수는 전반/후반에 따라 4개 또는 6개로 달라진다(세로줄은 늘 6개) — 아직 후반에
+    // 열리지 않은 줄은 집계 자체에서 빠지므로 실제로 활성화된 줄 수만 안내한다.
+    const activeRows = (state.me.room[state.config.ROWS_FIRST_HALF] && state.me.room[state.config.ROWS_FIRST_HALF][0].locked)
+      ? state.config.ROWS_FIRST_HALF : state.config.ROWS_TOTAL;
+    const axisCount = r.type === 'ROW_COUNT' ? activeRows : state.config.GRID;
+    box.appendChild(el('div', 'desc', `내 처소에서 확인할 술잔 종류를 고르세요 — ${axisCount}개 ${axisLabel} 전부에 몇 개씩 있는지 한 번에 알려드립니다.`));
     const typeRow = el('div', 'btnRow');
     Object.keys(state.clueCatNames).forEach((cat) => {
       const b = el('button', 'action', state.clueCatNames[cat]);
@@ -1373,20 +1417,25 @@ function renderEnd(state) {
   banner.appendChild(el('p', null, state.endReason || ''));
   p.appendChild(banner);
 
+  if (state.crestRace) {
+    p.appendChild(el('h3', null, '가문의 문장 — 세트별 선점 결과'));
+    p.appendChild(crestRaceSummaryHTML(state));
+  }
+
   const cols = el('div', 'cols');
   const mine = el('div', 'col');
   mine.appendChild(el('h3', null, `내 처소 최종 (${state.me.name})`));
-  mine.appendChild(statGrid(state.me));
+  mine.appendChild(statGrid(state.me, state.config));
   mine.appendChild(el('p', 'hint', `최종 점수: <b>${state.me.finalScore}</b> (${poisonBreakdownText(state.me, state.config)})`));
-  mine.appendChild(buildRevealGrid(state.me.room, crestFamilyFor(state.me.name)));
+  mine.appendChild(buildRevealGrid(state.me.room));
   cols.appendChild(mine);
 
   if (state.opp) {
     const opp = el('div', 'col');
     opp.appendChild(el('h3', null, `상대 처소 최종 (${state.opp.name})`));
-    opp.appendChild(statGrid(state.opp));
+    opp.appendChild(statGrid(state.opp, state.config));
     opp.appendChild(el('p', 'hint', `최종 점수: <b>${state.opp.finalScore}</b> (${poisonBreakdownText(state.opp, state.config)})`));
-    if (state.opp.room) opp.appendChild(buildRevealGrid(state.opp.room, crestFamilyFor(state.opp.name)));
+    if (state.opp.room) opp.appendChild(buildRevealGrid(state.opp.room));
     cols.appendChild(opp);
   }
   p.appendChild(cols);
@@ -1410,16 +1459,28 @@ function renderRematchPanel(state) {
   return p;
 }
 
-function buildRevealGrid(room, family) {
+function buildRevealGrid(room) {
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
-      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.piece, family));
+      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.crestId, data.piecePos));
       grid.appendChild(cell);
     }
   }
   return grid;
+}
+
+function crestRaceSummaryHTML(state) {
+  const race = state.crestRace || {};
+  const box = el('div', 'crestRaceRow');
+  [1, 2, 3].forEach((cid) => {
+    const status = race[cid];
+    const cls = status === 'me' ? 'won' : status === 'opp' ? 'lost' : 'open';
+    const label = status === 'me' ? '내가 먼저 완성 (+3)' : status === 'opp' ? '상대가 먼저 완성' : '아무도 먼저 완성 못함';
+    box.appendChild(el('div', `crestRaceBadge ${cls}`, `${CREST_LABELS[cid] || cid}: ${label}`));
+  });
+  return box;
 }
 
 setInterval(() => {
