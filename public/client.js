@@ -32,6 +32,9 @@ let roundOpenSummary = []; // 이번 라운드에 내가 새로 연 칸들 [{row
 let roundOpenSummaryRound = null; // roundOpenSummary가 몇 라운드 것인지(라운드가 바뀌면 초기화)
 let cardDuelPicks = []; // 숫자 패 대결: 지금까지 클릭한 순서대로 쌓인 배치([1~3의 순열이 되기 전까지])
 let cardDuelRound = null; // cardDuelPicks가 몇 라운드 것인지(라운드가 바뀌면 초기화)
+let draggedCrestPiece = null; // 가문의 문장 조각을 조립 구역으로 드래그하는 중일 때 { crestId, piecePos } —
+                              // dragover 시점엔 브라우저 보안 정책상 dataTransfer의 실제 값을 읽을 수 없어서,
+                              // 같은 페이지 안에서 지금 드래그 중인 조각 정보를 이 변수로 따로 들고 있는다.
 // 미니게임 모달이 "이미 떠 있던 채로" 다시 그려지는 것인지 추적 — render()는 상대의 움직임이나
 // 내 입력 하나하나에도 화면 전체를 다시 그리므로, 매번 모달을 새로 마운트하면 등장 애니메이션이
 // (본인이 만든 변화가 아니어도) 계속 재생되어 화면이 깜빡이는 것처럼 보인다. 직전 프레임에도
@@ -126,8 +129,12 @@ function crestZoneSlotsHTML(zone) {
   return html;
 }
 // 처소 패널 안에 "조립 구역 2개 + 보유(미배치) 조각 + 세트별 경쟁 현황"을 함께 보여주는 위젯.
-// 조립은 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 공유하므로, 예산이 없으면 배치
-// 버튼도 함께 비활성화된다.
+// 조립은 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 공유하므로, 예산이 없으면 드래그
+// 자체가 비활성화된다. 배치는 클릭 버튼이 아니라 "보유 조각을 조립 구역으로 끌어다 놓는"
+// 드래그 앤 드롭으로만 한다(데스크톱/마우스 전용 — 이 게임은 터치 기기 지원이 필요 없다고
+// 확인함). 조각이 구역 안에서 정확히 어느 칸(2x2 중 몇 번)에 앉을지는 조각 자신의 piecePos로
+// 이미 정해져 있어 플레이어가 고를 수 있는 게 아니므로, 드롭 대상은 슬롯 한 칸 한 칸이 아니라
+// "구역 박스" 전체다 — 플레이어가 실제로 고르는 건 오직 "어느 구역(1번/2번)에 놓을지"뿐이다.
 function crestBoardWidget(state) {
   const me = state.me;
   const race = state.crestRace || {};
@@ -147,8 +154,31 @@ function crestBoardWidget(state) {
   const zonesRow = el('div', 'crestZonesRow');
   (me.zones || []).forEach((zone, zoneIndex) => {
     const box = el('div', 'crestZoneBox' + (zone.crestId ? '' : ' empty'));
-    box.appendChild(el('div', 'crestZoneLabel', zone.crestId ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${zone.pieces.length}/4)` : `${zoneIndex + 1}번 구역 (비어있음)`));
+    box.appendChild(el('div', 'crestZoneLabel', zone.crestId
+      ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${zone.pieces.length}/4)`
+      : `${zoneIndex + 1}번 구역 (비어있음) — 조각을 여기로 끌어다 놓으세요`));
     box.appendChild(el('div', 'crestZoneGrid', crestZoneSlotsHTML(zone)));
+
+    // 드래그 중인 조각이 이 구역에 놓일 수 있는지(같은 세트이거나 빈 구역인지)에 따라
+    // preventDefault 여부를 갈라서, 안 되는 구역 위에서는 브라우저가 알아서 "금지" 커서를
+    // 보여주게 한다. 실제 서버 검증은 handleCrestPlace가 다시 하므로 여기서는 UX용 사전 필터일 뿐.
+    box.ondragover = (ev) => {
+      if (!canPlace || !draggedCrestPiece) return;
+      const blocked = zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId;
+      if (blocked) return;
+      ev.preventDefault();
+      box.classList.add('dragOver');
+    };
+    box.ondragleave = () => box.classList.remove('dragOver');
+    box.ondrop = (ev) => {
+      ev.preventDefault();
+      box.classList.remove('dragOver');
+      if (!canPlace || !draggedCrestPiece) return;
+      const blocked = zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId;
+      if (blocked) return;
+      socket.emit('action:place', { crestId: draggedCrestPiece.crestId, piecePos: draggedCrestPiece.piecePos, zoneIndex });
+      draggedCrestPiece = null;
+    };
     zonesRow.appendChild(box);
   });
   wrap.appendChild(zonesRow);
@@ -156,22 +186,28 @@ function crestBoardWidget(state) {
   const held = me.heldPieces || [];
   const heldWrap = el('div', 'crestHeldWrap');
   heldWrap.appendChild(el('div', 'crestHeldLabel', held.length > 0
-    ? `보유 중인 조각 (${held.length}개) — 조립 구역에 배치하세요. 한 번 놓으면 뺄 수 없습니다.`
+    ? (canPlace
+        ? `보유 중인 조각 (${held.length}개) — 위 조립 구역으로 끌어다 놓으세요. 한 번 놓으면 뺄 수 없습니다.`
+        : `보유 중인 조각 (${held.length}개) — 지금은 배치할 행동 예산이 없습니다.`)
     : '보유 중인 조각 없음 — 칸을 열어 문장 조각을 찾아보세요.'));
   if (held.length > 0) {
     const heldRow = el('div', 'crestHeldRow');
     held.forEach((piece) => {
-      const item = el('div', 'crestHeldItem');
+      const item = el('div', 'crestHeldItem' + (canPlace ? ' draggableHint' : ' notDraggable'));
       item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos);
-      const btnRow = el('div', 'crestHeldBtns');
-      (me.zones || []).forEach((zone, zoneIndex) => {
-        const blocked = zone.crestId != null && zone.crestId !== piece.crestId;
-        const b = el('button', 'action small', `${zoneIndex + 1}번 구역에 놓기`);
-        b.disabled = !canPlace || blocked;
-        b.onclick = () => socket.emit('action:place', { crestId: piece.crestId, piecePos: piece.piecePos, zoneIndex });
-        btnRow.appendChild(b);
-      });
-      item.appendChild(btnRow);
+      item.draggable = canPlace;
+      item.ondragstart = (ev) => {
+        draggedCrestPiece = { crestId: piece.crestId, piecePos: piece.piecePos };
+        ev.dataTransfer.effectAllowed = 'move';
+        // 일부 브라우저는 dataTransfer에 데이터가 하나도 없으면 드래그 자체를 시작하지 않으므로,
+        // 형식적으로 채워둔다(실제로는 안 읽고 draggedCrestPiece 변수로만 판단한다).
+        ev.dataTransfer.setData('text/plain', `${piece.crestId}-${piece.piecePos}`);
+        item.classList.add('dragging');
+      };
+      item.ondragend = () => {
+        item.classList.remove('dragging');
+        draggedCrestPiece = null;
+      };
       heldRow.appendChild(item);
     });
     heldWrap.appendChild(heldRow);

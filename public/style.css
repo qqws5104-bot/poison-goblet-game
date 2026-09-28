@@ -233,6 +233,9 @@ button { font-family: inherit; cursor: pointer; }
   background: #150c10; border: 1px solid var(--border); border-radius: 4px; padding: 8px;
 }
 .crestZoneBox.empty { border-style: dashed; opacity: 0.75; }
+/* 드래그 중인 조각이 이 구역 위로 올라와 있고(놓을 수 있는 상대일 때만) 실제로 표시되는
+   하이라이트 — "여기 놓으면 된다"는 걸 놓기 전에 미리 알려준다. */
+.crestZoneBox.dragOver { border-color: #b98be0; border-style: solid; background: #241a30; box-shadow: 0 0 0 2px rgba(185,139,224,0.5) inset; }
 .crestZoneLabel { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-align: center; }
 .crestZoneGrid {
   display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; max-width: 110px; margin: 0 auto;
@@ -253,8 +256,12 @@ button { font-family: inherit; cursor: pointer; }
   display: flex; flex-direction: column; align-items: center; gap: 5px; width: 78px;
 }
 .crestHeldItem .crestTile { width: 100%; height: auto; aspect-ratio: 1/1; }
-.crestHeldBtns { display: flex; flex-direction: column; gap: 3px; width: 100%; }
-.crestHeldBtns .action.small { font-size: 10px; padding: 4px 3px; }
+/* 드래그로 조립 구역에 놓는 조각 카드 — 잡을 수 있음을 커서로 알리고, 잡는 즉시
+   반투명해져서 "지금 이걸 옮기는 중"임을 보여준다(원본은 드롭 전까지 자리를 지킴). */
+.crestHeldItem.draggableHint { cursor: grab; }
+.crestHeldItem.draggableHint:active { cursor: grabbing; }
+.crestHeldItem.notDraggable { opacity: 0.5; cursor: not-allowed; }
+.crestHeldItem.dragging { opacity: 0.35; }
 
 /* 아직 후반부가 열리지 않아 잠겨 있는 칸 — 6x4에서 6x6으로 확장되기 전까지 표시된다 */
 .cell.lockedSpot { background: #100a0d; border-style: dashed; cursor: not-allowed; opacity: 0.55; }
