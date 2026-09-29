@@ -112,35 +112,83 @@ function cellIconSVG(type) {
 // 이미지(/crest/crest{세트번호}_{조각위치}.png)를 보여준다 — 아직 안 열었거나(정찰로 엿본
 // 것뿐인) 서버가 세트/위치를 내려주지 않은 경우엔 기존 방패 아이콘으로 대체한다.
 const CREST_LABELS = { 1: '그리핀', 2: '사자', 3: '드래곤' };
-function crestTileImgHTML(crestId, piecePos) {
+// showBadge: 조립 구역/보유 목록에서만 켜는 옵션 — 이 조각이 "정답 순서"상 몇 번째 칸(slot
+// piecePos-1)에 들어가야 하는지 숫자로 보여준다. 이제는 아무 칸에나 놓아도 되는 대신 정확한
+// 순서를 맞춰야 완성되므로, 플레이어가 목표 위치를 의식적으로 노릴 수 있게 돕기 위함이다.
+function crestTileImgHTML(crestId, piecePos, showBadge) {
   const label = CREST_LABELS[crestId] || `${crestId}번`;
-  return `<img class="crestTile" src="/crest/crest${crestId}_${piecePos}.png" alt="${label} 문장 조각 ${piecePos}/4"/>`;
+  const badge = showBadge ? `<span class="crestPosBadge">${piecePos}</span>` : '';
+  return `<span class="crestTileWrap"><img class="crestTile" src="/crest/crest${crestId}_${piecePos}.png" alt="${label} 문장 조각 ${piecePos}/4"/>${badge}</span>`;
 }
 function cellVisualHTML(type, crestId, piecePos) {
   if (type === 'C' && crestId && piecePos) return crestTileImgHTML(crestId, piecePos);
   return cellIconSVG(type);
 }
-function crestZoneSlotsHTML(zone) {
-  let html = '';
-  for (let pos = 1; pos <= 4; pos++) {
-    const filled = zone && zone.crestId && zone.pieces.includes(pos);
-    html += `<div class="crestZoneSlot${filled ? ' filled' : ''}">${filled ? crestTileImgHTML(zone.crestId, pos) : '<span class="crestSlotQ">?</span>'}</div>`;
+// 조립 구역 하나(2x2=4칸)를 실제 DOM으로 그린다. 각 칸(slot, 0~3)은 그 자체로 드롭 대상이자
+// (조각이 놓여 있으면) 드래그 시작점이다 — "4칸 중 어디에 놓을지"를 플레이어가 직접 고르고,
+// 이미 놓인 조각도 자유롭게 다른 칸/구역으로 옮기거나 보유 목록으로 뺄 수 있게 하기 위함.
+// 이미 놓인 조각의 재배치/회수는 무료(행동 예산을 안 씀)라서 canAct와 무관하게 항상 드래그
+// 가능하고, "보유 → 구역"으로 새로 놓는 것만 canAct가 있어야 실제로 드롭이 허용된다.
+function buildCrestZoneGrid(zone, zoneIndex, canAct) {
+  const grid = el('div', 'crestZoneGrid');
+  for (let slot = 0; slot < 4; slot++) {
+    const piecePos = zone && zone.slots ? zone.slots[slot] : null;
+    const filled = piecePos != null;
+    const slotEl = el('div', 'crestZoneSlot' + (filled ? ' filled' : ''));
+    slotEl.innerHTML = filled ? crestTileImgHTML(zone.crestId, piecePos, true) : `<span class="crestSlotQ">${slot + 1}</span>`;
+
+    if (filled) {
+      slotEl.draggable = true;
+      slotEl.classList.add('draggableHint');
+      slotEl.ondragstart = (ev) => {
+        draggedCrestPiece = { crestId: zone.crestId, piecePos, from: { zoneIndex, slot } };
+        ev.dataTransfer.effectAllowed = 'move';
+        ev.dataTransfer.setData('text/plain', `${zone.crestId}-${piecePos}`);
+        slotEl.classList.add('dragging');
+      };
+      slotEl.ondragend = () => { slotEl.classList.remove('dragging'); draggedCrestPiece = null; };
+    }
+
+    // 드래그 중인 조각이 이 칸에 놓일 수 있는지에 따라 preventDefault 여부를 갈라서, 안 되는
+    // 칸 위에서는 브라우저가 알아서 "금지" 커서를 보여주게 한다. 실제 검증은 서버의
+    // handleCrestMove가 다시 하므로 여기서는 UX용 사전 필터일 뿐이다.
+    slotEl.ondragover = (ev) => {
+      if (!draggedCrestPiece) return;
+      const from = draggedCrestPiece.from;
+      const sameSpot = from !== 'held' && from.zoneIndex === zoneIndex && from.slot === slot;
+      if (sameSpot) return; // 원래 자리 위에 다시 놓는 건 의미 없음
+      const isSameZoneMove = from !== 'held' && from.zoneIndex === zoneIndex;
+      if (filled && !isSameZoneMove) return; // 이미 다른 조각이 있는 칸엔, 같은 구역 안에서의 스왑만 예외로 허용
+      if (zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId) return; // 다른 세트가 배정된 구역
+      if (from === 'held' && !canAct) return; // 새 배치는 행동 예산이 있어야 함
+      ev.preventDefault();
+      slotEl.classList.add('dragOver');
+    };
+    slotEl.ondragleave = () => slotEl.classList.remove('dragOver');
+    slotEl.ondrop = (ev) => {
+      ev.preventDefault();
+      slotEl.classList.remove('dragOver');
+      if (!draggedCrestPiece) return;
+      const piece = draggedCrestPiece;
+      draggedCrestPiece = null;
+      socket.emit('crest:move', { crestId: piece.crestId, piecePos: piece.piecePos, from: piece.from, to: { zoneIndex, slot } });
+    };
+    grid.appendChild(slotEl);
   }
-  return html;
+  return grid;
 }
 // 처소 패널 안에 "조립 구역 2개 + 보유(미배치) 조각 + 세트별 경쟁 현황"을 함께 보여주는 위젯.
-// 조립은 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 공유하므로, 예산이 없으면 드래그
-// 자체가 비활성화된다. 배치는 클릭 버튼이 아니라 "보유 조각을 조립 구역으로 끌어다 놓는"
-// 드래그 앤 드롭으로만 한다(데스크톱/마우스 전용 — 이 게임은 터치 기기 지원이 필요 없다고
-// 확인함). 조각이 구역 안에서 정확히 어느 칸(2x2 중 몇 번)에 앉을지는 조각 자신의 piecePos로
-// 이미 정해져 있어 플레이어가 고를 수 있는 게 아니므로, 드롭 대상은 슬롯 한 칸 한 칸이 아니라
-// "구역 박스" 전체다 — 플레이어가 실제로 고르는 건 오직 "어느 구역(1번/2번)에 놓을지"뿐이다.
+// 보유 조각을 조립 구역의 원하는 칸으로 끌어다 놓고(4칸 중 자유 선택), 이미 놓인 조각도 다른
+// 칸/구역으로 옮기거나 다시 보유 목록으로 뺄 수 있다 — 전부 드래그 앤 드롭이며 데스크톱/마우스
+// 전용(이 게임은 터치 기기 지원이 필요 없다고 확인함). "보유 → 구역"으로 새로 놓는 것만 술잔
+// 칸 열기와 같은 행동 예산(opensRemaining)을 쓰고, 이미 놓인 조각의 재배치/회수는 무료라서
+// 예산이 없어도 언제든 할 수 있다.
 function crestBoardWidget(state) {
   const me = state.me;
   const race = state.crestRace || {};
-  const canPlace = state.phase === 'ROUND_ACTION' && (state.opensRemaining || 0) > 0;
+  const canAct = state.phase === 'ROUND_ACTION' && (state.opensRemaining || 0) > 0;
   const wrap = el('div', 'crestBoard');
-  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 완성되면 비워져 다음 세트를 받습니다)'));
+  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 조각마다 적힌 숫자가 그 조각의 정답 칸입니다. 4칸을 정확한 순서로 채워야 완성되어 비워집니다)'));
 
   const raceRow = el('div', 'crestRaceRow');
   [1, 2, 3].forEach((cid) => {
@@ -153,32 +201,17 @@ function crestBoardWidget(state) {
 
   const zonesRow = el('div', 'crestZonesRow');
   (me.zones || []).forEach((zone, zoneIndex) => {
-    const box = el('div', 'crestZoneBox' + (zone.crestId ? '' : ' empty'));
+    const filledCount = zone.slots ? zone.slots.filter((s) => s != null).length : 0;
+    // 4/4인데도 zone.crestId가 여전히 남아있다는 건 "정답 순서가 아니라서 완성 처리가 안 됐다"는
+    // 뜻이다(정답이면 서버가 즉시 비워버리므로, 이 상태로 보이는 건 항상 미완성 신호).
+    const needsFix = zone.crestId != null && filledCount >= 4;
+    const box = el('div', 'crestZoneBox' + (zone.crestId ? '' : ' empty') + (needsFix ? ' needsFix' : ''));
     box.appendChild(el('div', 'crestZoneLabel', zone.crestId
-      ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${zone.pieces.length}/4)`
-      : `${zoneIndex + 1}번 구역 (비어있음) — 조각을 여기로 끌어다 놓으세요`));
-    box.appendChild(el('div', 'crestZoneGrid', crestZoneSlotsHTML(zone)));
-
-    // 드래그 중인 조각이 이 구역에 놓일 수 있는지(같은 세트이거나 빈 구역인지)에 따라
-    // preventDefault 여부를 갈라서, 안 되는 구역 위에서는 브라우저가 알아서 "금지" 커서를
-    // 보여주게 한다. 실제 서버 검증은 handleCrestPlace가 다시 하므로 여기서는 UX용 사전 필터일 뿐.
-    box.ondragover = (ev) => {
-      if (!canPlace || !draggedCrestPiece) return;
-      const blocked = zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId;
-      if (blocked) return;
-      ev.preventDefault();
-      box.classList.add('dragOver');
-    };
-    box.ondragleave = () => box.classList.remove('dragOver');
-    box.ondrop = (ev) => {
-      ev.preventDefault();
-      box.classList.remove('dragOver');
-      if (!canPlace || !draggedCrestPiece) return;
-      const blocked = zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId;
-      if (blocked) return;
-      socket.emit('action:place', { crestId: draggedCrestPiece.crestId, piecePos: draggedCrestPiece.piecePos, zoneIndex });
-      draggedCrestPiece = null;
-    };
+      ? (needsFix
+          ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (4/4, 순서 틀림 — 조각을 옮겨 맞추세요)`
+          : `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${filledCount}/4)`)
+      : `${zoneIndex + 1}번 구역 (비어있음) — 조각을 원하는 칸으로 끌어다 놓으세요`));
+    box.appendChild(buildCrestZoneGrid(zone, zoneIndex, canAct));
     zonesRow.appendChild(box);
   });
   wrap.appendChild(zonesRow);
@@ -186,32 +219,43 @@ function crestBoardWidget(state) {
   const held = me.heldPieces || [];
   const heldWrap = el('div', 'crestHeldWrap');
   heldWrap.appendChild(el('div', 'crestHeldLabel', held.length > 0
-    ? (canPlace
-        ? `보유 중인 조각 (${held.length}개) — 위 조립 구역으로 끌어다 놓으세요. 한 번 놓으면 뺄 수 없습니다.`
-        : `보유 중인 조각 (${held.length}개) — 지금은 배치할 행동 예산이 없습니다.`)
+    ? (canAct
+        ? `보유 중인 조각 (${held.length}개) — 숫자가 적힌 칸(정답 위치)으로 끌어다 놓으세요.`
+        : `보유 중인 조각 (${held.length}개) — 지금은 새로 배치할 행동 예산이 없습니다.`)
     : '보유 중인 조각 없음 — 칸을 열어 문장 조각을 찾아보세요.'));
-  if (held.length > 0) {
-    const heldRow = el('div', 'crestHeldRow');
-    held.forEach((piece) => {
-      const item = el('div', 'crestHeldItem' + (canPlace ? ' draggableHint' : ' notDraggable'));
-      item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos);
-      item.draggable = canPlace;
-      item.ondragstart = (ev) => {
-        draggedCrestPiece = { crestId: piece.crestId, piecePos: piece.piecePos };
-        ev.dataTransfer.effectAllowed = 'move';
-        // 일부 브라우저는 dataTransfer에 데이터가 하나도 없으면 드래그 자체를 시작하지 않으므로,
-        // 형식적으로 채워둔다(실제로는 안 읽고 draggedCrestPiece 변수로만 판단한다).
-        ev.dataTransfer.setData('text/plain', `${piece.crestId}-${piece.piecePos}`);
-        item.classList.add('dragging');
-      };
-      item.ondragend = () => {
-        item.classList.remove('dragging');
-        draggedCrestPiece = null;
-      };
-      heldRow.appendChild(item);
-    });
-    heldWrap.appendChild(heldRow);
-  }
+  // 보유 목록 자체도 드롭 대상이다 — 이미 구역에 놓은 조각을 여기로 끌어오면 다시 뺄 수 있다.
+  const heldRow = el('div', 'crestHeldRow');
+  if (held.length === 0) heldRow.appendChild(el('span', 'crestHeldEmptyHint', '조립 구역의 조각을 여기로 끌어오면 다시 뺄 수 있습니다'));
+  held.forEach((piece) => {
+    const item = el('div', 'crestHeldItem' + (canAct ? ' draggableHint' : ' notDraggable'));
+    item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos, true);
+    item.draggable = canAct;
+    item.ondragstart = (ev) => {
+      draggedCrestPiece = { crestId: piece.crestId, piecePos: piece.piecePos, from: 'held' };
+      ev.dataTransfer.effectAllowed = 'move';
+      // 일부 브라우저는 dataTransfer에 데이터가 하나도 없으면 드래그 자체를 시작하지 않으므로,
+      // 형식적으로 채워둔다(실제로는 안 읽고 draggedCrestPiece 변수로만 판단한다).
+      ev.dataTransfer.setData('text/plain', `${piece.crestId}-${piece.piecePos}`);
+      item.classList.add('dragging');
+    };
+    item.ondragend = () => { item.classList.remove('dragging'); draggedCrestPiece = null; };
+    heldRow.appendChild(item);
+  });
+  heldRow.ondragover = (ev) => {
+    if (!draggedCrestPiece || draggedCrestPiece.from === 'held') return; // held→held는 의미 없음
+    ev.preventDefault();
+    heldRow.classList.add('dragOver');
+  };
+  heldRow.ondragleave = () => heldRow.classList.remove('dragOver');
+  heldRow.ondrop = (ev) => {
+    ev.preventDefault();
+    heldRow.classList.remove('dragOver');
+    if (!draggedCrestPiece || draggedCrestPiece.from === 'held') return;
+    const piece = draggedCrestPiece;
+    draggedCrestPiece = null;
+    socket.emit('crest:move', { crestId: piece.crestId, piecePos: piece.piecePos, from: piece.from, to: 'held' });
+  };
+  heldWrap.appendChild(heldRow);
   wrap.appendChild(heldWrap);
   return wrap;
 }
