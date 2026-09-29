@@ -127,17 +127,17 @@ function cellVisualHTML(type, crestId, piecePos) {
 // 조립 구역 하나(2x2=4칸)를 실제 DOM으로 그린다. 각 칸(slot, 0~3)은 그 자체로 드롭 대상이자
 // (조각이 놓여 있으면) 드래그 시작점이다 — "4칸 중 어디에 놓을지"를 플레이어가 직접 고르고,
 // 이미 놓인 조각도 자유롭게 다른 칸/구역으로 옮기거나 보유 목록으로 뺄 수 있게 하기 위함.
-// 이미 놓인 조각의 재배치/회수는 무료(행동 예산을 안 씀)라서 canAct와 무관하게 항상 드래그
-// 가능하고, "보유 → 구역"으로 새로 놓는 것만 canAct가 있어야 실제로 드롭이 허용된다.
+// 새로 놓기든, 이미 놓인 조각을 옮기거나(스왑 포함) 되돌리는 것이든 전부 행동 예산을 쓰므로,
+// canAct(이번 턴에 남은 행동이 있는지)가 없으면 어떤 조각도 아예 드래그를 시작할 수 없다.
 function buildCrestZoneGrid(zone, zoneIndex, canAct) {
   const grid = el('div', 'crestZoneGrid');
   for (let slot = 0; slot < 4; slot++) {
     const piecePos = zone && zone.slots ? zone.slots[slot] : null;
     const filled = piecePos != null;
-    const slotEl = el('div', 'crestZoneSlot' + (filled ? ' filled' : ''));
+    const slotEl = el('div', 'crestZoneSlot' + (filled ? ' filled' : '') + (filled && !canAct ? ' notDraggable' : ''));
     slotEl.innerHTML = filled ? crestTileImgHTML(zone.crestId, piecePos, true) : `<span class="crestSlotQ">${slot + 1}</span>`;
 
-    if (filled) {
+    if (filled && canAct) {
       slotEl.draggable = true;
       slotEl.classList.add('draggableHint');
       slotEl.ondragstart = (ev) => {
@@ -154,13 +154,13 @@ function buildCrestZoneGrid(zone, zoneIndex, canAct) {
     // handleCrestMove가 다시 하므로 여기서는 UX용 사전 필터일 뿐이다.
     slotEl.ondragover = (ev) => {
       if (!draggedCrestPiece) return;
+      if (!canAct) return; // 조립 보드를 만지는 모든 이동이 행동 예산을 쓰므로, 예산이 없으면 전부 불가
       const from = draggedCrestPiece.from;
       const sameSpot = from !== 'held' && from.zoneIndex === zoneIndex && from.slot === slot;
       if (sameSpot) return; // 원래 자리 위에 다시 놓는 건 의미 없음
       const isSameZoneMove = from !== 'held' && from.zoneIndex === zoneIndex;
       if (filled && !isSameZoneMove) return; // 이미 다른 조각이 있는 칸엔, 같은 구역 안에서의 스왑만 예외로 허용
       if (zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId) return; // 다른 세트가 배정된 구역
-      if (from === 'held' && !canAct) return; // 새 배치는 행동 예산이 있어야 함
       ev.preventDefault();
       slotEl.classList.add('dragOver');
     };
@@ -180,15 +180,15 @@ function buildCrestZoneGrid(zone, zoneIndex, canAct) {
 // 처소 패널 안에 "조립 구역 2개 + 보유(미배치) 조각 + 세트별 경쟁 현황"을 함께 보여주는 위젯.
 // 보유 조각을 조립 구역의 원하는 칸으로 끌어다 놓고(4칸 중 자유 선택), 이미 놓인 조각도 다른
 // 칸/구역으로 옮기거나 다시 보유 목록으로 뺄 수 있다 — 전부 드래그 앤 드롭이며 데스크톱/마우스
-// 전용(이 게임은 터치 기기 지원이 필요 없다고 확인함). "보유 → 구역"으로 새로 놓는 것만 술잔
-// 칸 열기와 같은 행동 예산(opensRemaining)을 쓰고, 이미 놓인 조각의 재배치/회수는 무료라서
-// 예산이 없어도 언제든 할 수 있다.
+// 전용(이 게임은 터치 기기 지원이 필요 없다고 확인함). 새로 놓기든, 이미 놓인 조각을 옮기거나
+// (스왑 포함) 되돌리는 것이든 전부 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 쓴다 —
+// 무료로 정리할 수 있는 이동은 없으므로, 예산이 없으면(canAct===false) 어떤 조각도 집을 수 없다.
 function crestBoardWidget(state) {
   const me = state.me;
   const race = state.crestRace || {};
   const canAct = state.phase === 'ROUND_ACTION' && (state.opensRemaining || 0) > 0;
   const wrap = el('div', 'crestBoard');
-  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 조각마다 적힌 숫자가 그 조각의 정답 칸입니다. 4칸을 정확한 순서로 채워야 완성되어 비워집니다)'));
+  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 조각마다 적힌 숫자가 그 조각의 정답 칸입니다. 4칸을 정확한 순서로 채워야 완성되어 비워지며, 조각을 놓거나 옮기는 동작 하나하나가 이번 턴의 행동력을 소모합니다)'));
 
   const raceRow = el('div', 'crestRaceRow');
   [1, 2, 3].forEach((cid) => {
@@ -220,12 +220,12 @@ function crestBoardWidget(state) {
   const heldWrap = el('div', 'crestHeldWrap');
   heldWrap.appendChild(el('div', 'crestHeldLabel', held.length > 0
     ? (canAct
-        ? `보유 중인 조각 (${held.length}개) — 숫자가 적힌 칸(정답 위치)으로 끌어다 놓으세요.`
-        : `보유 중인 조각 (${held.length}개) — 지금은 새로 배치할 행동 예산이 없습니다.`)
+        ? `보유 중인 조각 (${held.length}개) — 숫자가 적힌 칸(정답 위치)으로 끌어다 놓으세요. (행동력 1 소모)`
+        : `보유 중인 조각 (${held.length}개) — 지금은 남은 행동력이 없어 조립 보드를 만질 수 없습니다.`)
     : '보유 중인 조각 없음 — 칸을 열어 문장 조각을 찾아보세요.'));
-  // 보유 목록 자체도 드롭 대상이다 — 이미 구역에 놓은 조각을 여기로 끌어오면 다시 뺄 수 있다.
+  // 보유 목록 자체도 드롭 대상이다 — 이미 구역에 놓은 조각을 여기로 끌어오면 뺄 수 있다(행동력 소모).
   const heldRow = el('div', 'crestHeldRow');
-  if (held.length === 0) heldRow.appendChild(el('span', 'crestHeldEmptyHint', '조립 구역의 조각을 여기로 끌어오면 다시 뺄 수 있습니다'));
+  if (held.length === 0) heldRow.appendChild(el('span', 'crestHeldEmptyHint', '조립 구역의 조각을 여기로 끌어오면 뺄 수 있습니다(행동력 1 소모)'));
   held.forEach((piece) => {
     const item = el('div', 'crestHeldItem' + (canAct ? ' draggableHint' : ' notDraggable'));
     item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos, true);

@@ -262,6 +262,8 @@ button { font-family: inherit; cursor: pointer; }
 .crestZoneSlot.draggableHint:active { cursor: grabbing; }
 .crestZoneSlot.dragging { opacity: 0.35; }
 .crestZoneSlot.dragOver { border-color: #b98be0; background: #241a30; box-shadow: 0 0 0 2px rgba(185,139,224,0.5) inset; }
+/* 이번 턴에 남은 행동력이 없으면 이미 놓인 조각도 옮기거나 뺄 수 없다(전부 행동력을 쓰므로). */
+.crestZoneSlot.notDraggable { cursor: not-allowed; opacity: 0.7; }
 
 .crestHeldWrap { margin-top: 4px; }
 .crestHeldLabel { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
@@ -543,13 +545,13 @@ button.iconBtn .mgIcon { width: 40px; height: 40px; flex: none; }
 /* 보상(정찰)으로 무엇을 알아냈는지 라운드 내내 계속 보이도록 하는 패널 */
 .rewardResultPanel { border: 1px solid var(--gold); }
 .rewardResultPanel .desc { color: var(--gold); font-size: 14.5px; line-height: 1.6; }
-/* 철가방(배달통) 뚜껑이 확 열리는 듯한 짧은 등장 연출 */
-@keyframes boxOpenPop {
-  0% { transform: scale(0.75) rotateX(-35deg); opacity: 0; }
-  55% { transform: scale(1.04) rotateX(4deg); opacity: 1; }
-  100% { transform: scale(1) rotateX(0deg); opacity: 1; }
+/* 철가방(배달통) 정찰 — 별도의 상자/카드가 튀어나오는 "팝업"처럼 보이지 않도록, 확대/회전
+   같은 등장 연출 없이 원래 그 자리(내 처소 그리드)에서 살짝 빛나며 바로 드러나게만 한다. */
+@keyframes flashLightUp {
+  0% { filter: brightness(1.9); }
+  100% { filter: brightness(1); }
 }
-.boxOpenAnim { animation: boxOpenPop 150ms ease-out; transform-origin: top center; }
+.boxOpenAnim { animation: flashLightUp 200ms ease-out; }
 
 /* 숫자 키패드 (촛불 개수 맞히기 / 금고 번호 맞추기) */
 .numpadWrap { max-width: 260px; margin-top: 8px; }

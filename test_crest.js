@@ -51,11 +51,11 @@ function onState(label, socket, s) {
     setTimeout(tryPick, 50);
   }
   if (s.phase === 'ROUND_ACTION') {
-    // 이미 놓인 조각의 무료 재배치/회수 경로도 가끔 건드려서 검증한다(행동 예산과 무관하므로
-    // opensRemaining과 상관없이 시도). 이제는 순서가 실제로 중요하므로, "정답 순서에서 벗어난"
+    // 이미 놓인 조각의 재배치/회수도 이제는 칸 열기와 같은 행동 예산을 쓰므로, 남은 행동이
+    // 있을 때만 가끔 건드려서 검증한다. 이제는 순서가 실제로 중요하므로, "정답 순서에서 벗어난"
     // 조각이 있으면 우선적으로 정답 칸으로 옮겨/스왑해서 완성 경로(및 needsFix→완성 전환)를
     // 실제로 거치게 하고, 없으면 기존처럼 무작위 회수/재배치도 가끔 섞는다.
-    if (Math.random() < 0.15) {
+    if (s.opensRemaining > 0 && Math.random() < 0.15) {
       const zones = s.me.zones || [];
       const placed = [];
       zones.forEach((z, zoneIndex) => (z.slots || []).forEach((piecePos, slot) => { if (piecePos != null) placed.push({ crestId: z.crestId, piecePos, zoneIndex, slot }); }));

@@ -110,9 +110,8 @@ function onState(label, socket, s) {
   if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
     setTimeout(() => doRandomAction(label, socket, s), 30);
   }
-  // 재배치/회수는 행동 예산과 무관한 무료 동작이라, 이번 턴 몫을 다 썼어도(isMyTurn=false)
-  // 계속 시도할 수 있다 — 그 경로도 회귀 테스트가 실제로 건드리게 한다.
-  if (s.phase === 'ROUND_ACTION') {
+  // 재배치/회수도 이제 칸 열기와 같은 행동 예산을 쓰므로, 남은 행동이 있을 때만 시도한다.
+  if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
     setTimeout(() => maybeRearrangeCrest(label, socket, s), 35);
   }
 

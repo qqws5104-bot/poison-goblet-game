@@ -216,6 +216,7 @@ function waitFor(getState, predicate, timeoutMs = 20000) {
   // 현재: slot0=4, slot1=1, slot2=2, slot3=3 (piecePos%4 매핑) → 정답: slot0=1,slot1=2,slot2=3,slot3=4
   // 인접 스왑 3번으로 고친다: (0↔1) → (1↔2) → (2↔3).
   async function swapSlots(a, b) {
+    await waitForOpensAvailable(); // 스왑도 이제 행동 예산을 쓰므로, 남은 행동이 없으면 다음 라운드까지 기다린다
     const zoneNow = sA.me.zones[zoneIndex];
     const pieceAtA = zoneNow.slots[a];
     const pieceAtB = zoneNow.slots[b];

@@ -19,15 +19,19 @@ const CONFIG = {
   CREST_SET_COUNT: 3,     // 문장 세트 개수
   CREST_SET_SIZE: 4,      // 세트 하나당 조각 수(2x2 고정) — 어느 칸에 놓을지는 플레이어가 드래그로
                            // 직접 고르고, 마음이 바뀌면 언제든 다른 칸/구역으로 옮기거나 다시 보유
-                           // 칸으로 뺄 수 있다(단, 새로 "보유 → 구역"으로 놓는 것만 라운드 행동
-                           // 예산을 쓴다 — 이미 놓인 조각을 옮기는 건 정리일 뿐이라 무료).
+                           // 칸으로 뺄 수 있다. 단, 새로 "보유 → 구역"으로 놓는 것뿐 아니라 이미
+                           // 놓인 조각을 옮기거나(스왑 포함) 되돌리는 것까지 전부 술잔 칸 열기와
+                           // 같은 라운드 행동 예산(OPENS_PER_TURN)을 쓴다 — 조립 보드를 만지는
+                           // 모든 조작이 곧 "이번 라운드에 쓸 수 있는 행동 하나"이므로, 잘못
+                           // 놓으면 그걸 고치는 데도 실제 비용이 든다(무료 이동은 없다).
   CREST_TOTAL: 12,        // = CREST_SET_COUNT * CREST_SET_SIZE
   CREST_ZONES: 2,         // 동시에 진행 가능한 조립 구역 수(3세트인데 구역은 2개뿐이라 우선순위 고민이 생김) —
                            // 4칸이 다 찼다고 무조건 완성은 아니다 — piecePos N번 조각이 정확히 N번째
                            // 슬롯(자기 칸)에 있어야 "정답 순서"로 인정되어 완성 처리된다. 순서가
                            // 틀리면 구역은 "4/4지만 미완성" 상태로 남고, 같은 구역 안에서 슬롯끼리
-                           // 맞바꾸는(스왑) 무료 이동으로 순서를 고쳐야 한다. 완성되면 즉시 비워져
-                           // 다음 세트를 받을 수 있다(한 번에 최대 2개 진행 중).
+                           // 맞바꾸는(스왑)으로 순서를 고쳐야 하는데, 이 스왑 한 번도 행동력을 쓰므로
+                           // 순서를 잘못 놓으면 그만큼 손해다. 완성되면 즉시 비워져 다음 세트를
+                           // 받을 수 있다(한 번에 최대 2개 진행 중).
   CREST_SET_BONUS: 3,     // 그 세트를 "상대보다 먼저" 완성한 사람만 받는 보너스(세트별로 딱 한 번, 최대 3세트 x 3점)
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   POISON_PENALTY: 2,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -2점
@@ -890,9 +894,10 @@ function crestSetLabel(crestId) { return CREST_SET_NAMES[crestId] || `문장 ${c
 // ------------------------------ 문장 조각 조립 --------------------------------
 // "어디에 있던 조각을 어디로 옮기는가"를 from/to로 받는 통합 이동 핸들러.
 //   - from/to는 'held'(보유 목록) 또는 {zoneIndex, slot}(조립 구역의 4칸 중 하나, slot 0~3) 중 하나.
-//   - 보유 목록에서 새로 "꺼내 놓는" 이동(from === 'held')만 술잔 칸 열기(OPEN)와 같은 라운드
-//     행동 예산(OPENS_PER_TURN)을 소비한다 — 이미 놓인 조각을 다른 칸/구역으로 옮기거나 다시
-//     보유 목록으로 빼는 건 새 정보를 얻는 게 아니라 단순 정리이므로 무료이고 언제든 할 수 있다.
+//   - 실제로 위치가 바뀌는 이동은 전부(보유→구역으로 새로 놓기, 구역↔구역으로 옮기기,
+//     같은 구역 안에서의 스왑, 구역→보유로 되돌리기 모두) 술잔 칸 열기(OPEN)와 같은 라운드
+//     행동 예산(OPENS_PER_TURN)을 소비한다 — "정리는 무료"라는 예전 규칙은 없다. 자기 자신의
+//     자리 위에 다시 놓는(sameSpot) 것만 애초에 아무 변화가 없으므로 예산을 쓰지 않는다.
 //   - 어느 물리적 칸(slot)에 놓을지는 조각 자신의 piecePos와 무관하게 플레이어가 직접 고른다.
 function parseCrestLoc(loc) {
   if (loc === 'held') return { type: 'held' };
@@ -930,11 +935,11 @@ function handleCrestMove(id, payload) {
     fromLoc.zoneIndex === toLoc.zoneIndex && fromLoc.slot === toLoc.slot;
   if (sameSpot) return; // 원래 자리에 다시 놓는 건 아무 의미 없는 조작이므로 무시한다
 
-  const isNewPlacement = fromLoc.type === 'held'; // 보유 → 구역: 유일하게 행동 예산을 쓰는 경우
-  if (isNewPlacement) {
-    const opens = match.actionOpens[id] || 0;
-    if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 행동 예산을 다 썼음
-  }
+  // 조각의 위치를 바꾸는 이동은 전부(새로 놓기든, 이미 놓인 걸 다른 칸/구역으로 옮기거나
+  // 보유 목록으로 되돌리는 것이든) 술잔 칸 열기와 같은 라운드 행동 예산을 쓴다 — "이미 놓인
+  // 조각을 옮기는 건 무료"라는 예전 규칙은 폐지됐다. 스왑도 이동 한 번(=행동 하나)으로 친다.
+  const opens = match.actionOpens[id] || 0;
+  if (opens >= CONFIG.OPENS_PER_TURN) return; // 이미 이번 라운드 행동 예산을 다 썼음
 
   // 도착지 검증 — 이미 다른 조각이 있는 칸이면 원칙적으론 거부하지만, "같은 구역 안에서
   // 슬롯을 맞바꾸는 것"만은 예외로 허용한다(스왑). 이제는 정확한 순서가 실제로 중요해졌으므로
@@ -965,16 +970,16 @@ function handleCrestMove(id, payload) {
 
   if (toLoc.type === 'held') {
     player.heldPieces.push({ crestId, piecePos });
-    actionLog(player, `${crestSetLabel(crestId)} ${piecePos}번 조각을 다시 보유 목록으로 뺐습니다.`);
+    actionLog(player, `${crestSetLabel(crestId)} ${piecePos}번 조각을 다시 보유 목록으로 뺐습니다. (행동력 1 소모)`);
   } else {
     const toZone = player.zones[toLoc.zoneIndex];
     toZone.crestId = crestId;
     toZone.slots[toLoc.slot] = piecePos;
     if (swapPiecePos != null) {
-      actionLog(player, `${crestSetLabel(crestId)} 조각을 ${toLoc.zoneIndex + 1}번 조립 구역 ${toLoc.slot + 1}번 칸으로 옮기며 ${swapPiecePos}번 조각과 자리를 맞바꿨습니다.`);
+      actionLog(player, `${crestSetLabel(crestId)} 조각을 ${toLoc.zoneIndex + 1}번 조립 구역 ${toLoc.slot + 1}번 칸으로 옮기며 ${swapPiecePos}번 조각과 자리를 맞바꿨습니다. (행동력 1 소모)`);
     } else {
       const filled = toZone.slots.filter((s) => s != null).length;
-      actionLog(player, `${crestSetLabel(crestId)} 조각을 ${toLoc.zoneIndex + 1}번 조립 구역 ${toLoc.slot + 1}번 칸에 배치 (${filled}/${CONFIG.CREST_SET_SIZE}).`);
+      actionLog(player, `${crestSetLabel(crestId)} 조각을 ${toLoc.zoneIndex + 1}번 조립 구역 ${toLoc.slot + 1}번 칸에 배치 (${filled}/${CONFIG.CREST_SET_SIZE}). (행동력 1 소모)`);
     }
     const filledNow = toZone.slots.filter((s) => s != null).length;
     if (filledNow >= CONFIG.CREST_SET_SIZE) {
@@ -999,12 +1004,8 @@ function handleCrestMove(id, payload) {
     }
   }
 
-  if (isNewPlacement) {
-    match.actionOpens[id] = (match.actionOpens[id] || 0) + 1;
-    checkRoundActionDone();
-  } else {
-    broadcastState(); // 무료 이동 — 행동 예산 변화가 없으니 라운드 종료 여부를 다시 검사할 필요는 없다
-  }
+  match.actionOpens[id] = (match.actionOpens[id] || 0) + 1;
+  checkRoundActionDone();
 }
 
 function checkNeutralize(player) {
