@@ -108,6 +108,10 @@ button { font-family: inherit; cursor: pointer; }
 /* "게임 화면"(미니게임/행동)과 "6×6 화면"(내 처소)을 탭으로 오가는 단일 화면 레이아웃 —
    4대 분리 모드의 "고르기" 화면(내 처소 하나만 보여줌)도 폭이 같아 이 클래스를 함께 쓴다. */
 .mainView { max-width: 560px; margin: 0 auto; }
+/* 처소 그리드와 가문의 문장 조립을 좌우로 나란히 보여줘야 하는 화면(고르기 화면, 레거시
+   "내 처소" 탭)은 폭이 더 필요해서 이 클래스를 덧붙인다 — 좁은 화면에서는 아래 미디어
+   쿼리가 다시 세로로 되돌린다. */
+.mainView.wide { max-width: 920px; }
 .tabBar { display: flex; gap: 8px; margin-bottom: 16px; }
 .tabBtn {
   flex: 1 1 0; position: relative;
@@ -224,6 +228,21 @@ button { font-family: inherit; cursor: pointer; }
 /* "가문의 문장" 확장판 조립 보드 — 3세트(그리핀/사자/드래곤) x 4조각, 조립 구역은 2개뿐이라
    어느 세트를 먼저 완성할지 고민하게 만든다. 세트별 "먼저 완성" 경쟁 현황 + 구역 2개 +
    아직 못 놓은 보유 조각 목록을 한 덩어리로 보여준다. */
+/* 처소 그리드(왼쪽) + 가문의 문장 조립(오른쪽) 좌우 배치. 세로로 쌓아 스크롤이 생기던 것을
+   가로로 펼쳐 한 화면에 다 보이게 한다. 화면이 넉넉히 넓을 때는 그리드가 원래 크기(420px)로
+   커지고, 좁을 때는 두 칸 다 줄어들어(그리드도 함께 축소) 비교적 좁은 창에서도 옆으로 붙게
+   한다 — 정말 좁을 때만 미디어 쿼리로 세로로 되돌린다. */
+.roomCrestSplit { display: flex; gap: 18px; align-items: flex-start; }
+.roomCrestLeft { flex: 1 1 280px; max-width: 420px; min-width: 260px; }
+.roomCrestRight { flex: 1 1 270px; min-width: 270px; }
+.roomCrestRight .crestBoard { margin-top: 0; }
+@media (max-width: 620px) {
+  .mainView.wide { max-width: 560px; }
+  .roomCrestSplit { flex-direction: column; }
+  .roomCrestLeft { flex: 1 1 auto; max-width: 100%; min-width: 0; }
+  .roomCrestRight { flex: 1 1 auto; min-width: 0; width: 100%; }
+}
+
 .crestBoard { margin-top: 14px; }
 .crestBoard h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: normal; }
 

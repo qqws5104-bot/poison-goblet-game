@@ -107,11 +107,17 @@ const SIGIL_NAMES_KR = { SWORD: '검', POISON: '독배', SHIELD: '방패' };
 // (finalizeSetup/finalizeMidSetup에서 실제 배치). 다만 "총 몇 세트, 세트당 몇 조각"이라는
 // 구조 자체는 더 이상 비공개가 아니다(CREST_SET_COUNT=3, CREST_SET_SIZE=4로 고정) — 실제
 // 조립 UI를 보여줘야 하는 이상 세트 구조를 숨길 이유가 없다. 위치만 여전히 비공개 정보다.
-const CLUE_CATS = ['P', 'GEM', 'A', 'C'];
-const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', C: '가문의 문장' };
 const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸', C: '가문의 문장' };
 // 문장 세트 3개 — 각각 실제 문장 그림(그리핀/사자/드래곤)을 2x2로 잘라 쓴다.
 const CREST_SET_NAMES = { 1: '그리핀 문장', 2: '사자 문장', 3: '드래곤 문장' };
+// 가문의 문장은 더 이상 "가문의 문장"이라는 뭉뚱그린 한 항목이 아니라, 승자가 그리핀/사자/드래곤
+// 세트 중 어느 쪽을 쫓을지 직접 골라서 정찰할 수 있다. CREST_1/2/3은 실제 CELL 타입이 아니라
+// "C 타입 중 crestId가 해당 세트인 칸만" 세는 가상 카테고리다 (countRewardMatch에서 처리).
+const CLUE_CATS = ['P', 'GEM', 'A', 'CREST_1', 'CREST_2', 'CREST_3'];
+const CLUE_CAT_NAMES = {
+  P: '독 술잔', GEM: '보석', A: '해독제',
+  CREST_1: CREST_SET_NAMES[1], CREST_2: CREST_SET_NAMES[2], CREST_3: CREST_SET_NAMES[3],
+};
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
@@ -1059,12 +1065,15 @@ function handleRewardUse(id, payload) {
     const rowN = activeRows, colN = CONFIG.GRID;
     const outerN = axis === 'row' ? rowN : colN;
     const innerN = axis === 'row' ? colN : rowN;
+    // CREST_1/2/3 은 실제 cell.type이 아니라 "C 타입이면서 그 crestId를 가진 칸"이라는 뜻이다.
+    const wantCrestId = targetType.startsWith('CREST_') ? Number(targetType.split('_')[1]) : null;
+    const matchesTarget = (cell) => (wantCrestId != null ? cell.type === 'C' && cell.crestId === wantCrestId : cell.type === targetType);
     const counts = [];
     for (let idx = 0; idx < outerN; idx++) {
       let count = 0;
       for (let i = 0; i < innerN; i++) {
         const cell = axis === 'row' ? player.room[idx][i] : player.room[i][idx];
-        if (!cell.locked && cell.type === targetType) count += 1;
+        if (!cell.locked && matchesTarget(cell)) count += 1;
       }
       counts.push(count);
     }

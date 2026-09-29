@@ -914,7 +914,7 @@ function renderMain(state) {
     if (state.phase === 'ROUND_ACTION') activeTab = 'ROOM';
   }
 
-  const wrap = el('div', 'mainView');
+  const wrap = el('div', 'mainView' + (activeTab === 'ROOM' ? ' wide' : ''));
   wrap.appendChild(renderStatsPanel(state));
   wrap.appendChild(renderTabBar(state));
 
@@ -1148,10 +1148,22 @@ function renderMyRoomPanel(state) {
   // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
-  p.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
-  if (pickMode) p.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
-  else if (waitingForFlash) p.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
-  p.appendChild(crestBoardWidget(state));
+
+  // 처소 그리드(왼쪽)와 가문의 문장 조립(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
+  // 스크롤이 생겨 불편하다는 피드백을 반영. 화면이 좁으면 CSS 미디어 쿼리로 다시 세로로 쌓인다.
+  const split = el('div', 'roomCrestSplit');
+
+  const left = el('div', 'roomCrestLeft');
+  left.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
+  if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
+  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
+  split.appendChild(left);
+
+  const right = el('div', 'roomCrestRight');
+  right.appendChild(crestBoardWidget(state));
+  split.appendChild(right);
+
+  p.appendChild(split);
   return p;
 }
 
@@ -1166,7 +1178,7 @@ function renderPickWaiting(msg) {
 }
 
 function renderPickView(state) {
-  const wrap = el('div', 'mainView');
+  const wrap = el('div', 'mainView wide');
 
   appendRewardPanels(wrap, state);
 
@@ -1175,11 +1187,23 @@ function renderPickView(state) {
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
-  mine.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
-  if (pickMode) mine.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하거나, 아래에서 보유한 문장 조각을 조립 구역에 놓으세요. (이번 턴에 ${state.opensRemaining}개 더 행동할 수 있습니다)`));
-  else if (waitingForFlash) mine.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
-  else if (!state.isMyTurn) mine.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
-  mine.appendChild(crestBoardWidget(state));
+
+  // 처소 그리드(왼쪽)와 가문의 문장 조립(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
+  // 스크롤이 생겨 불편하다는 피드백을 반영. 화면이 좁으면 CSS 미디어 쿼리로 다시 세로로 쌓인다.
+  const split = el('div', 'roomCrestSplit');
+
+  const left = el('div', 'roomCrestLeft');
+  left.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
+  if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하거나, 오른쪽에서 보유한 문장 조각을 조립 구역에 놓으세요. (이번 턴에 ${state.opensRemaining}개 더 행동할 수 있습니다)`));
+  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
+  else if (!state.isMyTurn) left.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
+  split.appendChild(left);
+
+  const right = el('div', 'roomCrestRight');
+  right.appendChild(crestBoardWidget(state));
+  split.appendChild(right);
+
+  mine.appendChild(split);
   wrap.appendChild(mine);
 
   app.appendChild(wrap);
