@@ -719,23 +719,26 @@ function tickDiceFace() {
 }
 
 // ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
-// 독배를 마신 순간, 45초짜리 도전 창이 자동으로 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는
-// 패널 형태) — 오직 "게임" 화면(APP_ROLE==='game')과 레거시 단일화면(APP_ROLE===null)에서만
-// 보인다. 문장을 아직 안 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의 10칸 슬라이딩
-// 퍼즐(3x3 격자 + 왼쪽 위 여분 1칸)을 보여준다. 상대와 겨루는 게 아니라 각자 독립적인 개인전이라
-// 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상 떠 있어야 하므로 #app 밖의
-// 독립된 오버레이 div를 직접 조작한다.
+// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 45초짜리 도전 창이 자동으로
+// 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는 패널 형태) — "고르기"(pick) 화면과 레거시
+// 단일화면(APP_ROLE===null)에서만 보인다("게임" 화면엔 미니게임/보상 UI가 있어 겹쳐 보이니
+// 아예 띄우지 않는다). 문장을 아직 안 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의
+// 10칸 슬라이딩 퍼즐(3x3 격자 + 왼쪽 위 여분 1칸)을 보여준다. 상대와 겨루는 게 아니라 각자
+// 독립적인 개인전이라 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상
+// 떠 있어야 하므로 #app 밖의 독립된 오버레이 div를 직접 조작한다.
 let poisonPuzzleTicking = false;
 const POISON_PUZZLE_CREST_LABELS = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
-// 퍼즐판은 총 10칸 — pos 0은 3x3 격자(pos 1~9, 가로쓰기 순서) 왼쪽 위 바깥에 붙은 여분 칸이다.
-// 조각 값(0~8)의 "제 자리"는 격자 안 위치(그 값+1)이므로, 배경 자르기는 항상 그 제자리 좌표
-// 기준으로 계산한다(지금 어느 pos에 놓여 있는지와 무관하게 조각 자체의 그림은 고정).
-function applyPuzzleTileBg(div, val, crest) {
-  const n = 3;
-  const tr = Math.floor(val / n), tc = val % n;
+// 퍼즐판은 총 (rows*cols + 1)칸 — pos 0은 격자(pos 1~rows*cols, 가로쓰기 순서) 왼쪽 위 바깥에
+// 붙은 여분 칸이다. 문장마다 난이도(격자 크기)가 다르다(서버의 POISON_PUZZLE_CREST_SHAPE와
+// 동일해야 함 — 2x2/2x3/3x3). 조각 값의 "제 자리"는 격자 안 위치(그 값+1)이므로, 배경 자르기는
+// 항상 그 제자리 좌표 기준으로 계산한다(지금 어느 pos에 놓여 있는지와 무관하게 조각 자체의
+// 그림은 고정).
+function applyPuzzleTileBg(div, val, crest, shape) {
+  const { rows, cols } = shape;
+  const tr = Math.floor(val / cols), tc = val % cols;
   div.style.backgroundImage = `url(/crest/${crest}_full.png)`;
-  div.style.backgroundSize = `${n * 100}% ${n * 100}%`;
-  div.style.backgroundPosition = `${(tc * 100) / (n - 1)}% ${(tr * 100) / (n - 1)}%`;
+  div.style.backgroundSize = `${cols * 100}% ${rows * 100}%`;
+  div.style.backgroundPosition = `${cols > 1 ? (tc * 100) / (cols - 1) : 0}% ${rows > 1 ? (tr * 100) / (rows - 1) : 0}%`;
 }
 // 아직 문장을 안 고른 상태 — 3개 중 하나를 직접 고르는 화면.
 function buildPoisonPuzzleChoicePanel(pz) {
@@ -747,7 +750,15 @@ function buildPoisonPuzzleChoicePanel(pz) {
   const list = el('div', 'puzzleCrestChoiceList');
   pz.crests.forEach((c) => {
     const label = POISON_PUZZLE_CREST_LABELS[c.key] || c.key;
-    const b = el('button', 'puzzleCrestChoiceBtn', c.solved ? `✅ ${label} (완성됨 — 이어서 감상)` : label);
+    const sizeTag = c.shape ? `${c.shape.rows}×${c.shape.cols}` : '';
+    // 텍스트만으로는 뭘 고르는지 안 와닿는다는 피드백 — 실제 문장 그림을 썸네일로 보여주고
+    // 그중 하고 싶은 걸 직접 고르게 한다. 문장마다 난이도(격자 크기)가 다르므로 같이 보여준다.
+    const b = el('button', 'puzzleCrestChoiceBtn' + (c.solved ? ' solved' : ''));
+    const thumb = el('div', 'puzzleCrestThumb');
+    thumb.style.backgroundImage = `url(/crest/${c.key}_full.png)`;
+    b.appendChild(thumb);
+    b.appendChild(el('div', 'puzzleCrestLabel', c.solved ? `✅ ${label}` : label));
+    if (sizeTag) b.appendChild(el('div', 'puzzleCrestSizeTag', sizeTag));
     b.onclick = () => socket.emit('puzzle:chooseCrest', { crest: c.key });
     list.appendChild(b);
   });
@@ -755,22 +766,26 @@ function buildPoisonPuzzleChoicePanel(pz) {
   panel.appendChild(el('p', 'hint', '고르지 않으면 창이 닫힐 때 내 처소 칸 1개가 무작위로 잠깁니다. 완성한 문장을 다시 골라도 페널티는 피하지만 추가 점수는 없습니다.'));
   return panel;
 }
-// 문장을 고른 뒤 — 실제 10칸 슬라이딩 퍼즐(3x3 + 왼쪽 위 여분 1칸).
+// 문장을 고른 뒤 — 실제 슬라이딩 퍼즐(격자 rows×cols + 왼쪽 위 여분 1칸).
 function buildPoisonPuzzleBoardPanel(pz) {
   const resolved = !!pz.solved;
+  const shape = pz.shape || { rows: 3, cols: 3 };
+  const blankValue = shape.rows * shape.cols;
   const panel = el('div', 'puzzlePanel' + (resolved ? ' won' : ''));
-  panel.appendChild(el('h3', null, `🧩 ${POISON_PUZZLE_CREST_LABELS[pz.myCrest] || '문장'} 맞추기`));
+  panel.appendChild(el('h3', null, `🧩 ${POISON_PUZZLE_CREST_LABELS[pz.myCrest] || '문장'} 맞추기 (${shape.rows}×${shape.cols})`));
   const timer = el('div', 'puzzleTimerBadge');
   timer.id = 'poisonPuzzleTimer';
   panel.appendChild(timer);
   const board = el('div', 'puzzleBoard');
   const extraRow = el('div', 'puzzleExtraRow');
   const grid = el('div', 'puzzleGrid');
+  grid.style.gridTemplateColumns = `repeat(${shape.cols}, 58px)`;
+  grid.style.gridTemplateRows = `repeat(${shape.rows}, 58px)`;
   pz.tiles.forEach((val, pos) => {
-    const isBlank = !resolved && val === 9;
+    const isBlank = !resolved && val === blankValue;
     const div = el('div', 'puzzleTile' + (isBlank ? ' puzzleTileBlank' : ''));
     if (!isBlank) {
-      applyPuzzleTileBg(div, val, pz.myCrest);
+      applyPuzzleTileBg(div, val, pz.myCrest, shape);
       if (!resolved) div.onclick = () => socket.emit('puzzle:move', { pos });
     }
     if (pos === 0) extraRow.appendChild(div);
@@ -784,11 +799,20 @@ function buildPoisonPuzzleBoardPanel(pz) {
   panel.appendChild(el('p', 'hint', hint));
   return panel;
 }
+// "독배와 무관하게, 술잔 고르는 시간(pick 화면)이 열릴 때마다 45초 내내 떠 있어야 한다"는
+// 피드백 — 이제 "고르기(pick)" 화면에서 보여준다("game" 화면에는 미니게임/보상 등 다른 UI가
+// 있어 겹쳐 보이니 아예 띄우지 않는다). pick 화면은 평소 방 그리드 외엔 달리 보여줄 게 없으므로,
+// 라운드가 넘어가 미니게임 페이즈가 되어도(같은 pick 화면은 그냥 "미니게임 진행 중" 안내만
+// 보여줄 뿐이라) 계속 띄워둬도 겹칠 UI가 없다 — 그래서 pick 화면에서는 페이즈와 무관하게 세션이
+// 살아있는 동안 계속 보여준다("45초는 그대로 유지"). 레거시 단일화면(APP_ROLE===null, 같은
+// 화면에 미니게임 모달도 뜨는 구조)에서만 예외적으로 ROUND_ACTION 페이즈일 때만 보여줘 겹침을
+// 피한다.
 function renderPoisonPuzzleOverlay(state) {
   const holder = document.getElementById('poisonPuzzleOverlay');
   if (!holder) return;
   const pz = state.poisonPuzzle;
-  if (!pz || APP_ROLE === 'pick') {
+  const hidden = !pz || APP_ROLE === 'game' || (!APP_ROLE && state.phase !== 'ROUND_ACTION');
+  if (hidden) {
     holder.innerHTML = '';
     holder.className = '';
     return;
@@ -800,7 +824,8 @@ function renderPoisonPuzzleOverlay(state) {
 }
 function tickPoisonPuzzleTimer() {
   const pz = lastState && lastState.poisonPuzzle;
-  if (!pz || APP_ROLE === 'pick') { poisonPuzzleTicking = false; return; }
+  const hidden = !pz || APP_ROLE === 'game' || (!APP_ROLE && lastState.phase !== 'ROUND_ACTION');
+  if (hidden) { poisonPuzzleTicking = false; return; }
   const timerEl = document.getElementById('poisonPuzzleTimer');
   if (timerEl) {
     const remaining = pz.deadlineAt - Date.now();

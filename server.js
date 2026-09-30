@@ -56,7 +56,7 @@ const CONFIG = {
   // 직접 골라 풀면 처음 맞췄을 때 한정으로 보너스 점수를 받는다. 진행 상황은 문장별로 매치 내내
   // 그대로 이어진다(다 못 맞추고 창이 닫혀도 다음에 같은 문장을 다시 고르면 이어서 풀 수 있다).
   POISON_PUZZLE_MS: 45000,
-  POISON_PUZZLE_SIZE: 3, // 퍼즐판 크기(3x3=9칸 + 왼쪽 위 여분 1칸 = 총 10칸, 8칸 조각+빈칸 1개가 이 10칸을 오간다)
+  // 퍼즐판 크기는 이제 문장별로 다르다(POISON_PUZZLE_CREST_SHAPE 참고: 2x2/2x3/3x3) — 여기 고정값은 없음.
   POISON_PUZZLE_BONUS_PTS: 3, // 문장 하나를 처음으로 완성했을 때 받는 보너스 점수(문장별 최초 1회만)
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
@@ -132,7 +132,16 @@ for (const key of Object.keys(CONFIG)) {
 }
 
 const app = express();
-app.use(express.static(path.join(__dirname, 'public')));
+// 재배포할 때마다 "브라우저가 예전 client.js/style.css를 그대로 캐시해서 들고 있어 새 코드가
+// 반영이 안 된 것처럼 보이는" 문제가 반복적으로 발생했다 — 특히 js/css/html 정적 파일에
+// 캐시를 꺼서, 새로고침(하드 리프레시 없이도) 시 항상 최신 파일을 받아오게 한다.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (/\.(js|css|html)$/.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+  },
+}));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 // 4대 분리 모드 전용 고정 주소 — 컴퓨터마다 이 중 하나를 북마크해두고 접속하면 된다.
 // /game/A, /game/B: 셋업·미니게임·보상 등 처소 열기를 뺀 나머지 전부.
@@ -691,6 +700,7 @@ function endMinigame(winnerId) {
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 보상을 직접 고릅니다.`);
   armActionTimer();
+  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 45초 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -704,6 +714,7 @@ function endMinigameDraw() {
   match.streak = { winnerId: null, count: 0 }; // 무승부는 스트릭을 끊는다
   log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
   armActionTimer();
+  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 45초 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -980,7 +991,6 @@ function resolveOpen(id, player, row, col, cell) {
     actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     notifyPoisonDrink(id);
     checkNeutralize(id, player);
-    ensurePoisonPuzzleSession(); // 독배를 마신 순간, 45초짜리 가문의 문장 도전 창이 열린다(이미 열려 있으면 유지)
   } else if (t === 'GEM') {
     resolveGemOpen(player, row, col, cell);
   } else if (t === 'A') {
@@ -1058,42 +1068,65 @@ function notifyNeutralize(id, count) {
 // 풀 수 있다(player.crestPuzzles에 영구 보관). 이 화면은 "게임" 화면(APP_ROLE==='game') 전용이다.
 const POISON_PUZZLE_CRESTS = ['crest1', 'crest2', 'crest3'];
 const POISON_PUZZLE_CREST_NAMES = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
-// 퍼즐판은 총 10칸 — 위치 0은 3x3 격자 왼쪽 위 바깥에 붙은 여분 칸(완성 시 빈칸이 쉬는 자리),
-// 위치 1~9가 실제 3x3 격자(가로쓰기 순서: 1,2,3 / 4,5,6 / 7,8,9). 위치 0은 위치 1하고만 붙어
-// 있어서(그 위 칸이라) 오직 그 경계로만 조각이 드나든다. "정답을 맞출 수 있는 구조" 요청대로,
-// 완성 상태에서는 3x3 격자 9칸이 전부 그림 조각으로 꽉 차고(빠짐없이 보임) 빈칸은 격자 밖 이
-// 여분 칸에 가 있다.
-const PUZZLE_ADJ = {
-  0: [1],
-  1: [0, 2, 4], 2: [1, 3, 5], 3: [2, 6],
-  4: [1, 5, 7], 5: [2, 4, 6, 8], 6: [3, 5, 9],
-  7: [4, 8], 8: [5, 7, 9], 9: [6, 8],
+// 문장마다 난이도(격자 크기)를 다르게 준다 — 독수리는 쉬운 2x2, 사자는 중간 2x3, 용은 원래의 3x3.
+const POISON_PUZZLE_CREST_SHAPE = {
+  crest1: { rows: 2, cols: 2 },
+  crest2: { rows: 2, cols: 3 },
+  crest3: { rows: 3, cols: 3 },
 };
-const PUZZLE_BLANK_VALUE = 9; // 조각은 0~8, 9는 빈칸
-function puzzleSolvedTiles() {
-  // 완성 배치(총 10칸): 위치 0=빈칸, 위치 i(1~9)=조각(i-1) — 조각 0~8이 격자를 가로쓰기 순서로 채운다.
-  return [PUZZLE_BLANK_VALUE, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+function puzzleShapeFor(crest) { return POISON_PUZZLE_CREST_SHAPE[crest] || { rows: 3, cols: 3 }; }
+// 퍼즐판은 총 (rows*cols + 1)칸 — 위치 0은 격자 왼쪽 위 바깥에 붙은 여분 칸(완성 시 빈칸이 쉬는
+// 자리), 위치 1~(rows*cols)이 실제 격자(가로쓰기 순서). 위치 0은 위치 1(격자의 왼쪽 위 칸)하고만
+// 붙어 있어서 오직 그 경계로만 조각이 드나든다. "정답을 맞출 수 있는 구조" 요청대로, 완성 상태에서는
+// 격자 칸이 전부 그림 조각으로 꽉 차고(빠짐없이 보임) 빈칸은 격자 밖 이 여분 칸에 가 있다.
+// rows/cols에 따라 인접 그래프를 그때그때 만들어낸다(3x3 전용으로 하드코딩했던 것을 일반화).
+function puzzleAdjFor(shape) {
+  const { rows, cols } = shape;
+  const adj = { 0: [1] };
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const pos = 1 + r * cols + c;
+      const list = [];
+      if (r === 0 && c === 0) list.push(0);
+      if (c > 0) list.push(pos - 1);
+      if (c < cols - 1) list.push(pos + 1);
+      if (r > 0) list.push(pos - cols);
+      if (r < rows - 1) list.push(pos + cols);
+      adj[pos] = list;
+    }
+  }
+  return adj;
 }
-function isPuzzleSolved(tiles) {
-  return tiles.every((v, i) => v === (i === 0 ? PUZZLE_BLANK_VALUE : i - 1));
+function puzzleBlankValue(shape) { return shape.rows * shape.cols; } // 조각은 0~(rows*cols-1), 그 다음 수가 빈칸
+function puzzleSolvedTiles(shape) {
+  const blank = puzzleBlankValue(shape);
+  const tiles = [blank];
+  for (let i = 0; i < blank; i++) tiles.push(i);
+  return tiles;
 }
-function shuffledPuzzleTiles10() {
-  const tiles = puzzleSolvedTiles();
+function isPuzzleSolved(tiles, shape) {
+  const blank = puzzleBlankValue(shape);
+  return tiles.every((v, i) => v === (i === 0 ? blank : i - 1));
+}
+function shuffledPuzzleTiles(shape) {
+  const tiles = puzzleSolvedTiles(shape);
+  const adj = puzzleAdjFor(shape);
   let blank = 0;
   // 순열을 통째로 무작위로 뽑으면 절반은 원리적으로 풀 수 없는 배치가 나온다(홀짝성 문제).
-  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 이 판 모양이 어떻든 항상 풀 수
-  // 있는 배치만 나온다(그래프 형태에 의존하지 않는 범용적인 방법).
+  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 이 판 모양이 어떻든(2x2든 3x3이든)
+  // 항상 풀 수 있는 배치만 나온다(그래프 형태에 의존하지 않는 범용적인 방법).
   for (let i = 0; i < 200; i++) {
-    const options = PUZZLE_ADJ[blank];
+    const options = adj[blank];
     const swapWith = options[randInt(0, options.length - 1)];
     [tiles[blank], tiles[swapWith]] = [tiles[swapWith], tiles[blank]];
     blank = swapWith;
   }
   return tiles;
 }
-// 독배를 마신 순간 호출 — 이미 도전 창이 열려 있으면 그대로 둔다(재시작하지 않음). 두 사람 다
-// "이번 창에서 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황은 각자 player.crestPuzzles에
-// 있다.
+// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 호출된다 — 이미 도전
+// 창이 열려 있으면(직전 라운드 세션이 아직 45초를 다 못 채웠으면) 그대로 둔다(재시작하지 않음).
+// 두 사람 다 "이번 창에서 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황은 각자
+// player.crestPuzzles에 영구히 남는다(라운드가 바뀌어도, 다 못 풀고 창이 닫혀도 그대로 유지).
 function ensurePoisonPuzzleSession() {
   if (match.poisonPuzzleSession) return;
   const [a, b] = match.order;
@@ -1102,7 +1135,7 @@ function ensurePoisonPuzzleSession() {
     perPlayer: { [a]: { crest: null, penalized: false }, [b]: { crest: null, penalized: false } },
   };
   match.poisonPuzzleSession = session;
-  log('🧩 독배를 마셔 가문의 문장 도전 기회가 열렸습니다 — 45초 안에 문장 하나를 골라 맞추면 보너스 점수!');
+  log('🧩 가문의 문장 도전 시간이 열렸습니다 — 45초 안에 문장 하나를 골라 맞추면 보너스 점수!');
   broadcastState();
   setTimeout(() => {
     if (match.poisonPuzzleSession !== session) return; // 이미 끝난 세션(이론상 이 경로만 존재)
@@ -1127,7 +1160,10 @@ function handlePuzzleChooseCrest(id, payload) {
   if (!POISON_PUZZLE_CRESTS.includes(crest)) return;
   pp.crest = crest;
   const player = match.players[id];
-  if (!player.crestPuzzles[crest]) player.crestPuzzles[crest] = { tiles: shuffledPuzzleTiles10(), solved: false };
+  if (!player.crestPuzzles[crest]) {
+    const shape = puzzleShapeFor(crest);
+    player.crestPuzzles[crest] = { tiles: shuffledPuzzleTiles(shape), solved: false };
+  }
   log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[crest]}]을(를) 골라 도전합니다.`);
   broadcastState();
 }
@@ -1140,13 +1176,16 @@ function handlePuzzleMove(id, payload) {
   const player = match.players[id];
   const puzzle = player.crestPuzzles[pp.crest];
   if (!puzzle || puzzle.solved) return;
+  const shape = puzzleShapeFor(pp.crest);
+  const adj = puzzleAdjFor(shape);
+  const maxPos = shape.rows * shape.cols; // 전체 슬롯은 0~maxPos
   const pos = Number(payload && payload.pos);
-  if (!Number.isInteger(pos) || pos < 0 || pos > 9) return;
+  if (!Number.isInteger(pos) || pos < 0 || pos > maxPos) return;
   const tiles = puzzle.tiles;
-  const blank = tiles.indexOf(PUZZLE_BLANK_VALUE);
-  if (!PUZZLE_ADJ[blank].includes(pos)) return; // 빈칸과 인접한 칸만 이동 가능
+  const blank = tiles.indexOf(puzzleBlankValue(shape));
+  if (!adj[blank].includes(pos)) return; // 빈칸과 인접한 칸만 이동 가능
   [tiles[blank], tiles[pos]] = [tiles[pos], tiles[blank]];
-  if (isPuzzleSolved(tiles)) {
+  if (isPuzzleSolved(tiles, shape)) {
     puzzle.solved = true;
     player.score += CONFIG.POISON_PUZZLE_BONUS_PTS;
     log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[pp.crest]}]을(를) 완성해 보너스 +${CONFIG.POISON_PUZZLE_BONUS_PTS}점을 얻었습니다!`);
@@ -1417,8 +1456,12 @@ function buildClientState(forId) {
       return {
         deadlineAt: session.deadlineAt,
         myCrest,
-        crests: POISON_PUZZLE_CRESTS.map((c) => ({ key: c, solved: !!(me.crestPuzzles[c] && me.crestPuzzles[c].solved) })),
-        size: CONFIG.POISON_PUZZLE_SIZE,
+        crests: POISON_PUZZLE_CRESTS.map((c) => ({
+          key: c,
+          solved: !!(me.crestPuzzles[c] && me.crestPuzzles[c].solved),
+          shape: puzzleShapeFor(c), // 문장마다 난이도(격자 크기)가 달라 선택 화면에도 크기를 보여준다
+        })),
+        shape: myCrest ? puzzleShapeFor(myCrest) : null,
         tiles: myPuzzle ? myPuzzle.tiles.slice() : null,
         solved: myPuzzle ? !!myPuzzle.solved : false,
       };

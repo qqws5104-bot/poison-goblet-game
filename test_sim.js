@@ -38,29 +38,46 @@ let bankRoundSeen = { A: null, B: null };
 // ---- 독배 슬라이딩 퍼즐(가문의 문장) 봇 로직 ----
 // A는 도전 창이 뜨면 항상 문장을 골라 끝까지 푼다. B는 "고르지 않으면 칸이 잠긴다"는 페널티
 // 경로를 확인하기 위해 처음 한 번은 일부러 무시하고, 그다음 세션부터는 정상적으로 도전한다.
-const PUZZLE_ADJ = {
-  0: [1], 1: [0, 2, 4], 2: [1, 3, 5], 3: [2, 6],
-  4: [1, 5, 7], 5: [2, 4, 6, 8], 6: [3, 5, 9],
-  7: [4, 8], 8: [5, 7, 9], 9: [6, 8],
-};
-const PUZZLE_BLANK = 9;
-function puzzleSolved(tiles) { return tiles.every((v, i) => v === (i === 0 ? PUZZLE_BLANK : i - 1)); }
-function bfsNextMove(tiles) {
+// 문장마다 격자 크기(2x2/2x3/3x3)가 다르므로, 인접 그래프도 서버와 동일하게 그때그때 만들어낸다.
+function puzzleAdjFor(shape) {
+  const { rows, cols } = shape;
+  const adj = { 0: [1] };
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const pos = 1 + r * cols + c;
+      const list = [];
+      if (r === 0 && c === 0) list.push(0);
+      if (c > 0) list.push(pos - 1);
+      if (c < cols - 1) list.push(pos + 1);
+      if (r > 0) list.push(pos - cols);
+      if (r < rows - 1) list.push(pos + cols);
+      adj[pos] = list;
+    }
+  }
+  return adj;
+}
+function puzzleSolved(tiles, shape) {
+  const blank = shape.rows * shape.cols;
+  return tiles.every((v, i) => v === (i === 0 ? blank : i - 1));
+}
+function bfsNextMove(tiles, shape) {
   // 얕은 BFS로 "정답까지 가는 첫 수"만 구한다(정답판 자체가 200수 이내 셔플이라 얕게 찾아도 충분히 빠름).
+  const blank = shape.rows * shape.cols;
+  const adj = puzzleAdjFor(shape);
   const startKey = tiles.join(',');
   const seen = new Set([startKey]);
   let frontier = [{ tiles, first: null }];
-  for (let depth = 0; depth < 40; depth++) {
+  for (let depth = 0; depth < 60; depth++) {
     const next = [];
     for (const node of frontier) {
-      const blank = node.tiles.indexOf(PUZZLE_BLANK);
-      for (const nb of PUZZLE_ADJ[blank]) {
+      const blankPos = node.tiles.indexOf(blank);
+      for (const nb of adj[blankPos]) {
         const t2 = node.tiles.slice();
-        [t2[blank], t2[nb]] = [t2[nb], t2[blank]];
+        [t2[blankPos], t2[nb]] = [t2[nb], t2[blankPos]];
         const key = t2.join(',');
         if (seen.has(key)) continue;
         const first = node.first == null ? nb : node.first;
-        if (puzzleSolved(t2)) return first;
+        if (puzzleSolved(t2, shape)) return first;
         seen.add(key);
         next.push({ tiles: t2, first });
       }
@@ -87,7 +104,8 @@ function playPoisonPuzzle(label, socket, s) {
     return;
   }
   if (pz.solved || puzzleMoveBusy[label]) return;
-  const move = bfsNextMove(pz.tiles);
+  const shape = pz.shape || { rows: 3, cols: 3 };
+  const move = bfsNextMove(pz.tiles, shape);
   if (move == null) return;
   puzzleMoveBusy[label] = true;
   socket.emit('puzzle:move', { pos: move });

@@ -196,7 +196,11 @@ button { font-family: inherit; cursor: pointer; }
    작게 떠 있어서, 인접한 두 칸에 걸친 조각(TOP/BOTTOM, 2x2 사분면)이 서로 수십 px씩 떨어져
    보였다(칸 자체는 훨씬 크므로). 칸 전체(100%)를 꽉 채우도록 절대배치로 바꾸면 인접한 칸의
    조각들이 경계에서 서로 맞닿아 하나의 큰 그림처럼 이어져 보인다. */
-.cellIcon-GEM {
+/* .cell 안에서만 꽉 채워 이어붙인다 — 라운드 종료 요약 배지(.roundOpenSummaryIcon)도
+   같은 cellIcon-GEM 클래스를 재사용하는데, 거기에도 이 규칙이 적용되면(예전 버그) 절대배치가
+   가장 가까운 position 조상(보통 body/뷰포트)을 기준으로 튀어나가 화면 구석에 조그맣게
+   따로 떠 보인다 — 반드시 .cell 안에서만 적용되도록 스코프를 좁힌다. */
+.cell .cellIcon-GEM {
   width: 100%; height: 100%; position: absolute; inset: 0;
   overflow: hidden;
 }
@@ -507,8 +511,10 @@ button.diceHoldBtn.held {
   font-size: 18px; font-weight: 800; border: 2px solid var(--border); color: var(--gold); background: #150c10;
 }
 .puzzleTimerBadge.timerLow { border-color: var(--crimson-bright); color: var(--crimson-bright); animation: statDangerPulse 700ms ease-in-out infinite; }
-/* 퍼즐판(10칸) — puzzleExtraRow(3x3 격자 왼쪽 위 바깥에 붙은 여분 1칸) + puzzleGrid(3x3). 여분
-   칸은 격자의 첫 번째 칸과 정확히 같은 폭이어야 바로 그 위에 붙어 보인다. */
+/* 퍼즐판(격자 rows×cols + 왼쪽 위 여분 1칸) — puzzleExtraRow(여분 1칸) + puzzleGrid(격자). 문장마다
+   난이도(격자 크기: 2x2/2x3/3x3)가 달라 grid-template-columns/rows는 JS에서 인라인으로 정해준다
+   (여기 있는 repeat(3,...)는 그게 없을 때를 위한 기본값일 뿐). 여분 칸은 격자의 첫 번째 칸과
+   정확히 같은 폭이어야 바로 그 위에 붙어 보인다. */
 .puzzleBoard { display: inline-flex; flex-direction: column; align-items: flex-start; margin: 0 auto; }
 .puzzleExtraRow { display: flex; margin-bottom: 3px; }
 .puzzleExtraRow .puzzleTile { border: 2px solid var(--border); border-radius: 3px; }
@@ -520,13 +526,22 @@ button.diceHoldBtn.held {
 .puzzleTile:hover { transform: scale(0.96); }
 .puzzleTileBlank { background: #050203 !important; cursor: default; }
 .puzzlePanel.won { border-color: var(--jade); box-shadow: 0 0 30px rgba(95,143,119,0.55), 0 14px 34px rgba(0,0,0,0.55); }
-.puzzleCrestChoiceList { display:flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+/* 문장 3개를 텍스트가 아니라 실제 그림 썸네일로 보여주고 그중 고르게 한다. */
+.puzzleCrestChoiceList { display:flex; gap: 8px; margin-top: 4px; justify-content: center; }
 .puzzleCrestChoiceBtn {
-  text-align:left; background: #1a0f14; border: 1px solid var(--border); border-radius: 3px;
-  padding: 10px 12px; font-size: 13px; color: var(--text); line-height: 1.4; font-family: inherit;
-  cursor: pointer; transition: border-color .15s, background .15s;
+  display:flex; flex-direction: column; align-items: center; gap: 5px;
+  background: #1a0f14; border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px; font-family: inherit; cursor: pointer; transition: border-color .15s, background .15s;
 }
-.puzzleCrestChoiceBtn:hover { border-color: var(--gold); background: #23151c; color: var(--gold); }
+.puzzleCrestChoiceBtn:hover { border-color: var(--gold); background: #23151c; }
+.puzzleCrestThumb {
+  width: 64px; height: 64px; border-radius: 3px; border: 1px solid var(--border);
+  background-size: cover; background-position: center;
+}
+.puzzleCrestLabel { font-size: 11px; color: var(--text); }
+.puzzleCrestSizeTag { font-size: 10px; color: var(--muted); }
+.puzzleCrestChoiceBtn.solved .puzzleCrestThumb { opacity: 0.5; }
+.puzzleCrestChoiceBtn.solved .puzzleCrestLabel { color: var(--jade); }
 @media (max-width: 620px) {
   /* 좁은 화면에서는 오른쪽 위에 붙이면 다른 UI와 겹치므로, 화면 하단 중앙에 붙이는 바 형태로 바꾼다. */
   #poisonPuzzleOverlay { top: auto; bottom: 8px; right: 8px; left: 8px; display: none; }
