@@ -186,26 +186,31 @@ const GEM_IMAGES = {
   PAIR: { src: '/gems/gem_size2.png', w: 258, h: 696 }, // 세로로 긴 보석 — 위/아래로 나눠 쓴다
   BLOCK: { src: '/gems/gem_size4.png', w: 429, h: 469 }, // 네모난(2x2) 보석 — 사분면으로 나눠 쓴다
 };
+// preserveAspectRatio="none"으로 뷰박스를 칸(정사각형) 전체에 강제로 늘려 채운다 — 기본값인
+// "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 PAIR 조각) 여백이 생겨서
+// 인접한 칸의 조각과 딱 맞붙지 않고 틈이 남는다. "none"으로 늘리면 같은 원본에서 나온 두 조각이
+// 항상 같은 비율로 늘어나므로(가로/세로 늘어난 비율이 조각마다 동일) 약간의 비율 왜곡은 있어도
+// 이어붙는 경계선은 항상 정확히 맞아떨어진다 — 이어져 보이는 것이 실제 비율 유지보다 우선.
 function gemFragmentSVG(gemPiece) {
   if (!gemPiece || gemPiece === 'SOLO') {
     const { src, w, h } = GEM_IMAGES.SOLO;
-    return `<svg viewBox="0 0 ${w} ${h}" class="cellIcon cellIcon-GEM" aria-hidden="true">
-      <image href="${src}" x="0" y="0" width="${w}" height="${h}"/>
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
+      <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
     </svg>`;
   }
   if (gemPiece === 'TOP' || gemPiece === 'BOTTOM') {
     const { src, w, h } = GEM_IMAGES.PAIR;
     const half = h / 2;
     const vb = gemPiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
-    return `<svg viewBox="${vb}" class="cellIcon cellIcon-GEM" aria-hidden="true">
-      <image href="${src}" x="0" y="0" width="${w}" height="${h}"/>
+    return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
+      <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
     </svg>`;
   }
   const { src, w, h } = GEM_IMAGES.BLOCK;
   const hw = w / 2, hh = h / 2;
   const vb = { TL: `0 0 ${hw} ${hh}`, TR: `${hw} 0 ${hw} ${hh}`, BL: `0 ${hh} ${hw} ${hh}`, BR: `${hw} ${hh} ${hw} ${hh}` }[gemPiece];
-  return `<svg viewBox="${vb}" class="cellIcon cellIcon-GEM" aria-hidden="true">
-    <image href="${src}" x="0" y="0" width="${w}" height="${h}"/>
+  return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
+    <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
 }
 function cellVisualHTML(type, gemPiece) {
@@ -713,44 +718,69 @@ function tickDiceFace() {
   requestAnimationFrame(tickDiceFace);
 }
 
-// ------------------------- 독배 슬라이딩 퍼즐(즉석 만회 기회) -------------------------
-// 독배를 마신 순간, 예전 "가문의 문장" 그림 3종(독수리/사자/용) 중 하나로 3x3 슬라이딩 퍼즐 경주가
-// 뜬다 — 누가 마셨든 둘 다에게 똑같이 뜨고, 먼저 맞추는 쪽이 보너스 점수를 받는다. 오직 "게임"
-// 화면(APP_ROLE==='game')과 레거시 단일화면(APP_ROLE===null)에서만 보인다 — "고르기" 화면
-// (APP_ROLE==='pick')은 처소 열기 전용이라 여기서는 절대 안 보여준다. #app의 페이즈 분기와
-// 무관하게 항상 떠 있어야 하므로 #app 밖의 독립된 오버레이 div를 직접 조작한다.
+// ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
+// 독배를 마신 순간, 45초짜리 도전 창이 자동으로 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는
+// 패널 형태) — 오직 "게임" 화면(APP_ROLE==='game')과 레거시 단일화면(APP_ROLE===null)에서만
+// 보인다. 문장을 아직 안 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의 10칸 슬라이딩
+// 퍼즐(3x3 격자 + 왼쪽 위 여분 1칸)을 보여준다. 상대와 겨루는 게 아니라 각자 독립적인 개인전이라
+// 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상 떠 있어야 하므로 #app 밖의
+// 독립된 오버레이 div를 직접 조작한다.
 let poisonPuzzleTicking = false;
 const POISON_PUZZLE_CREST_LABELS = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
-function applyPuzzleTileBg(div, val, n, crest) {
+// 퍼즐판은 총 10칸 — pos 0은 3x3 격자(pos 1~9, 가로쓰기 순서) 왼쪽 위 바깥에 붙은 여분 칸이다.
+// 조각 값(0~8)의 "제 자리"는 격자 안 위치(그 값+1)이므로, 배경 자르기는 항상 그 제자리 좌표
+// 기준으로 계산한다(지금 어느 pos에 놓여 있는지와 무관하게 조각 자체의 그림은 고정).
+function applyPuzzleTileBg(div, val, crest) {
+  const n = 3;
   const tr = Math.floor(val / n), tc = val % n;
   div.style.backgroundImage = `url(/crest/${crest}_full.png)`;
   div.style.backgroundSize = `${n * 100}% ${n * 100}%`;
   div.style.backgroundPosition = `${(tc * 100) / (n - 1)}% ${(tr * 100) / (n - 1)}%`;
 }
-function buildPoisonPuzzlePanel(pz) {
-  const n = pz.size;
-  const blankVal = n * n - 1;
-  const resolved = pz.winner != null; // 'me' | 'opp' — 둘 중 하나라도 먼저 맞추면 결판
-  const iWon = pz.winner === 'me';
-  const panel = el('div', 'puzzlePanel' + (resolved ? (iWon ? ' won' : ' lost') : ''));
-  panel.appendChild(el('h3', null, `🧩 가문의 문장 맞추기 경주! (${POISON_PUZZLE_CREST_LABELS[pz.crest] || '문장'})`));
+// 아직 문장을 안 고른 상태 — 3개 중 하나를 직접 고르는 화면.
+function buildPoisonPuzzleChoicePanel(pz) {
+  const panel = el('div', 'puzzlePanel choosing');
+  panel.appendChild(el('h3', null, '🧩 가문의 문장 — 도전할 문장을 고르세요'));
   const timer = el('div', 'puzzleTimerBadge');
   timer.id = 'poisonPuzzleTimer';
   panel.appendChild(timer);
+  const list = el('div', 'puzzleCrestChoiceList');
+  pz.crests.forEach((c) => {
+    const label = POISON_PUZZLE_CREST_LABELS[c.key] || c.key;
+    const b = el('button', 'puzzleCrestChoiceBtn', c.solved ? `✅ ${label} (완성됨 — 이어서 감상)` : label);
+    b.onclick = () => socket.emit('puzzle:chooseCrest', { crest: c.key });
+    list.appendChild(b);
+  });
+  panel.appendChild(list);
+  panel.appendChild(el('p', 'hint', '고르지 않으면 창이 닫힐 때 내 처소 칸 1개가 무작위로 잠깁니다. 완성한 문장을 다시 골라도 페널티는 피하지만 추가 점수는 없습니다.'));
+  return panel;
+}
+// 문장을 고른 뒤 — 실제 10칸 슬라이딩 퍼즐(3x3 + 왼쪽 위 여분 1칸).
+function buildPoisonPuzzleBoardPanel(pz) {
+  const resolved = !!pz.solved;
+  const panel = el('div', 'puzzlePanel' + (resolved ? ' won' : ''));
+  panel.appendChild(el('h3', null, `🧩 ${POISON_PUZZLE_CREST_LABELS[pz.myCrest] || '문장'} 맞추기`));
+  const timer = el('div', 'puzzleTimerBadge');
+  timer.id = 'poisonPuzzleTimer';
+  panel.appendChild(timer);
+  const board = el('div', 'puzzleBoard');
+  const extraRow = el('div', 'puzzleExtraRow');
   const grid = el('div', 'puzzleGrid');
-  grid.style.gridTemplateColumns = `repeat(${n}, 1fr)`;
-  pz.tiles.forEach((val, idx) => {
-    const isBlank = !resolved && val === blankVal;
+  pz.tiles.forEach((val, pos) => {
+    const isBlank = !resolved && val === 9;
     const div = el('div', 'puzzleTile' + (isBlank ? ' puzzleTileBlank' : ''));
     if (!isBlank) {
-      applyPuzzleTileBg(div, val, n, pz.crest);
-      if (!resolved) div.onclick = () => socket.emit('puzzle:move', { index: idx });
+      applyPuzzleTileBg(div, val, pz.myCrest);
+      if (!resolved) div.onclick = () => socket.emit('puzzle:move', { pos });
     }
-    grid.appendChild(div);
+    if (pos === 0) extraRow.appendChild(div);
+    else grid.appendChild(div);
   });
-  panel.appendChild(grid);
-  let hint = '누군가 독배를 마셔서 열린 경주 — 먼저 다 맞추면 보너스 점수! 못 맞춰도 페널티는 없습니다.';
-  if (resolved) hint = iWon ? '내가 먼저 맞췄습니다! 보너스 점수 획득.' : '상대가 먼저 맞췄습니다.';
+  board.appendChild(extraRow);
+  board.appendChild(grid);
+  panel.appendChild(board);
+  let hint = '왼쪽 위 여분 칸까지 활용해서 맞춰보세요 — 다 맞추면 처음 한 번만 보너스 점수! 못 맞춰도 페널티는 없고, 다음에 또 고르면 지금 상태 그대로 이어집니다.';
+  if (resolved) hint = '이 문장은 이미 완성했습니다. (보너스는 문장당 최초 1회)';
   panel.appendChild(el('p', 'hint', hint));
   return panel;
 }
@@ -763,9 +793,9 @@ function renderPoisonPuzzleOverlay(state) {
     holder.className = '';
     return;
   }
-  holder.className = 'show' + (pz.winner === 'me' ? ' won' : pz.winner === 'opp' ? ' lost' : '');
+  holder.className = 'show';
   holder.innerHTML = '';
-  holder.appendChild(buildPoisonPuzzlePanel(pz));
+  holder.appendChild(pz.myCrest ? buildPoisonPuzzleBoardPanel(pz) : buildPoisonPuzzleChoicePanel(pz));
   if (!poisonPuzzleTicking) { poisonPuzzleTicking = true; requestAnimationFrame(tickPoisonPuzzleTimer); }
 }
 function tickPoisonPuzzleTimer() {
@@ -773,10 +803,9 @@ function tickPoisonPuzzleTimer() {
   if (!pz || APP_ROLE === 'pick') { poisonPuzzleTicking = false; return; }
   const timerEl = document.getElementById('poisonPuzzleTimer');
   if (timerEl) {
-    const resolved = pz.winner != null;
     const remaining = pz.deadlineAt - Date.now();
-    timerEl.textContent = resolved ? (pz.winner === 'me' ? '✅ 내가 승리!' : '상대 승리') : `⏱ ${Math.max(0, Math.ceil(remaining / 1000))}초`;
-    timerEl.classList.toggle('timerLow', !resolved && remaining <= 10000 && remaining > 0);
+    timerEl.textContent = `⏱ ${Math.max(0, Math.ceil(remaining / 1000))}초`;
+    timerEl.classList.toggle('timerLow', remaining <= 10000 && remaining > 0);
   }
   requestAnimationFrame(tickPoisonPuzzleTimer);
 }
@@ -940,8 +969,8 @@ function renderLobby(state) {
 // 화면에는 문장 표시가 전혀 없다. 몇 개가 어디에 들어갈지는 두 사람 모두, 심지어 본인조차 모른다.
 function renderSetup(state) {
   const p = el('section', 'panel');
-  p.appendChild(el('h2', null, '셋업 — 상대 왕자의 처소에 독 술잔을 몰래 지정하세요'));
-  p.appendChild(el('p', 'hint', `아래 그리드는 상대(${state.opp ? state.opp.name : '상대'})의 빈 처소(전반 6×${state.config.ROWS_FIRST_HALF}칸)입니다. 독을 심을 칸 ${state.config.POISON_INITIAL}개를 고른 뒤 확정하세요. 확정 후에는 바꿀 수 없습니다. 가문의 문장은 독 설치가 끝난 뒤 무작위 자리에 몰래 흩뿌려지므로, 본인도 어디에 몇 개나 있는지 알 수 없습니다.`));
+  // 설명이 너무 길어 읽기 부담스럽다는 피드백 — 제목/부연 설명 다 빼고 핵심 한 줄만 남긴다.
+  p.appendChild(el('h2', null, `독을 심을 칸 ${state.config.POISON_INITIAL}개를 고르세요`));
 
   const already = state.setupDone.me;
   const grid = el('div', 'grid6');
@@ -1061,7 +1090,9 @@ function renderMain(state) {
     if (state.phase === 'ROUND_ACTION') activeTab = 'ROOM';
   }
 
-  const wrap = el('div', 'mainView' + (activeTab === 'ROOM' ? ' wide' : ''));
+  // "내 차례/상대 차례" 텍스트만으로는 눈에 잘 안 띈다는 피드백 — 실제로 열 수 있는 차례일
+  // 때는 게임 박스 테두리 전체가 은은하게 빛나도록 해서 누가 봐도 확실히 알아채게 한다.
+  const wrap = el('div', 'mainView' + (activeTab === 'ROOM' ? ' wide' : '') + (state.isMyTurn ? ' myTurnGlow' : ''));
   wrap.appendChild(renderStatsPanel(state));
   wrap.appendChild(renderTabBar(state));
 
@@ -1332,10 +1363,10 @@ function renderPickWaiting(msg) {
 }
 
 function renderPickView(state) {
-  const wrap = el('div', 'mainView wide');
-
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
+  // "고르기" 화면도 실제로 칸을 여는 화면이므로, 내 차례일 때 게임 박스가 빛나야 하는 건 여기도 동일.
+  const wrap = el('div', 'mainView wide' + (state.isMyTurn ? ' myTurnGlow' : ''));
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));

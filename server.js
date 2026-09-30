@@ -42,18 +42,22 @@ const CONFIG = {
   PIN_COUNT_MIN: 8, PIN_COUNT_MAX: 12, // 안전핀 뽑기: 이번 판에 놓일 안전핀 개수(그 중 1개가 폭탄)
   GUESS_COUNT_MIN: 15, GUESS_COUNT_MAX: 30, // 와인잔 개수 세기: 실제 술잔 개수 범위
   BANK_DIGITS: 3,         // 금고 번호 맞추기: 서로 다른 숫자 몇 자리
-  REWARD_FLASH_REVEAL_MS: 300, // 철가방(FLASH_ALL) 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임
+  REWARD_FLASH_REVEAL_MS: 150, // 철가방(FLASH_ALL) 정찰 발동 시 실제로 화면에 드러나 있는 시간(ms) — 너무 길면 화면이 깜빡이는 느낌이 강해져 짧게 줄임(300→150, "시간 조금 더 빠르게" 피드백)
   REWARD_USE_LIMIT: 3, // 보상 종류별로 한 사람이 실제로 사용할 수 있는 최대 횟수
   // "장고 금지" 타이머 — 시간이 다 되면 아직 결정을 안 내린 쪽의 몫을 서버가 무작위로 대신
   // 결정해버린다(핸들러 함수를 그대로 재사용하므로 검증/승패 판정 로직은 완전히 동일하다).
   DECISION_TIMER_MS: 15000, // NIM/HAND/PIN/GUESS_COUNT/DICE/SIGIL처럼 결정이 한 번(또는 교대로 한 번씩)인 미니게임
   LOCK_PENALTY_CELLS: 2, // 장고 페널티 — 시간 안에 결정 못 하면 자기 처소의 칸이 이만큼 무작위로 영구히 잠긴다
-  DICE_CYCLE_MS: 220, // 주사위 누르기 — 스페이스바를 누르고 있는 동안 이 간격(ms)마다 눈금이 1~6으로 순환하며, 뗀 시점의 경과시간으로 서버가 눈을 확정한다
+  DICE_CYCLE_MS: 100, // 주사위 누르기 — 스페이스바를 누르고 있는 동안 이 간격(ms)마다 눈금이 1~6으로 순환하며, 뗀 시점의 경과시간으로 서버가 눈을 확정한다(220→100, "눈이 더 빠르게 흘러가게" 피드백)
+  DICE_MAX_TIE_REPLAYS: 2, // 동점이면 이 횟수만큼 다시 굴린다 — 그래도 계속 동점이면 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
-  POISON_PUZZLE_MS: 35000, // 독배를 마신 순간 뜨는 슬라이딩 퍼즐 경주의 제한시간
-  POISON_PUZZLE_SIZE: 3, // 슬라이딩 퍼즐 크기(3x3 — 8칸 조각 + 빈칸 1개)
-  POISON_PUZZLE_BONUS_PTS: 3, // 둘 중 먼저 맞추는 사람이 받는 보너스 점수
+  // 독배 슬라이딩 퍼즐(가문의 문장) — 독배를 마신 순간 시작되는 45초 창 동안, 3개 문장 중 하나를
+  // 직접 골라 풀면 처음 맞췄을 때 한정으로 보너스 점수를 받는다. 진행 상황은 문장별로 매치 내내
+  // 그대로 이어진다(다 못 맞추고 창이 닫혀도 다음에 같은 문장을 다시 고르면 이어서 풀 수 있다).
+  POISON_PUZZLE_MS: 45000,
+  POISON_PUZZLE_SIZE: 3, // 퍼즐판 크기(3x3=9칸 + 왼쪽 위 여분 1칸 = 총 10칸, 8칸 조각+빈칸 1개가 이 10칸을 오간다)
+  POISON_PUZZLE_BONUS_PTS: 3, // 문장 하나를 처음으로 완성했을 때 받는 보너스 점수(문장별 최초 1회만)
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
 CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
@@ -170,6 +174,10 @@ function newPlayer(id, name) {
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
     rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
+    // 독배 슬라이딩 퍼즐(가문의 문장) — 문장 키(crest1/2/3)별 진행 상황. 고른 적 없으면 키 자체가
+    // 없다(lazy). 다 못 맞추고 창이 닫혀도 tiles를 그대로 들고 있어서, 나중에 같은 문장을 다시
+    // 고르면 이어서 풀 수 있다("건든 상태 그대로 나두도록" 피드백).
+    crestPuzzles: {},
   };
 }
 // 보석 하나(size=1|2|4)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
@@ -244,8 +252,10 @@ function freshMatch() {
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
     splitMode: false,
-    // 독배 슬라이딩 퍼즐(먼저 맞추는 사람이 이기는 경주) — 진행 중이 아니면 null.
-    poisonPuzzle: null,
+    // 독배 슬라이딩 퍼즐(가문의 문장) — 진행 중인 45초 도전 창. 없으면 null. 각 플레이어의
+    // 실제 퍼즐 진행상황(tiles)은 세션이 아니라 player.crestPuzzles에 영구히 저장된다 — 이
+    // 세션 객체는 그저 "지금 45초 창이 열려 있고, 누가 아직 문장을 안 골랐는지"만 추적한다.
+    poisonPuzzleSession: null,
   };
 }
 let match = freshMatch();
@@ -641,8 +651,9 @@ function initMinigame(type, roundNo) {
     // 보고, 뗀 순간의 실제 경과시간(서버가 받은 진짜 타임스탬프 기준 — 클라이언트가 스스로
     // 보고하는 숫자는 신뢰하지 않는다)으로 눈(1~6)을 확정한다. 화면에는 누르고 있는 동안
     // 눈이 빠르게 도는 장식용 애니메이션을 보여줄 뿐, 실제 결과는 전적으로 서버 판정이다.
-    // 둘 다 확정되면 큰 눈이 승리(같으면 무승부) — 확정된 눈은 즉시 서로에게 공개된다.
-    const mgDice = { ...base, pressAt: {}, results: {} };
+    // 둘 다 확정되면 큰 눈이 승리 — 동점이면 DICE_MAX_TIE_REPLAYS(2)번까지 다시 굴리고, 그래도
+    // 계속 동점이면 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리한다(finalizeDiceResult 참고).
+    const mgDice = { ...base, pressAt: {}, results: {}, finalizedAt: {}, tieRound: 0 };
     armDiceTimer(mgDice);
     return mgDice;
   }
@@ -888,14 +899,29 @@ function handleBank(id, payload, mg) {
 function finalizeDiceResult(id, mg, number) {
   mg.pressAt[id] = null;
   mg.results[id] = number;
+  mg.finalizedAt[id] = Date.now(); // "동점이면 더 먼저 주사위를 놓은 사람이 승" 판정용 — release(확정) 시각을 기록
   log(`${match.players[id].name}: 주사위 ${number} 확정`);
   const [a, b] = match.order;
   if (mg.results[a] != null && mg.results[b] != null) {
     log(`주사위 공개: ${match.players[a].name}=${mg.results[a]} vs ${match.players[b].name}=${mg.results[b]}`);
     broadcastState();
     if (mg.results[a] === mg.results[b]) {
-      log(`둘 다 ${mg.results[a]} — 무승부.`);
-      return endMinigameDraw();
+      mg.tieRound = (mg.tieRound || 0) + 1;
+      if (mg.tieRound <= CONFIG.DICE_MAX_TIE_REPLAYS) {
+        log(`둘 다 ${mg.results[a]} — 동점! 다시 굴립니다. (재대결 ${mg.tieRound}/${CONFIG.DICE_MAX_TIE_REPLAYS})`);
+        io.to(a).emit('popup', { text: `🎲 동점! 다시 굴리세요 (재대결 ${mg.tieRound}/${CONFIG.DICE_MAX_TIE_REPLAYS})`, tone: 'warn' });
+        io.to(b).emit('popup', { text: `🎲 동점! 다시 굴리세요 (재대결 ${mg.tieRound}/${CONFIG.DICE_MAX_TIE_REPLAYS})`, tone: 'warn' });
+        mg.results = {};
+        mg.pressAt = {};
+        mg.finalizedAt = {};
+        armDiceTimer(mg);
+        broadcastState();
+        return;
+      }
+      // 재대결까지 다 써도 여전히 동점 — 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리
+      const winner = mg.finalizedAt[a] <= mg.finalizedAt[b] ? a : b;
+      log(`재대결까지도 동점 — 더 먼저 주사위를 놓은 ${match.players[winner].name}의 승리로 처리합니다.`);
+      return endMinigame(winner);
     }
     return endMinigame(mg.results[a] > mg.results[b] ? a : b);
   }
@@ -954,7 +980,7 @@ function resolveOpen(id, player, row, col, cell) {
     actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     notifyPoisonDrink(id);
     checkNeutralize(id, player);
-    startPoisonPuzzle(); // 독배를 마신 순간, 둘 다에게 가문의 문장 슬라이딩 퍼즐 경주가 뜬다
+    ensurePoisonPuzzleSession(); // 독배를 마신 순간, 45초짜리 가문의 문장 도전 창이 열린다(이미 열려 있으면 유지)
   } else if (t === 'GEM') {
     resolveGemOpen(player, row, col, cell);
   } else if (t === 'A') {
@@ -1020,90 +1046,113 @@ function notifyNeutralize(id, count) {
   if (oppId) io.to(oppId).emit('popup', { text: `💊 상대가 해독제 ${count}개 발견으로 독을 해독!`, tone: 'info' });
 }
 
-// ------------------------- 독배 슬라이딩 퍼즐(먼저 맞추는 사람이 이기는 경주) -------------------------
-// 누구든 독배를 마신 순간, 예전에 만든 "가문의 문장" 그림 3종(독수리/사자/용, public/crest/*_full.png)
-// 중 하나를 무작위로 골라 3x3 슬라이딩 퍼즐로 섞어 낸다. 둘 다 똑같은 배치로 시작해서 각자 자기
-// 화면에서 독립적으로 풀고(서로의 조작은 서로에게 영향을 안 준다), CONFIG.POISON_PUZZLE_MS(35초)
-// 안에 먼저 다 맞추는 쪽이 CONFIG.POISON_PUZZLE_BONUS_PTS(보너스 점수)를 받는다. 이 화면은 "게임"
-// 화면(APP_ROLE==='game') 전용이다 — 처소 열기는 "고르기" 화면의 몫이므로, 물리적으로 다른 화면을
-// 보고 있는 동안 벌어지는 별개의 경주라는 긴장감을 노린 설계. 제한시간 안에 아무도 못 맞추면 그냥
-// 조용히 사라진다 — "원래 있던 그 상태로 남겨진다"는 요청대로, 못 맞춘 쪽에 대한 추가 페널티는 없다.
+// ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
+// 누구든 독배를 마신 순간, 45초짜리 도전 창이 열린다(이미 열려 있으면 새로 열지 않고 그대로
+// 유지 — 라운드 진행과 무관하게 끝까지 45초를 채운다). 그 안에서 각자 예전에 만든 "가문의 문장"
+// 그림 3종(독수리/사자/용, public/crest/*_full.png) 중 하나를 직접 골라 3x3(+왼쪽 위 여분 1칸
+// = 총 10칸) 슬라이딩 퍼즐에 도전한다. 상대와 경쟁하는 게 아니라 각자 독립적으로 자기 진행상황을
+// 쌓아가는 개인전이다 — 문장 하나를 "처음" 완성했을 때만 보너스 점수를 받는다(문장별 최초 1회).
+// 문장을 아예 안 고르면(장고 금지) 처소 칸 1개가 무작위로 잠긴다 — 다른 미니게임의 "서버가 대신
+// 결정" 페널티와 달리, 이건 대신 골라주지 않고 그냥 이번 기회를 날린 것으로 처리한다. 45초 안에
+// 못 다 맞춰도 그 자체로는 페널티가 없고, 다음에 같은 문장을 또 고르면 두었던 자리 그대로 이어서
+// 풀 수 있다(player.crestPuzzles에 영구 보관). 이 화면은 "게임" 화면(APP_ROLE==='game') 전용이다.
 const POISON_PUZZLE_CRESTS = ['crest1', 'crest2', 'crest3'];
-function shuffledPuzzleTiles(n) {
-  const total = n * n;
-  const tiles = Array.from({ length: total }, (_, i) => i); // 0..total-2: 조각, total-1: 빈칸
-  let blank = total - 1;
-  const neighborsOf = (pos) => {
-    const r = Math.floor(pos / n), c = pos % n;
-    const out = [];
-    if (r > 0) out.push(pos - n);
-    if (r < n - 1) out.push(pos + n);
-    if (c > 0) out.push(pos - 1);
-    if (c < n - 1) out.push(pos + 1);
-    return out;
-  };
+const POISON_PUZZLE_CREST_NAMES = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
+// 퍼즐판은 총 10칸 — 위치 0은 3x3 격자 왼쪽 위 바깥에 붙은 여분 칸(완성 시 빈칸이 쉬는 자리),
+// 위치 1~9가 실제 3x3 격자(가로쓰기 순서: 1,2,3 / 4,5,6 / 7,8,9). 위치 0은 위치 1하고만 붙어
+// 있어서(그 위 칸이라) 오직 그 경계로만 조각이 드나든다. "정답을 맞출 수 있는 구조" 요청대로,
+// 완성 상태에서는 3x3 격자 9칸이 전부 그림 조각으로 꽉 차고(빠짐없이 보임) 빈칸은 격자 밖 이
+// 여분 칸에 가 있다.
+const PUZZLE_ADJ = {
+  0: [1],
+  1: [0, 2, 4], 2: [1, 3, 5], 3: [2, 6],
+  4: [1, 5, 7], 5: [2, 4, 6, 8], 6: [3, 5, 9],
+  7: [4, 8], 8: [5, 7, 9], 9: [6, 8],
+};
+const PUZZLE_BLANK_VALUE = 9; // 조각은 0~8, 9는 빈칸
+function puzzleSolvedTiles() {
+  // 완성 배치(총 10칸): 위치 0=빈칸, 위치 i(1~9)=조각(i-1) — 조각 0~8이 격자를 가로쓰기 순서로 채운다.
+  return [PUZZLE_BLANK_VALUE, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+}
+function isPuzzleSolved(tiles) {
+  return tiles.every((v, i) => v === (i === 0 ? PUZZLE_BLANK_VALUE : i - 1));
+}
+function shuffledPuzzleTiles10() {
+  const tiles = puzzleSolvedTiles();
+  let blank = 0;
   // 순열을 통째로 무작위로 뽑으면 절반은 원리적으로 풀 수 없는 배치가 나온다(홀짝성 문제).
-  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 항상 풀 수 있는 배치만 나온다.
+  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 이 판 모양이 어떻든 항상 풀 수
+  // 있는 배치만 나온다(그래프 형태에 의존하지 않는 범용적인 방법).
   for (let i = 0; i < 200; i++) {
-    const options = neighborsOf(blank);
+    const options = PUZZLE_ADJ[blank];
     const swapWith = options[randInt(0, options.length - 1)];
     [tiles[blank], tiles[swapWith]] = [tiles[swapWith], tiles[blank]];
     blank = swapWith;
   }
   return tiles;
 }
-function startPoisonPuzzle() {
-  // 이미 한 판이 진행 중이면(예: 짧은 간격으로 독배를 연달아 마심) 새로 안 띄우고 넘어간다 —
-  // 경주가 겹치면 누가 어느 경주에서 이겼는지 헷갈리므로, 한 번에 하나만 진행한다.
-  if (match.poisonPuzzle) return;
-  const crest = POISON_PUZZLE_CRESTS[randInt(0, POISON_PUZZLE_CRESTS.length - 1)];
-  const size = CONFIG.POISON_PUZZLE_SIZE;
-  const baseTiles = shuffledPuzzleTiles(size);
+// 독배를 마신 순간 호출 — 이미 도전 창이 열려 있으면 그대로 둔다(재시작하지 않음). 두 사람 다
+// "이번 창에서 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황은 각자 player.crestPuzzles에
+// 있다.
+function ensurePoisonPuzzleSession() {
+  if (match.poisonPuzzleSession) return;
   const [a, b] = match.order;
-  const puzzle = {
-    crest,
-    tiles: { [a]: baseTiles.slice(), [b]: baseTiles.slice() }, // 둘 다 같은 배치로 시작, 이후 각자 독립적으로 진행
+  const session = {
     deadlineAt: Date.now() + CONFIG.POISON_PUZZLE_MS,
-    winnerId: null,
+    perPlayer: { [a]: { crest: null, penalized: false }, [b]: { crest: null, penalized: false } },
   };
-  match.poisonPuzzle = puzzle;
-  log('🧩 가문의 문장 슬라이딩 퍼즐 경주 시작 — 먼저 맞추는 쪽이 보너스 점수!');
+  match.poisonPuzzleSession = session;
+  log('🧩 독배를 마셔 가문의 문장 도전 기회가 열렸습니다 — 45초 안에 문장 하나를 골라 맞추면 보너스 점수!');
   broadcastState();
   setTimeout(() => {
-    // 여전히 같은 퍼즐이 안 풀린 채 남아있으면(=중간에 다른 퍼즐로 교체되지 않았으면) 조용히 치운다.
-    if (match.poisonPuzzle === puzzle && puzzle.winnerId == null) {
-      match.poisonPuzzle = null;
-      broadcastState();
+    if (match.poisonPuzzleSession !== session) return; // 이미 끝난 세션(이론상 이 경로만 존재)
+    for (const id of match.order) {
+      const pp = session.perPlayer[id];
+      if (pp && pp.crest == null && !pp.penalized) {
+        pp.penalized = true;
+        log(`${match.players[id].name}이(가) 문장을 고르지 않아 처소 칸 1개가 무작위로 잠깁니다.`);
+        lockRandomCells(id, 1);
+      }
     }
-  }, CONFIG.POISON_PUZZLE_MS + 100);
+    match.poisonPuzzleSession = null;
+    broadcastState();
+  }, CONFIG.POISON_PUZZLE_MS + 50);
+}
+function handlePuzzleChooseCrest(id, payload) {
+  const session = match.poisonPuzzleSession;
+  if (!session) return;
+  const pp = session.perPlayer[id];
+  if (!pp || pp.crest != null) return; // 세션 하나당 한 번만 고를 수 있음(중간에 바꾸기 없음)
+  const crest = payload && payload.crest;
+  if (!POISON_PUZZLE_CRESTS.includes(crest)) return;
+  pp.crest = crest;
+  const player = match.players[id];
+  if (!player.crestPuzzles[crest]) player.crestPuzzles[crest] = { tiles: shuffledPuzzleTiles10(), solved: false };
+  log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[crest]}]을(를) 골라 도전합니다.`);
+  broadcastState();
 }
 function handlePuzzleMove(id, payload) {
+  const session = match.poisonPuzzleSession;
+  if (!session) return;
+  const pp = session.perPlayer[id];
+  if (!pp || pp.crest == null) return;
+  if (Date.now() > session.deadlineAt) return; // 서버가 최종 판단 — 클라 표시 지연에 기대지 않는다
   const player = match.players[id];
-  const puzzle = match.poisonPuzzle;
-  if (!player || !puzzle || puzzle.winnerId != null) return;
-  if (Date.now() > puzzle.deadlineAt) return; // 서버가 최종 판단 — 클라 표시 지연에 기대지 않는다
-  const tiles = puzzle.tiles[id];
-  if (!tiles) return;
-  const size = CONFIG.POISON_PUZZLE_SIZE;
-  const idx = Number(payload && payload.index);
-  if (!Number.isInteger(idx) || idx < 0 || idx >= size * size) return;
-  const blank = tiles.indexOf(size * size - 1);
-  const r1 = Math.floor(blank / size), c1 = blank % size;
-  const r2 = Math.floor(idx / size), c2 = idx % size;
-  if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1) return; // 빈칸과 인접한 조각만 이동 가능
-  [tiles[blank], tiles[idx]] = [tiles[idx], tiles[blank]];
-  const solved = tiles.every((v, i) => v === i);
-  if (solved) {
-    puzzle.winnerId = id;
+  const puzzle = player.crestPuzzles[pp.crest];
+  if (!puzzle || puzzle.solved) return;
+  const pos = Number(payload && payload.pos);
+  if (!Number.isInteger(pos) || pos < 0 || pos > 9) return;
+  const tiles = puzzle.tiles;
+  const blank = tiles.indexOf(PUZZLE_BLANK_VALUE);
+  if (!PUZZLE_ADJ[blank].includes(pos)) return; // 빈칸과 인접한 칸만 이동 가능
+  [tiles[blank], tiles[pos]] = [tiles[pos], tiles[blank]];
+  if (isPuzzleSolved(tiles)) {
+    puzzle.solved = true;
     player.score += CONFIG.POISON_PUZZLE_BONUS_PTS;
-    log(`${player.name}이(가) 가문의 문장을 먼저 맞춰 보너스 +${CONFIG.POISON_PUZZLE_BONUS_PTS}점을 얻었습니다!`);
-    io.to(id).emit('popup', { text: `🧩 내가 먼저 맞췄다! +${CONFIG.POISON_PUZZLE_BONUS_PTS}점`, tone: 'good' });
+    log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[pp.crest]}]을(를) 완성해 보너스 +${CONFIG.POISON_PUZZLE_BONUS_PTS}점을 얻었습니다!`);
+    io.to(id).emit('popup', { text: `🧩 문장 완성! +${CONFIG.POISON_PUZZLE_BONUS_PTS}점`, tone: 'good' });
     const oppId = otherId(id);
-    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 먼저 맞췄습니다 (+${CONFIG.POISON_PUZZLE_BONUS_PTS}점)`, tone: 'warn' });
-    setTimeout(() => {
-      if (match.poisonPuzzle === puzzle) match.poisonPuzzle = null;
-      broadcastState();
-    }, 1800); // 승부가 갈린 그림을 잠깐 보여준 뒤 화면에서 치운다
+    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 가문의 문장을 완성했습니다.`, tone: 'info' });
   }
   broadcastState();
 }
@@ -1355,17 +1404,25 @@ function buildClientState(forId) {
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
-    // 독배 슬라이딩 퍼즐 — 라운드/미니게임 단계와 무관하게(독립적으로 35초 실시간 타이머로) 뜨고,
-    // 오직 이 화면("게임" 화면)에만 보인다. 누가 마셨든 둘 다에게 똑같이 뜨는 경주이므로(먼저
-    // 맞추는 쪽이 승리), 내 진행상황(tiles)만 내려주고 상대의 타일 배치는 굳이 안 보여준다 —
-    // 승부가 갈리면 winner로만 결과를 알려준다.
-    poisonPuzzle: match.poisonPuzzle ? {
-      crest: match.poisonPuzzle.crest,
-      tiles: match.poisonPuzzle.tiles[forId].slice(),
-      size: CONFIG.POISON_PUZZLE_SIZE,
-      deadlineAt: match.poisonPuzzle.deadlineAt,
-      winner: match.poisonPuzzle.winnerId == null ? null : (match.poisonPuzzle.winnerId === forId ? 'me' : 'opp'),
-    } : null,
+    // 독배 슬라이딩 퍼즐 — 라운드/미니게임 단계와 무관하게(독립적으로 45초 실시간 타이머로) 뜨고,
+    // 오직 이 화면("게임" 화면)에만 보인다. 상대와 경쟁하는 경주가 아니라 각자 독립적인 개인전이라
+    // 상대 진행상황은 아예 안 내려준다. 아직 문장을 안 골랐으면 tiles는 null(3개 중 고르는 화면),
+    // 골랐으면 그 문장의 영구 진행상황(player.crestPuzzles)을 그대로 보여준다.
+    poisonPuzzle: (() => {
+      const session = match.poisonPuzzleSession;
+      if (!session) return null;
+      const pp = session.perPlayer[forId];
+      const myCrest = pp ? pp.crest : null;
+      const myPuzzle = myCrest ? me.crestPuzzles[myCrest] : null;
+      return {
+        deadlineAt: session.deadlineAt,
+        myCrest,
+        crests: POISON_PUZZLE_CRESTS.map((c) => ({ key: c, solved: !!(me.crestPuzzles[c] && me.crestPuzzles[c].solved) })),
+        size: CONFIG.POISON_PUZZLE_SIZE,
+        tiles: myPuzzle ? myPuzzle.tiles.slice() : null,
+        solved: myPuzzle ? !!myPuzzle.solved : false,
+      };
+    })(),
     // 세트 구조(3세트x4조각) 자체는 이제 공개 정보지만, 어느 칸에 무슨 조각이 있는지는 여전히
     // 비공개다. 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/
     // poisonMid — 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
@@ -1516,9 +1573,9 @@ function buildAdminState() {
       confirmed: !!match.midSetupSelections[id],
       cells: match.midSetupSelections[id] || [],
     })) : null,
-    poisonPuzzle: match.poisonPuzzle ? {
-      crest: match.poisonPuzzle.crest,
-      winner: match.poisonPuzzle.winnerId ? match.players[match.poisonPuzzle.winnerId].name : null,
+    poisonPuzzle: match.poisonPuzzleSession ? {
+      deadlineAt: match.poisonPuzzleSession.deadlineAt,
+      choices: match.order.map((id) => ({ name: match.players[id].name, crest: match.poisonPuzzleSession.perPlayer[id].crest })),
     } : null,
     players: match.order.map((id) => {
       const p = match.players[id];
@@ -1661,6 +1718,7 @@ io.on('connection', (socket) => {
 
   socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));
   socket.on('action:open', (p) => doAction(slot, 'OPEN', p || {}));
+  socket.on('puzzle:chooseCrest', (p) => handlePuzzleChooseCrest(slot, p || {}));
   socket.on('puzzle:move', (p) => handlePuzzleMove(slot, p || {}));
   socket.on('reward:use', (p) => handleRewardUse(slot, p || {}));
   socket.on('reward:choose', (p) => handleRewardChoose(slot, p || {}));
