@@ -122,7 +122,7 @@ function onState(label, socket, s) {
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
     // 미니게임이 10종이고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 10종이 전부
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10, max possible per match = min(10,ROUNDS_TOTAL))`);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9, max possible per match = min(9,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, gemsFound: s.me.gemsFound, gemsCompleted: s.me.gemsCompleted, gemsTotal: s.me.gemsTotal });
     setTimeout(() => process.exit(0), 200);
@@ -205,12 +205,10 @@ function playMinigame(label, socket, s) {
       const guess = pool[Math.floor(Math.random() * pool.length)];
       socket.emit('minigame:move', { guess });
     }
-    if (type === 'CARD_DUEL' && mg.waitingForMe) {
-      // 1~3을 무작위 순서로 섞어 세 자리에 배치 — 실제 플레이어의 "아무 순서로나 클릭"을 근사.
-      const shuffled = [1, 2, 3].sort(() => Math.random() - 0.5);
-      socket.emit('minigame:move', { arrangement: shuffled });
+    if (type === 'DICE' && mg.myResult == null && !mg.myPressed) {
+      socket.emit('minigame:move', { action: 'PRESS' });
+      setTimeout(() => socket.emit('minigame:move', { action: 'RELEASE' }), 150 + Math.random() * 500);
     }
-    if (type === 'PACT' && mg.waitingForMe) socket.emit('minigame:move', { action: Math.random() < 0.5 ? 'SILENT' : 'TALK' });
     // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른
     // 미니게임과 같은 20~80ms 간격으로 스팸처럼 넘기면 초당 십수 번씩 왕복 메시지가 오가며
     // 실제 사람이라면 절대 하지 않을 부하를 만들어 테스트 전체를 느리게 만든다(실측상 수백~

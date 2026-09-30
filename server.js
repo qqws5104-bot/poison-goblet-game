@@ -46,9 +46,14 @@ const CONFIG = {
   REWARD_USE_LIMIT: 3, // 보상 종류별로 한 사람이 실제로 사용할 수 있는 최대 횟수
   // "장고 금지" 타이머 — 시간이 다 되면 아직 결정을 안 내린 쪽의 몫을 서버가 무작위로 대신
   // 결정해버린다(핸들러 함수를 그대로 재사용하므로 검증/승패 판정 로직은 완전히 동일하다).
-  DECISION_TIMER_MS: 15000, // NIM/HAND/PIN/GUESS_COUNT/CARD_DUEL/PACT/SIGIL처럼 결정이 한 번(또는 교대로 한 번씩)인 미니게임
+  DECISION_TIMER_MS: 15000, // NIM/HAND/PIN/GUESS_COUNT/DICE/SIGIL처럼 결정이 한 번(또는 교대로 한 번씩)인 미니게임
+  LOCK_PENALTY_CELLS: 2, // 장고 페널티 — 시간 안에 결정 못 하면 자기 처소의 칸이 이만큼 무작위로 영구히 잠긴다
+  DICE_CYCLE_MS: 220, // 주사위 누르기 — 스페이스바를 누르고 있는 동안 이 간격(ms)마다 눈금이 1~6으로 순환하며, 뗀 시점의 경과시간으로 서버가 눈을 확정한다
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
+  POISON_PUZZLE_MS: 35000, // 독배를 마신 순간 뜨는 슬라이딩 퍼즐 경주의 제한시간
+  POISON_PUZZLE_SIZE: 3, // 슬라이딩 퍼즐 크기(3x3 — 8칸 조각 + 빈칸 1개)
+  POISON_PUZZLE_BONUS_PTS: 3, // 둘 중 먼저 맞추는 사람이 받는 보너스 점수
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
 CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
@@ -56,8 +61,9 @@ CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
 // "심리싸움 하는 느낌이 살면 좋겠다"는 피드백에 따라 운/대박 요소는 유지하면서도 상대를 읽어야
-// 이기는 심리전 계열을 추가했다 — 총 10종. ROUNDS(15) > 10종이라 한 매치에 10종이 전부 나올
-// 수도 있다(그중 최대 15개를 무작위로 섞어 채움).
+// 이기는 심리전 계열을 추가했다 — 총 9종(숫자 패 대결은 "너무 생각해야 한다"는 피드백으로
+// 이후 제외). ROUNDS(15) > 9종이라 한 매치에 9종이 전부 나올 수도 있다(그중 최대 15개를
+// 무작위로 섞어 채움).
 // 숫자 합 홀짝(PARITY)은 상호작용이 단조롭다는 피드백으로, 사라진 유품 찾기(MEMORY)는 재미
 // 피드백으로 제외. 심리전 계열 초안 3종(BLUFF/LIAR_DIE/GAMBIT)은 플레이테스트 결과 셋 다
 // 실제로는 "읽을 게 없는" 게임이었다는 게 드러나 전부 제외했다 — 라이어 주사위는 선언 한 번 +
@@ -65,22 +71,18 @@ CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
 // 대결은 GOLD를 쥔 쪽은 PUSH가 손해볼 일이 없는 확정 정답이라 절반의 상황에서 진짜 '결정'이
 // 없었으며, 허세 배팅은 세 선택지(1/2/3) 중 3이 다른 모든 선택지를 (약)우월하게 지배해서
 // "무조건 3"이 정답인 게임이었다(세 게임 모두 "애매하다"는 피드백으로 확인). 세 게임 모두
-// 양쪽 모두에게 실제 딜레마가 있는 대체 게임 두 개로 통합했다: 숫자 패 대결(CARD_DUEL)과
-// 의리 시험(PACT, 죄수의 딜레마형 — 배신의 유혹이 상호협력의 보상보다 확실히 커야 진짜 딜레마가
-// 되므로, 밀고 쪽 보상을 정찰 보상 "직접 선택"으로, 상호침묵 쪽은 그보다 작은 즉석 한 칸 정찰로
-// 차등을 뒀다). 숫자 패 대결은 처음엔 쿤 포커 축약형(체크/베팅)이었으나 "체크 베팅 게임은
-// 하지 말자"는 피드백으로 완전히 새 규칙으로 바꿨다 — 1·2·3 세 장을 세 자리(①②③)에 원하는
-// 순서로 몰래 배치하고, 같은 자리끼리 상대와 비교해 더 큰 숫자를 낸 자리가 많은 쪽이 승리한다.
-// 6가지 배치 중 어느 것도 다른 모든 배치를 이기는 절대 우위가 없는 순환 구조라(가위바위보처럼
-// [3,1,2]가 [2,3,1]을 이기고 [2,3,1]이 [1,2,3]을 이기고 [1,2,3]이 다시 [3,1,2]를 이기는 식)
-// 진짜 읽기 싸움이 된다.
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'CARD_DUEL', 'PACT'];
+// 양쪽 모두에게 실제 딜레마가 있는 대체 게임으로 의리 시험(PACT, 죄수의 딜레마형)을 한동안
+// 추가했었으나 "이것도 빼. 너무 글이 많아"라는 피드백으로 제외하고, 대신 스페이스바를 꾹
+// 누르고 있다가 떼는 순간 눈이 확정되는 순발력/타이밍형 게임인 주사위 누르기(DICE)로
+// 교체했다(설명 텍스트가 거의 필요 없다는 게 장점). 확정된 눈은 둘 다에게 공개된다.
+// 숫자 패 대결(CARD_DUEL, 1·2·3을 세 자리에 몰래 배치해 겨루는 방식)도 한때 있었으나
+// "너무 생각해야 한다"는 피드백으로 제외했다.
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'DICE'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
   SIGIL: '금은동 쟁탈전', GUESS_COUNT: '탁자 위 술잔 개수 세기',
-  BANK: '금고 번호 맞추기',
-  CARD_DUEL: '숫자 패 대결', PACT: '의리 시험',
+  BANK: '금고 번호 맞추기', DICE: '주사위 누르기',
 };
 function buildMinigameOrder() {
   const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS_TOTAL);
@@ -199,7 +201,11 @@ function placeOneGem(player, room, rowStart, rowEnd, size) {
   }
   if (!shapeCells) return; // 자리가 없으면 포기
   const gemId = player.nextGemId++;
-  shapeCells.forEach(({ row, col }) => { room[row][col].type = 'GEM'; room[row][col].gemId = gemId; });
+  // 조각 위치 라벨 — 예전 "가문의 문장" 조각 이미지처럼 칸을 열면 전체 보석의 "반쪽/한 조각"만
+  // 보이게 하기 위한 것. size1(동그라미)은 조각이 하나뿐이라 라벨이 필요 없고, size2(긴 것)는
+  // 세로로 위/아래, size4(네모)는 2x2 배치 순서(TL,BL,TR,BR)를 그대로 라벨로 쓴다.
+  const pieceLabels = size === 1 ? ['SOLO'] : size === 2 ? ['TOP', 'BOTTOM'] : ['TL', 'BL', 'TR', 'BR'];
+  shapeCells.forEach(({ row, col }, i) => { room[row][col].type = 'GEM'; room[row][col].gemId = gemId; room[row][col].gemPiece = pieceLabels[i]; });
   player.gems[gemId] = { size, cells: shapeCells };
 }
 function placeGemsInRegion(player, room, rowStart, rowEnd, sizes) {
@@ -238,6 +244,8 @@ function freshMatch() {
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
     splitMode: false,
+    // 독배 슬라이딩 퍼즐(먼저 맞추는 사람이 이기는 경주) — 진행 중이 아니면 null.
+    poisonPuzzle: null,
   };
 }
 let match = freshMatch();
@@ -393,9 +401,28 @@ function armDecisionTimer(mg, ms, onTimeout) {
     onTimeout();
   }, ms);
 }
+// 장고 페널티 — 시간 안에 결정을 못 내려 서버가 대신 무작위로 처리한 사람은, 그 대가로 자기
+// 처소의 아직 안 연(그리고 아직 안 잠긴) 칸 중 무작위로 몇 곳이 그 자리에서 잠겨 다시는 열 수
+// 없게 된다. CONFIG.LOCK_PENALTY_CELLS(기본 2)개를 잠그며, 남은 칸이 그보다 적으면 있는 만큼만.
+function lockRandomCells(id, count) {
+  const player = match.players[id];
+  if (!player) return;
+  const candidates = [];
+  for (const row of player.room) {
+    for (const cell of row) {
+      if (!cell.opened && !cell.locked) candidates.push(cell);
+    }
+  }
+  const picked = shuffle(candidates).slice(0, count);
+  picked.forEach((cell) => { cell.locked = true; });
+  if (picked.length) {
+    log(`${player.name}이(가) 장고 페널티로 처소의 칸 ${picked.length}개가 영구히 잠겼습니다.`);
+  }
+}
 function armNimTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
     log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 서버가 대신 무작위로 채웁니다.`);
+    lockRandomCells(mg.turn, CONFIG.LOCK_PENALTY_CELLS);
     handleNim(mg.turn, { n: randInt(1, 3) }, mg);
   });
 }
@@ -404,6 +431,7 @@ function armPinTimer(mg) {
     const remaining = mg.pulled.map((p, i) => (p ? null : i)).filter((i) => i != null);
     if (!remaining.length) return;
     log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 서버가 대신 안전핀을 뽑습니다.`);
+    lockRandomCells(mg.turn, CONFIG.LOCK_PENALTY_CELLS);
     handlePin(mg.turn, { action: 'PICK', index: remaining[randInt(0, remaining.length - 1)] }, mg);
   });
 }
@@ -411,9 +439,11 @@ function armHandTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
     if (mg.hiderPick == null) {
       log(`${match.players[mg.hider].name}이(가) 너무 오래 고민해 서버가 대신 손을 숨깁니다.`);
+      lockRandomCells(mg.hider, CONFIG.LOCK_PENALTY_CELLS);
       handleHand(mg.hider, { hand: Math.random() < 0.5 ? 'L' : 'R' }, mg);
     } else if (mg.guesserPick == null) {
       log(`${match.players[mg.guesser].name}이(가) 너무 오래 고민해 서버가 대신 지목합니다.`);
+      lockRandomCells(mg.guesser, CONFIG.LOCK_PENALTY_CELLS);
       handleHand(mg.guesser, { hand: Math.random() < 0.5 ? 'L' : 'R' }, mg);
     }
   });
@@ -424,6 +454,7 @@ function armSigilTimer(mg) {
     for (const id of match.order) {
       if (mg.result != null) break;
       log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 진행합니다.`);
+      lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
       let guard = 0;
       while (mg.result == null && guard < totalItems + 3) {
         guard += 1;
@@ -439,27 +470,19 @@ function armGuessCountTimer(mg) {
     for (const id of match.order) {
       if (mg.guesses[id] == null) {
         log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 추측합니다.`);
+        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
         handleGuessCount(id, { guess: randInt(0, CONFIG.GUESS_COUNT_MAX) }, mg);
       }
     }
   });
 }
-function armCardDuelTimer(mg) {
+function armDiceTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
     for (const id of match.order) {
-      if (!mg.arrangement[id]) {
-        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 패를 배치합니다.`);
-        handleCardDuel(id, { arrangement: shuffle([1, 2, 3]) }, mg);
-      }
-    }
-  });
-}
-function armPactTimer(mg) {
-  armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    for (const id of match.order) {
-      if (!mg.actions[id]) {
-        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 결정합니다.`);
-        handlePact(id, { action: Math.random() < 0.5 ? 'SILENT' : 'TALK' }, mg);
+      if (mg.results[id] == null) {
+        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 주사위를 굴립니다.`);
+        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
+        finalizeDiceResult(id, mg, randInt(1, 6));
       }
     }
   });
@@ -473,6 +496,7 @@ function armReflexTimer(mg) {
       if (mg.result != null) break;
       if (!mg.clicks[id]) {
         log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 잔을 낚아챕니다.`);
+        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
         handleReflex(id, {}, mg);
       }
     }
@@ -483,6 +507,7 @@ function armBankTimer(mg) {
     for (const id of match.order) {
       if (mg.result != null) break;
       log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 금고를 계속 시도합니다.`);
+      lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
       let guard = 0;
       while (mg.result == null && guard < 3000) {
         guard += 1;
@@ -611,26 +636,15 @@ function initMinigame(type, roundNo) {
     armBankTimer(mgBank);
     return mgBank;
   }
-  if (type === 'CARD_DUEL') {
-    // 숫자 패 대결 — 1·2·3 세 장을 세 자리(①②③)에 원하는 순서로 몰래 배치한다. 둘 다 배치를
-    // 마치면 동시 공개, 같은 자리끼리 숫자를 비교해 더 큰 쪽이 그 자리를 "이긴다" — 세 자리 중
-    // 더 많이 이긴 쪽이 승리(1승1패1무 등 서로 승수가 같으면 무승부). arrangement[id]는 아직
-    // 배치를 끝내지 않은 동안은 없다가, 제출하면 [자리1, 자리2, 자리3] 형태의 1~3 순열이 된다.
-    const mgDuel = { ...base, arrangement: {} };
-    armCardDuelTimer(mgDuel);
-    return mgDuel;
-  }
-  if (type === 'PACT') {
-    // 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵(SILENT)/밀고(TALK)를 고른다.
-    //  - 둘 다 침묵 → 서로 의리를 지킨 보상으로 각자 즉석 한 칸 정찰을 받는다(endMinigameMutualReveal).
-    //  - 한쪽만 밀고 → 밀고한 쪽이 미니게임 승리로 처리되어 정찰 보상을 "직접 골라" 받는다(더 큼).
-    //  - 둘 다 밀고 → 아무도 얻는 것 없이 무승부.
-    // 밀고 쪽 보상이 상호침묵 쪽보다 확실히 커야("배신의 유혹"이 "협력의 보상"보다 커야) 진짜
-    // 딜레마가 된다 — 그래야 "다 같이 침묵하는 게 둘 다에게 낫다"는 걸 알면서도 상대를 못 믿어
-    // 밀고하고 싶어지는 긴장이 생긴다.
-    const mgPact = { ...base, actions: {} };
-    armPactTimer(mgPact);
-    return mgPact;
+  if (type === 'DICE') {
+    // 주사위 누르기 — 스페이스바(또는 버튼)를 꾹 누르고 있으면 눈이 계속 순환하고 있다고
+    // 보고, 뗀 순간의 실제 경과시간(서버가 받은 진짜 타임스탬프 기준 — 클라이언트가 스스로
+    // 보고하는 숫자는 신뢰하지 않는다)으로 눈(1~6)을 확정한다. 화면에는 누르고 있는 동안
+    // 눈이 빠르게 도는 장식용 애니메이션을 보여줄 뿐, 실제 결과는 전적으로 서버 판정이다.
+    // 둘 다 확정되면 큰 눈이 승리(같으면 무승부) — 확정된 눈은 즉시 서로에게 공개된다.
+    const mgDice = { ...base, pressAt: {}, results: {} };
+    armDiceTimer(mgDice);
+    return mgDice;
   }
   return base;
 }
@@ -682,36 +696,6 @@ function endMinigameDraw() {
   broadcastState();
 }
 
-// 의리 시험(PACT)에서 "둘 다 침묵"했을 때 전용 처리 — 승자는 없지만(스트릭도 끊김) 아무 보상도
-// 없는 진짜 무승부와는 달리, 서로 의리를 지킨 보상으로 각자 자기 처소의 안 연 칸 하나를 몰래
-// 들여다본다. 보상 후보를 "직접 고르는" 정찰 보상(endMinigame이 미니게임 승자에게 주는 것)보다는
-// 확실히 작아야 한다 — 그래야 "밀고하면 더 크게 얻는다"는 유혹이 살아있는 진짜 죄수의 딜레마가
-// 된다. 정찰 대상은 무작위 한 칸으로, 실제로 여는 게 아니라 PEEK_CELL 보상과 똑같이 정보만 준다.
-function endMinigameMutualReveal() {
-  match.minigame.result = 'DRAW';
-  match.pendingReward = null;
-  match.actionOpens = {};
-  match.phase = 'ROUND_ACTION';
-  match.streak = { winnerId: null, count: 0 };
-  for (const id of match.order) {
-    const player = match.players[id];
-    const candidates = [];
-    for (let r = 0; r < player.room.length; r++) {
-      for (let c = 0; c < player.room[r].length; c++) {
-        if (!player.room[r][c].opened && !player.room[r][c].locked) candidates.push({ row: r, col: c });
-      }
-    }
-    if (!candidates.length) continue;
-    const { row, col } = candidates[randInt(0, candidates.length - 1)];
-    const type = player.room[row][col].type;
-    actionLog(player, `의리를 지킨 보상 — 내 처소 (${row + 1},${col + 1}) 정찰 → ${CELL_NAMES[type]}`);
-    io.to(id).emit('rewardResult', { kind: 'PEEK_CELL', row, col, type });
-  }
-  log('둘 다 침묵했습니다 — 서로에게 처소 정보를 하나씩 몰래 나눠줍니다.');
-  armActionTimer();
-  broadcastState();
-}
-
 // 미니게임 승자가 여러 보상 후보 중 하나를 직접 골라 확정한다.
 function handleRewardChoose(id, payload) {
   const pr = match.pendingReward;
@@ -739,8 +723,7 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'SIGIL') return handleSigil(id, payload, mg);
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
-  if (mg.type === 'CARD_DUEL') return handleCardDuel(id, payload, mg);
-  if (mg.type === 'PACT') return handlePact(id, payload, mg);
+  if (mg.type === 'DICE') return handleDice(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -899,49 +882,40 @@ function handleBank(id, payload, mg) {
   broadcastState();
 }
 
-// 11) 숫자 패 대결(쿤 포커 축약형) — 선공 체크/베팅 → 후공 반응(콜/폴드 또는 체크/베팅) →
-// (후공이 베팅했다면) 선공 반응(콜/폴드)까지 최대 2단계. 콜/체크로 승부가 나면 패를 공개해
-// 더 높은 숫자가 승리(동점은 무승부), 폴드가 나오면 상대가 패를 보지 않고도 그대로 이긴다.
-// 숫자 패 대결 — payload.arrangement로 [자리1,자리2,자리3](1~3의 순열)을 한 번에 제출받는다.
-// 둘 다 제출하면 자리별로 비교해 더 큰 숫자를 낸 자리가 많은 쪽이 승리(승수가 같으면 무승부).
-function handleCardDuel(id, payload, mg) {
-  if (mg.arrangement[id]) return; // 이미 제출함 — 중복/변경 제출은 무시
-  const arr = payload && payload.arrangement;
-  if (!Array.isArray(arr) || arr.length !== 3) return;
-  const nums = arr.map(Number);
-  const isValidPermutation = nums.every((n) => n === 1 || n === 2 || n === 3) && new Set(nums).size === 3;
-  if (!isValidPermutation) return;
-  mg.arrangement[id] = nums;
-  broadcastState();
+// 12) 주사위 누르기 — 스페이스바를 꾹 누르고 있다가(PRESS) 떼는(RELEASE) 순간의 실제 경과시간으로
+// 눈(1~6)이 확정된다. 큰 눈이 승리, 같으면 무승부. finalizeDiceResult가 실제 확정/승부판정을 맡고,
+// armDiceTimer의 강제 타임아웃도 (누르지도 않은 채) 이 함수를 거치지 않고 바로 그걸 호출한다.
+function finalizeDiceResult(id, mg, number) {
+  mg.pressAt[id] = null;
+  mg.results[id] = number;
+  log(`${match.players[id].name}: 주사위 ${number} 확정`);
   const [a, b] = match.order;
-  if (!(mg.arrangement[a] && mg.arrangement[b])) return; // 아직 상대가 안 냈으면 대기
-  let winsA = 0, winsB = 0;
-  for (let lane = 0; lane < 3; lane++) {
-    if (mg.arrangement[a][lane] > mg.arrangement[b][lane]) winsA += 1;
-    else if (mg.arrangement[a][lane] < mg.arrangement[b][lane]) winsB += 1;
-  }
-  log(`패 대결 공개: ${match.players[a].name}=[${mg.arrangement[a].join(',')}] vs ${match.players[b].name}=[${mg.arrangement[b].join(',')}] (${winsA}승:${winsB}승)`);
-  if (winsA === winsB) return endMinigameDraw();
-  return endMinigame(winsA > winsB ? a : b);
-}
-
-// 12) 의리 시험(죄수의 딜레마형) — 동시에 몰래 침묵/밀고를 고른다. 결과는 handlePact 아래 참고.
-function handlePact(id, payload, mg) {
-  if (mg.actions[id]) return;
-  if (!['SILENT', 'TALK'].includes(payload && payload.action)) return;
-  mg.actions[id] = payload.action;
-  const [a, b] = match.order;
-  if (mg.actions[a] && mg.actions[b]) {
-    log(`의리 시험 공개: ${match.players[a].name}=${mg.actions[a] === 'SILENT' ? '침묵' : '밀고'} vs ${match.players[b].name}=${mg.actions[b] === 'SILENT' ? '침묵' : '밀고'}`);
+  if (mg.results[a] != null && mg.results[b] != null) {
+    log(`주사위 공개: ${match.players[a].name}=${mg.results[a]} vs ${match.players[b].name}=${mg.results[b]}`);
     broadcastState();
-    if (mg.actions[a] === 'SILENT' && mg.actions[b] === 'SILENT') return endMinigameMutualReveal();
-    if (mg.actions[a] === 'TALK' && mg.actions[b] === 'TALK') {
-      log('둘 다 밀고했습니다 — 아무도 얻는 것 없이 무승부.');
+    if (mg.results[a] === mg.results[b]) {
+      log(`둘 다 ${mg.results[a]} — 무승부.`);
       return endMinigameDraw();
     }
-    return endMinigame(mg.actions[a] === 'TALK' ? a : b);
+    return endMinigame(mg.results[a] > mg.results[b] ? a : b);
   }
   broadcastState();
+}
+function handleDice(id, payload, mg) {
+  if (mg.results[id] != null) return; // 이미 확정됨 — 뒤늦게 오는 메시지 무시
+  const action = payload && payload.action;
+  if (action === 'PRESS') {
+    if (mg.pressAt[id] != null) return; // 이미 누르고 있는 중
+    mg.pressAt[id] = Date.now();
+    broadcastState(); // 상대에게도 "누르는 중" 실시간 표시를 위해
+    return;
+  }
+  if (action === 'RELEASE') {
+    if (mg.pressAt[id] == null) return; // 누른 적 없이 뗄 수는 없음
+    const elapsed = Date.now() - mg.pressAt[id];
+    const number = 1 + Math.floor(elapsed / CONFIG.DICE_CYCLE_MS) % 6;
+    finalizeDiceResult(id, mg, number);
+  }
 }
 
 // ------------------------------ 본행동(액션) ---------------------------------
@@ -980,6 +954,7 @@ function resolveOpen(id, player, row, col, cell) {
     actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     notifyPoisonDrink(id);
     checkNeutralize(id, player);
+    startPoisonPuzzle(); // 독배를 마신 순간, 둘 다에게 가문의 문장 슬라이딩 퍼즐 경주가 뜬다
   } else if (t === 'GEM') {
     resolveGemOpen(player, row, col, cell);
   } else if (t === 'A') {
@@ -1043,6 +1018,94 @@ function notifyNeutralize(id, count) {
   const oppId = otherId(id);
   io.to(id).emit('popup', { text: `💊 해독제 ${count}개 발견으로 독을 해독!`, tone: 'good' });
   if (oppId) io.to(oppId).emit('popup', { text: `💊 상대가 해독제 ${count}개 발견으로 독을 해독!`, tone: 'info' });
+}
+
+// ------------------------- 독배 슬라이딩 퍼즐(먼저 맞추는 사람이 이기는 경주) -------------------------
+// 누구든 독배를 마신 순간, 예전에 만든 "가문의 문장" 그림 3종(독수리/사자/용, public/crest/*_full.png)
+// 중 하나를 무작위로 골라 3x3 슬라이딩 퍼즐로 섞어 낸다. 둘 다 똑같은 배치로 시작해서 각자 자기
+// 화면에서 독립적으로 풀고(서로의 조작은 서로에게 영향을 안 준다), CONFIG.POISON_PUZZLE_MS(35초)
+// 안에 먼저 다 맞추는 쪽이 CONFIG.POISON_PUZZLE_BONUS_PTS(보너스 점수)를 받는다. 이 화면은 "게임"
+// 화면(APP_ROLE==='game') 전용이다 — 처소 열기는 "고르기" 화면의 몫이므로, 물리적으로 다른 화면을
+// 보고 있는 동안 벌어지는 별개의 경주라는 긴장감을 노린 설계. 제한시간 안에 아무도 못 맞추면 그냥
+// 조용히 사라진다 — "원래 있던 그 상태로 남겨진다"는 요청대로, 못 맞춘 쪽에 대한 추가 페널티는 없다.
+const POISON_PUZZLE_CRESTS = ['crest1', 'crest2', 'crest3'];
+function shuffledPuzzleTiles(n) {
+  const total = n * n;
+  const tiles = Array.from({ length: total }, (_, i) => i); // 0..total-2: 조각, total-1: 빈칸
+  let blank = total - 1;
+  const neighborsOf = (pos) => {
+    const r = Math.floor(pos / n), c = pos % n;
+    const out = [];
+    if (r > 0) out.push(pos - n);
+    if (r < n - 1) out.push(pos + n);
+    if (c > 0) out.push(pos - 1);
+    if (c < n - 1) out.push(pos + 1);
+    return out;
+  };
+  // 순열을 통째로 무작위로 뽑으면 절반은 원리적으로 풀 수 없는 배치가 나온다(홀짝성 문제).
+  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 항상 풀 수 있는 배치만 나온다.
+  for (let i = 0; i < 200; i++) {
+    const options = neighborsOf(blank);
+    const swapWith = options[randInt(0, options.length - 1)];
+    [tiles[blank], tiles[swapWith]] = [tiles[swapWith], tiles[blank]];
+    blank = swapWith;
+  }
+  return tiles;
+}
+function startPoisonPuzzle() {
+  // 이미 한 판이 진행 중이면(예: 짧은 간격으로 독배를 연달아 마심) 새로 안 띄우고 넘어간다 —
+  // 경주가 겹치면 누가 어느 경주에서 이겼는지 헷갈리므로, 한 번에 하나만 진행한다.
+  if (match.poisonPuzzle) return;
+  const crest = POISON_PUZZLE_CRESTS[randInt(0, POISON_PUZZLE_CRESTS.length - 1)];
+  const size = CONFIG.POISON_PUZZLE_SIZE;
+  const baseTiles = shuffledPuzzleTiles(size);
+  const [a, b] = match.order;
+  const puzzle = {
+    crest,
+    tiles: { [a]: baseTiles.slice(), [b]: baseTiles.slice() }, // 둘 다 같은 배치로 시작, 이후 각자 독립적으로 진행
+    deadlineAt: Date.now() + CONFIG.POISON_PUZZLE_MS,
+    winnerId: null,
+  };
+  match.poisonPuzzle = puzzle;
+  log('🧩 가문의 문장 슬라이딩 퍼즐 경주 시작 — 먼저 맞추는 쪽이 보너스 점수!');
+  broadcastState();
+  setTimeout(() => {
+    // 여전히 같은 퍼즐이 안 풀린 채 남아있으면(=중간에 다른 퍼즐로 교체되지 않았으면) 조용히 치운다.
+    if (match.poisonPuzzle === puzzle && puzzle.winnerId == null) {
+      match.poisonPuzzle = null;
+      broadcastState();
+    }
+  }, CONFIG.POISON_PUZZLE_MS + 100);
+}
+function handlePuzzleMove(id, payload) {
+  const player = match.players[id];
+  const puzzle = match.poisonPuzzle;
+  if (!player || !puzzle || puzzle.winnerId != null) return;
+  if (Date.now() > puzzle.deadlineAt) return; // 서버가 최종 판단 — 클라 표시 지연에 기대지 않는다
+  const tiles = puzzle.tiles[id];
+  if (!tiles) return;
+  const size = CONFIG.POISON_PUZZLE_SIZE;
+  const idx = Number(payload && payload.index);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= size * size) return;
+  const blank = tiles.indexOf(size * size - 1);
+  const r1 = Math.floor(blank / size), c1 = blank % size;
+  const r2 = Math.floor(idx / size), c2 = idx % size;
+  if (Math.abs(r1 - r2) + Math.abs(c1 - c2) !== 1) return; // 빈칸과 인접한 조각만 이동 가능
+  [tiles[blank], tiles[idx]] = [tiles[idx], tiles[blank]];
+  const solved = tiles.every((v, i) => v === i);
+  if (solved) {
+    puzzle.winnerId = id;
+    player.score += CONFIG.POISON_PUZZLE_BONUS_PTS;
+    log(`${player.name}이(가) 가문의 문장을 먼저 맞춰 보너스 +${CONFIG.POISON_PUZZLE_BONUS_PTS}점을 얻었습니다!`);
+    io.to(id).emit('popup', { text: `🧩 내가 먼저 맞췄다! +${CONFIG.POISON_PUZZLE_BONUS_PTS}점`, tone: 'good' });
+    const oppId = otherId(id);
+    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 먼저 맞췄습니다 (+${CONFIG.POISON_PUZZLE_BONUS_PTS}점)`, tone: 'warn' });
+    setTimeout(() => {
+      if (match.poisonPuzzle === puzzle) match.poisonPuzzle = null;
+      broadcastState();
+    }, 1800); // 승부가 갈린 그림을 잠깐 보여준 뒤 화면에서 치운다
+  }
+  broadcastState();
 }
 
 // 철가방 정찰(FLASH_ALL) 실제 발동 — 스페이스바(handleRewardUse)나 본행동 타이머 만료(안전장치)
@@ -1147,6 +1210,8 @@ function checkRoundActionDone() {
   }, CONFIG.ROUND_DONE_MS);
 }
 
+// 동점 처리 순서 — 1) 최종 점수, 2) (동점이면) 독을 더 적게 먹은 쪽, 3) (그마저 같으면) 해독을
+// 더 많이 한 쪽, 4) (그마저 같으면) 완성한 보석 개수가 더 많은 쪽. 그래도 완전히 같으면 무승부.
 function endMatchByScore() {
   const [a, b] = match.order;
   const pa = match.players[a], pb = match.players[b];
@@ -1160,9 +1225,18 @@ function endMatchByScore() {
   } else if (poisonTotal(pa) !== poisonTotal(pb)) {
     // 최종 점수가 완전히 같으면, 무효화하지 못한 독을 더 적게 마신 쪽(더 안전하게 버틴 쪽)이 승리한다.
     winner = poisonTotal(pa) < poisonTotal(pb) ? a : b;
-    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수 동률, 무효화하지 못한 독 개수로 승부 판정`;
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수 동률, 독 개수로 승부 판정`;
+  } else if ((pa.antidote || 0) !== (pb.antidote || 0)) {
+    winner = (pa.antidote || 0) > (pb.antidote || 0) ? a : b;
+    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독 동률, 해독제 개수로 승부 판정`;
   } else {
-    reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독 개수 완전 동률(무승부)`;
+    const gemsA = gemSummary(pa).completed, gemsB = gemSummary(pb).completed;
+    if (gemsA !== gemsB) {
+      winner = gemsA > gemsB ? a : b;
+      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독 동률, 완성한 보석 개수로 승부 판정`;
+    } else {
+      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독·보석 완전 동률(무승부)`;
+    }
   }
   endMatch(reason, winner);
 }
@@ -1233,6 +1307,9 @@ function buildClientState(forId) {
       note: cell.cluedNote || null,
       // 같은 보석의 조각끼리 묶어서 보여주기 위한 id — 실제로 공개된 보석 칸일 때만 내려준다.
       gemId: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemId : null,
+      // 이 칸이 보석 전체에서 어느 조각(위/아래, 좌상/좌하/우상/우하 등)인지 — 옛 "가문의 문장"
+      // 조각 이미지처럼 칸마다 보석의 한 조각만 보이게 그리기 위한 라벨.
+      gemPiece: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemPiece : null,
     })));
 
   const pr = match.pendingReward;
@@ -1278,6 +1355,17 @@ function buildClientState(forId) {
     isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
     opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
     oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
+    // 독배 슬라이딩 퍼즐 — 라운드/미니게임 단계와 무관하게(독립적으로 35초 실시간 타이머로) 뜨고,
+    // 오직 이 화면("게임" 화면)에만 보인다. 누가 마셨든 둘 다에게 똑같이 뜨는 경주이므로(먼저
+    // 맞추는 쪽이 승리), 내 진행상황(tiles)만 내려주고 상대의 타일 배치는 굳이 안 보여준다 —
+    // 승부가 갈리면 winner로만 결과를 알려준다.
+    poisonPuzzle: match.poisonPuzzle ? {
+      crest: match.poisonPuzzle.crest,
+      tiles: match.poisonPuzzle.tiles[forId].slice(),
+      size: CONFIG.POISON_PUZZLE_SIZE,
+      deadlineAt: match.poisonPuzzle.deadlineAt,
+      winner: match.poisonPuzzle.winnerId == null ? null : (match.poisonPuzzle.winnerId === forId ? 'me' : 'opp'),
+    } : null,
     // 세트 구조(3세트x4조각) 자체는 이제 공개 정보지만, 어느 칸에 무슨 조각이 있는지는 여전히
     // 비공개다. 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/
     // poisonMid — 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
@@ -1360,23 +1448,11 @@ function publicMinigameView(mg, forId) {
       deadlineAt: mg.deadlineAt || null,
     };
   }
-  if (mg.type === 'CARD_DUEL') {
-    // 내가 제출을 끝냈는지(submitted)와 상대가 제출을 끝냈는지(oppSubmitted)만 진행 상황으로
-    // 알려주고, 실제 배치 내용은 둘 다 제출을 마쳐야(revealed) 공개된다.
-    const mySubmitted = !!mg.arrangement[forId];
-    const oppSubmitted = !!mg.arrangement[otherId(forId)];
+  if (mg.type === 'DICE') {
     return {
-      submitted: mySubmitted, oppSubmitted, waitingForMe: !mySubmitted,
-      myArrangement: mg.arrangement[forId] || null,
-      revealed: (mySubmitted && oppSubmitted) ? { mine: mg.arrangement[forId], opp: mg.arrangement[otherId(forId)] } : null,
-      deadlineAt: mg.deadlineAt || null,
-    };
-  }
-  if (mg.type === 'PACT') {
-    return {
-      myAction: mg.actions[forId] || null, oppActed: !!mg.actions[otherId(forId)],
-      waitingForMe: !mg.actions[forId],
-      revealed: mg.result != null ? { myAction: mg.actions[forId], oppAction: mg.actions[otherId(forId)] } : null,
+      myPressed: mg.pressAt[forId] != null, oppPressed: mg.pressAt[otherId(forId)] != null,
+      myResult: mg.results[forId] ?? null,
+      revealed: mg.result != null ? { myResult: mg.results[forId], oppResult: mg.results[otherId(forId)] } : null,
       deadlineAt: mg.deadlineAt || null,
     };
   }
@@ -1412,8 +1488,7 @@ function buildAdminMinigameSummary(mg) {
     각자의정답: byName(mg.secrets, (v) => v.join('')),
     시도횟수: byName(mg.history, (v) => v.length),
   };
-  if (type === 'CARD_DUEL') return { 배치현황: byName(mg.arrangement, (v) => v.join(',')) };
-  if (type === 'PACT') return { 선택현황: byName(mg.actions) };
+  if (type === 'DICE') return { 누른상태: byName(mg.pressAt, (v) => (v != null ? '누르는 중' : '뗌')), 확정된눈: byName(mg.results) };
   return {};
 }
 
@@ -1441,6 +1516,10 @@ function buildAdminState() {
       confirmed: !!match.midSetupSelections[id],
       cells: match.midSetupSelections[id] || [],
     })) : null,
+    poisonPuzzle: match.poisonPuzzle ? {
+      crest: match.poisonPuzzle.crest,
+      winner: match.poisonPuzzle.winnerId ? match.players[match.poisonPuzzle.winnerId].name : null,
+    } : null,
     players: match.order.map((id) => {
       const p = match.players[id];
       const gs = gemSummary(p);
@@ -1455,6 +1534,7 @@ function buildAdminState() {
         room: p.room.map((row) => row.map((cell) => ({
           type: cell.opened ? cell.type : null, opened: cell.opened, locked: cell.locked,
           gemId: cell.opened && cell.type === 'GEM' ? cell.gemId : null,
+          gemPiece: cell.opened && cell.type === 'GEM' ? cell.gemPiece : null,
         }))),
       };
     }),
@@ -1581,6 +1661,7 @@ io.on('connection', (socket) => {
 
   socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));
   socket.on('action:open', (p) => doAction(slot, 'OPEN', p || {}));
+  socket.on('puzzle:move', (p) => handlePuzzleMove(slot, p || {}));
   socket.on('reward:use', (p) => handleRewardUse(slot, p || {}));
   socket.on('reward:choose', (p) => handleRewardChoose(slot, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(slot));

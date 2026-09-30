@@ -47,8 +47,10 @@ function connectBot(slot, opts) {
           if (t) socket.emit('minigame:move', { tier: t });
         }
         if (type === 'GUESS_COUNT' && mg.myGuess == null) socket.emit('minigame:move', { guess: mg.trueCount });
-        if (type === 'CARD_DUEL' && mg.waitingForMe) socket.emit('minigame:move', { arrangement: [1, 2, 3].sort(() => Math.random() - 0.5) });
-        if (type === 'PACT' && mg.waitingForMe) socket.emit('minigame:move', { action: 'SILENT' });
+        if (type === 'DICE' && mg.myResult == null && !mg.myPressed) {
+          socket.emit('minigame:move', { action: 'PRESS' });
+          setTimeout(() => socket.emit('minigame:move', { action: 'RELEASE' }), 200);
+        }
         if (type === 'BANK') socket.emit('minigame:move', { guess: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].sort(() => Math.random() - 0.5).slice(0, mg.digits || 3) });
       }, 40);
     }

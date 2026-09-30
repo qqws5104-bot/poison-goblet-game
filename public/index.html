@@ -28,6 +28,11 @@
     </section>
   </main>
 
+  <!-- 독배 슬라이딩 퍼즐 — #app과 무관하게 화면 전체를 덮는 별도 오버레이. #app은 페이즈가
+       바뀔 때마다 innerHTML이 통째로 새로 그려지지만, 이 퍼즐은 페이즈와 무관하게(실시간
+       35초 타이머로) 떴다 사라져야 하므로 독립된 컨테이너로 둔다. -->
+  <div id="poisonPuzzleOverlay"></div>
+
   <footer>
     <div id="log" class="log"></div>
     <div class="adminRow">
