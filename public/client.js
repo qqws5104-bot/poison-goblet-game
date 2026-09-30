@@ -17,6 +17,8 @@ let guessCountRevealUntil = 0;
 let guessCountTransitioned = false; // 공개→입력 화면 전환을 딱 한 번만 하기 위한 플래그
 let guessCountEntry = ''; // 탁자 위 술잔 개수 세기: 숫자 키패드로 입력 중인 값
 let guessCountScene = []; // 화면에 흩뿌려 놓을 술잔 위치(라운드당 한 번만 계산 — 매번 다시 그릴 때 위치가 흔들리지 않도록)
+let sigilRound = null;
+let sigilLayout = null; // { GOLD:[{x,y}], SILVER:[...], BRONZE:[...] } — 라운드당 한 번만 계산(재렌더 시 안 흔들리도록)
 let bankDigits = []; // 금고 번호 맞추기: 자릿수별 칸에 입력 중인 값([null,'5',null] 형태)
 let bankFocusIndex = 0; // 지금 숫자를 채울 칸(자동으로 다음 빈 칸으로 이동)
 let bankRound = null;
@@ -32,14 +34,46 @@ let roundOpenSummary = []; // 이번 라운드에 내가 새로 연 칸들 [{row
 let roundOpenSummaryRound = null; // roundOpenSummary가 몇 라운드 것인지(라운드가 바뀌면 초기화)
 let cardDuelPicks = []; // 숫자 패 대결: 지금까지 클릭한 순서대로 쌓인 배치([1~3의 순열이 되기 전까지])
 let cardDuelRound = null; // cardDuelPicks가 몇 라운드 것인지(라운드가 바뀌면 초기화)
-let draggedCrestPiece = null; // 가문의 문장 조각을 조립 구역으로 드래그하는 중일 때 { crestId, piecePos } —
-                              // dragover 시점엔 브라우저 보안 정책상 dataTransfer의 실제 값을 읽을 수 없어서,
-                              // 같은 페이지 안에서 지금 드래그 중인 조각 정보를 이 변수로 따로 들고 있는다.
 // 미니게임 모달이 "이미 떠 있던 채로" 다시 그려지는 것인지 추적 — render()는 상대의 움직임이나
 // 내 입력 하나하나에도 화면 전체를 다시 그리므로, 매번 모달을 새로 마운트하면 등장 애니메이션이
 // (본인이 만든 변화가 아니어도) 계속 재생되어 화면이 깜빡이는 것처럼 보인다. 직전 프레임에도
 // 모달이 열려 있었다면 이번엔 애니메이션 없이 조용히 갱신한다.
 let modalOpenPrev = false;
+
+// ---------------------------- 실시간 이벤트 팝업(토스트) ----------------------------
+// "지금 상황이 계속 팝업으로 떴으면 좋겠다"는 피드백 — 독배를 마시거나 해독하는 순간을 화면
+// 한쪽에 토스트로 띄운다. 서버가 'popup' 이벤트로 { text, tone }을 보내주면 그대로 쌓아서
+// 보여주고, 몇 초 뒤 스스로 사라진다(여러 개가 거의 동시에 와도 위에서부터 차례로 쌓임).
+const toastContainer = document.createElement('div');
+toastContainer.id = 'toastContainer';
+document.body.appendChild(toastContainer);
+function showToast(text, tone) {
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + (tone || 'info');
+  t.textContent = text;
+  toastContainer.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('toastShow'));
+  setTimeout(() => {
+    t.classList.remove('toastShow');
+    setTimeout(() => t.remove(), 300);
+  }, 2600);
+}
+socket.on('popup', ({ text, tone }) => showToast(text, tone));
+
+// 철가방(FLASH_ALL) 스페이스바 트리거 — 선택했지만 아직 안 터뜨렸을 때, 스페이스바를 누르면
+// 그 즉시 발동한다("게임" 화면은 애초에 보상 UI를 안 보여주는 화면이라 제외). 페이지 스크롤을
+// 막기 위해 preventDefault, 입력창에 포커스가 가 있을 때는 무시(이 게임엔 텍스트 입력이 없지만
+// 혹시 몰라 방어적으로 체크).
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || APP_ROLE === 'game') return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (!lastState || lastState.phase !== 'ROUND_ACTION') return;
+  const r = lastState.myReward;
+  if (!r || r.type !== 'FLASH_ALL' || r.used) return;
+  e.preventDefault();
+  socket.emit('reward:use', {});
+});
 
 // ---------------------------- 임팩트 연출(화면 셰이크/플래시) ----------------------------
 // "아케이드감이 덜 산다"는 피드백에 따라 추가한 순수 시각 연출 레이어. 사운드 없이, 지금의
@@ -73,8 +107,8 @@ function impactFor(kind) {
   else if (kind === 'treasure') { flashScreen('gold'); }
 }
 
-const CELL_NAME = { P: '독', GEM: '보석', A: '해독', E: '', C: '문장' };
-const CELL_EMOJI = { P: '☠️', GEM: '💎', A: '💊', E: '', C: '🐉' }; // 로그 등 순수 텍스트 자리에서만 사용
+const CELL_NAME = { P: '독', GEM: '보석', A: '해독', E: '' };
+const CELL_EMOJI = { P: '☠️', GEM: '💎', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
 
 // 독/금/은 술잔은 잔 모양 + 안쪽 표식, 해독제는 병 모양으로 그리는 발광 SVG 아이콘.
 // 그리드 칸(및 종료 화면 공개칸)에서 이모지 대신 실제 DOM에 그려 넣는다.
@@ -86,13 +120,6 @@ function cellIconSVG(type) {
       <rect class="neck" x="13.5" y="5" width="5" height="4.5"/>
       <path class="bowl" d="M9,10 C9,9 11,9.2 13,9.2 L19,9.2 C21,9.2 23,9 23,10 L24,20.5 C24,25.5 20.2,28.5 16,28.5 C11.8,28.5 8,25.5 8,20.5 Z"/>
       <path class="leaf" d="M16,13.2 C13.2,14.2 13.2,18.6 16,20 C18.8,18.6 18.8,14.2 16,13.2 Z M16,13.4 L16,19.8"/>
-    </svg>`;
-  }
-  if (type === 'C') {
-    // 가문의 문장 — 술잔이 아니라 방패 모양 문장(휘장)으로 그려 다른 칸과 뚜렷이 구분한다.
-    return `<svg viewBox="0 0 32 32" class="cellIcon cellIcon-C" aria-hidden="true">
-      <path class="bowl" d="M16,2.5 L27,6.5 L27,16.5 C27,23.5 22,28 16,29.8 C10,28 5,23.5 5,16.5 L5,6.5 Z"/>
-      <path class="glyph" d="M16,9.5 L20,15.5 L16,22.5 L12,15.5 Z"/>
     </svg>`;
   }
   const inner = type === 'P'
@@ -108,155 +135,27 @@ function cellIconSVG(type) {
     ${inner}
   </svg>`;
 }
-// 가문의 문장은 3세트(그리핀/사자/드래곤), 세트당 2x2=4조각. 칸을 "연" 순간 그 조각의 실제
-// 이미지(/crest/crest{세트번호}_{조각위치}.png)를 보여준다 — 아직 안 열었거나(정찰로 엿본
-// 것뿐인) 서버가 세트/위치를 내려주지 않은 경우엔 기존 방패 아이콘으로 대체한다.
-const CREST_LABELS = { 1: '그리핀', 2: '사자', 3: '드래곤' };
-// showBadge: 조립 구역/보유 목록에서만 켜는 옵션 — 이 조각이 "정답 순서"상 몇 번째 칸(slot
-// piecePos-1)에 들어가야 하는지 숫자로 보여준다. 이제는 아무 칸에나 놓아도 되는 대신 정확한
-// 순서를 맞춰야 완성되므로, 플레이어가 목표 위치를 의식적으로 노릴 수 있게 돕기 위함이다.
-function crestTileImgHTML(crestId, piecePos, showBadge) {
-  const label = CREST_LABELS[crestId] || `${crestId}번`;
-  const badge = showBadge ? `<span class="crestPosBadge">${piecePos}</span>` : '';
-  return `<span class="crestTileWrap"><img class="crestTile" src="/crest/crest${crestId}_${piecePos}.png" alt="${label} 문장 조각 ${piecePos}/4"/>${badge}</span>`;
-}
-function cellVisualHTML(type, crestId, piecePos) {
-  if (type === 'C' && crestId && piecePos) return crestTileImgHTML(crestId, piecePos);
+function cellVisualHTML(type) {
   return cellIconSVG(type);
 }
-// 조립 구역 하나(2x2=4칸)를 실제 DOM으로 그린다. 각 칸(slot, 0~3)은 그 자체로 드롭 대상이자
-// (조각이 놓여 있으면) 드래그 시작점이다 — "4칸 중 어디에 놓을지"를 플레이어가 직접 고르고,
-// 이미 놓인 조각도 자유롭게 다른 칸/구역으로 옮기거나 보유 목록으로 뺄 수 있게 하기 위함.
-// 새로 놓기든, 이미 놓인 조각을 옮기거나(스왑 포함) 되돌리는 것이든 전부 행동 예산을 쓰므로,
-// canAct(이번 턴에 남은 행동이 있는지)가 없으면 어떤 조각도 아예 드래그를 시작할 수 없다.
-function buildCrestZoneGrid(zone, zoneIndex, canAct) {
-  const grid = el('div', 'crestZoneGrid');
-  for (let slot = 0; slot < 4; slot++) {
-    const piecePos = zone && zone.slots ? zone.slots[slot] : null;
-    const filled = piecePos != null;
-    const slotEl = el('div', 'crestZoneSlot' + (filled ? ' filled' : '') + (filled && !canAct ? ' notDraggable' : ''));
-    slotEl.innerHTML = filled ? crestTileImgHTML(zone.crestId, piecePos, true) : `<span class="crestSlotQ">${slot + 1}</span>`;
-
-    if (filled && canAct) {
-      slotEl.draggable = true;
-      slotEl.classList.add('draggableHint');
-      slotEl.ondragstart = (ev) => {
-        draggedCrestPiece = { crestId: zone.crestId, piecePos, from: { zoneIndex, slot } };
-        ev.dataTransfer.effectAllowed = 'move';
-        ev.dataTransfer.setData('text/plain', `${zone.crestId}-${piecePos}`);
-        slotEl.classList.add('dragging');
-      };
-      slotEl.ondragend = () => { slotEl.classList.remove('dragging'); draggedCrestPiece = null; };
-    }
-
-    // 드래그 중인 조각이 이 칸에 놓일 수 있는지에 따라 preventDefault 여부를 갈라서, 안 되는
-    // 칸 위에서는 브라우저가 알아서 "금지" 커서를 보여주게 한다. 실제 검증은 서버의
-    // handleCrestMove가 다시 하므로 여기서는 UX용 사전 필터일 뿐이다.
-    slotEl.ondragover = (ev) => {
-      if (!draggedCrestPiece) return;
-      if (!canAct) return; // 조립 보드를 만지는 모든 이동이 행동 예산을 쓰므로, 예산이 없으면 전부 불가
-      const from = draggedCrestPiece.from;
-      const sameSpot = from !== 'held' && from.zoneIndex === zoneIndex && from.slot === slot;
-      if (sameSpot) return; // 원래 자리 위에 다시 놓는 건 의미 없음
-      const isSameZoneMove = from !== 'held' && from.zoneIndex === zoneIndex;
-      if (filled && !isSameZoneMove) return; // 이미 다른 조각이 있는 칸엔, 같은 구역 안에서의 스왑만 예외로 허용
-      if (zone.crestId != null && zone.crestId !== draggedCrestPiece.crestId) return; // 다른 세트가 배정된 구역
-      ev.preventDefault();
-      slotEl.classList.add('dragOver');
-    };
-    slotEl.ondragleave = () => slotEl.classList.remove('dragOver');
-    slotEl.ondrop = (ev) => {
-      ev.preventDefault();
-      slotEl.classList.remove('dragOver');
-      if (!draggedCrestPiece) return;
-      const piece = draggedCrestPiece;
-      draggedCrestPiece = null;
-      socket.emit('crest:move', { crestId: piece.crestId, piecePos: piece.piecePos, from: piece.from, to: { zoneIndex, slot } });
-    };
-    grid.appendChild(slotEl);
-  }
-  return grid;
-}
-// 처소 패널 안에 "조립 구역 2개 + 보유(미배치) 조각 + 세트별 경쟁 현황"을 함께 보여주는 위젯.
-// 보유 조각을 조립 구역의 원하는 칸으로 끌어다 놓고(4칸 중 자유 선택), 이미 놓인 조각도 다른
-// 칸/구역으로 옮기거나 다시 보유 목록으로 뺄 수 있다 — 전부 드래그 앤 드롭이며 데스크톱/마우스
-// 전용(이 게임은 터치 기기 지원이 필요 없다고 확인함). 새로 놓기든, 이미 놓인 조각을 옮기거나
-// (스왑 포함) 되돌리는 것이든 전부 술잔 칸 열기와 같은 행동 예산(opensRemaining)을 쓴다 —
-// 무료로 정리할 수 있는 이동은 없으므로, 예산이 없으면(canAct===false) 어떤 조각도 집을 수 없다.
-function crestBoardWidget(state) {
+// 처소 패널 안에 "보석 발견 현황"을 보여주는 위젯. 조립/드래그 없이 순수 읽기 전용 —
+// 조각을 몇 개 찾았는지, 완성됐는지만 배지로 보여준다. 하나도 못 찾은 보석은 존재 자체가
+// 스포일러이므로 서버가 애초에 내려주지 않는다(gemSummary가 foundCount>0인 것만 담아 보냄).
+function gemStatusWidget(state) {
   const me = state.me;
-  const race = state.crestRace || {};
-  const canAct = state.phase === 'ROUND_ACTION' && (state.opensRemaining || 0) > 0;
-  const wrap = el('div', 'crestBoard');
-  wrap.appendChild(el('h3', null, '가문의 문장 (세트당 4조각, 구역은 2개뿐 — 조각마다 적힌 숫자가 그 조각의 정답 칸입니다. 4칸을 정확한 순서로 채워야 완성되어 비워지며, 조각을 놓거나 옮기는 동작 하나하나가 이번 턴의 행동력을 소모합니다)'));
-
-  const raceRow = el('div', 'crestRaceRow');
-  [1, 2, 3].forEach((cid) => {
-    const status = race[cid];
-    const cls = status === 'me' ? 'won' : status === 'opp' ? 'lost' : 'open';
-    const label = status === 'me' ? '내가 먼저 완성' : status === 'opp' ? '상대가 먼저 완성' : '미완성';
-    raceRow.appendChild(el('div', `crestRaceBadge ${cls}`, `${CREST_LABELS[cid]}: ${label}`));
+  const gems = me.gems || {};
+  const gemIds = Object.keys(gems);
+  if (gemIds.length === 0) return null;
+  const wrap = el('div', 'gemStatusWrap');
+  wrap.appendChild(el('h3', null, `보석 발견 현황 (${me.gemsFound || 0} / ${me.gemsTotal || '?'}조각, 완성 ${me.gemsCompleted || 0}개)`));
+  const row = el('div', 'gemStatusRow');
+  gemIds.forEach((gemId) => {
+    const g = gems[gemId];
+    const badge = el('div', 'gemStatusBadge' + (g.completed ? ' complete' : ''),
+      `${g.size}조각 보석: ${g.foundCount}/${g.size}${g.completed ? ' ✓' : ''}`);
+    row.appendChild(badge);
   });
-  wrap.appendChild(raceRow);
-
-  const zonesRow = el('div', 'crestZonesRow');
-  (me.zones || []).forEach((zone, zoneIndex) => {
-    const filledCount = zone.slots ? zone.slots.filter((s) => s != null).length : 0;
-    // 4/4인데도 zone.crestId가 여전히 남아있다는 건 "정답 순서가 아니라서 완성 처리가 안 됐다"는
-    // 뜻이다(정답이면 서버가 즉시 비워버리므로, 이 상태로 보이는 건 항상 미완성 신호).
-    const needsFix = zone.crestId != null && filledCount >= 4;
-    const box = el('div', 'crestZoneBox' + (zone.crestId ? '' : ' empty') + (needsFix ? ' needsFix' : ''));
-    box.appendChild(el('div', 'crestZoneLabel', zone.crestId
-      ? (needsFix
-          ? `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (4/4, 순서 틀림 — 조각을 옮겨 맞추세요)`
-          : `${zoneIndex + 1}번 구역 · ${CREST_LABELS[zone.crestId]} (${filledCount}/4)`)
-      : `${zoneIndex + 1}번 구역 (비어있음) — 조각을 원하는 칸으로 끌어다 놓으세요`));
-    box.appendChild(buildCrestZoneGrid(zone, zoneIndex, canAct));
-    zonesRow.appendChild(box);
-  });
-  wrap.appendChild(zonesRow);
-
-  const held = me.heldPieces || [];
-  const heldWrap = el('div', 'crestHeldWrap');
-  heldWrap.appendChild(el('div', 'crestHeldLabel', held.length > 0
-    ? (canAct
-        ? `보유 중인 조각 (${held.length}개) — 숫자가 적힌 칸(정답 위치)으로 끌어다 놓으세요. (행동력 1 소모)`
-        : `보유 중인 조각 (${held.length}개) — 지금은 남은 행동력이 없어 조립 보드를 만질 수 없습니다.`)
-    : '보유 중인 조각 없음 — 칸을 열어 문장 조각을 찾아보세요.'));
-  // 보유 목록 자체도 드롭 대상이다 — 이미 구역에 놓은 조각을 여기로 끌어오면 뺄 수 있다(행동력 소모).
-  const heldRow = el('div', 'crestHeldRow');
-  if (held.length === 0) heldRow.appendChild(el('span', 'crestHeldEmptyHint', '조립 구역의 조각을 여기로 끌어오면 뺄 수 있습니다(행동력 1 소모)'));
-  held.forEach((piece) => {
-    const item = el('div', 'crestHeldItem' + (canAct ? ' draggableHint' : ' notDraggable'));
-    item.innerHTML = crestTileImgHTML(piece.crestId, piece.piecePos, true);
-    item.draggable = canAct;
-    item.ondragstart = (ev) => {
-      draggedCrestPiece = { crestId: piece.crestId, piecePos: piece.piecePos, from: 'held' };
-      ev.dataTransfer.effectAllowed = 'move';
-      // 일부 브라우저는 dataTransfer에 데이터가 하나도 없으면 드래그 자체를 시작하지 않으므로,
-      // 형식적으로 채워둔다(실제로는 안 읽고 draggedCrestPiece 변수로만 판단한다).
-      ev.dataTransfer.setData('text/plain', `${piece.crestId}-${piece.piecePos}`);
-      item.classList.add('dragging');
-    };
-    item.ondragend = () => { item.classList.remove('dragging'); draggedCrestPiece = null; };
-    heldRow.appendChild(item);
-  });
-  heldRow.ondragover = (ev) => {
-    if (!draggedCrestPiece || draggedCrestPiece.from === 'held') return; // held→held는 의미 없음
-    ev.preventDefault();
-    heldRow.classList.add('dragOver');
-  };
-  heldRow.ondragleave = () => heldRow.classList.remove('dragOver');
-  heldRow.ondrop = (ev) => {
-    ev.preventDefault();
-    heldRow.classList.remove('dragOver');
-    if (!draggedCrestPiece || draggedCrestPiece.from === 'held') return;
-    const piece = draggedCrestPiece;
-    draggedCrestPiece = null;
-    socket.emit('crest:move', { crestId: piece.crestId, piecePos: piece.piecePos, from: piece.from, to: 'held' });
-  };
-  heldWrap.appendChild(heldRow);
-  wrap.appendChild(heldWrap);
+  wrap.appendChild(row);
   return wrap;
 }
 // 셋업 화면에서 "이 칸에 독을 심겠다"고 표시만 하는 노란색 마커 — 실제 독 술잔(P) 아이콘과는
@@ -295,6 +194,34 @@ function computeGuessCountScene(count) {
     rot: Math.random() * 50 - 25,
     scale: 0.85 + Math.random() * 0.4,
   }));
+}
+// 금은동 쟁탈전(SIGIL)용 술잔 아이콘 — sceneCupSVG와 같은 모양을 색(금/은/동)만 바꿔 재사용한다.
+function medalCupIconSVG(tierClass, extraClass) {
+  return `<svg viewBox="0 0 32 32" class="medalCupIcon ${tierClass}${extraClass ? ' ' + extraClass : ''}" aria-hidden="true">
+    <ellipse class="rim" cx="16" cy="8" rx="9.5" ry="1.9"/>
+    <path class="bowl" d="M6.5,8.3 L25.5,8.3 L17.8,19.5 L14.2,19.5 Z"/>
+    <path class="stem" d="M16,19.5 L16,23.6"/>
+    <ellipse class="base" cx="16" cy="24.2" rx="5.2" ry="1.3"/>
+  </svg>`;
+}
+// 금/은/동 술잔을 한 화면에 겹치지 않게 무작위로 흩뿌려 놓을 위치 — 라운드당 한 번만 계산한다.
+function computeSigilLayout(itemCounts) {
+  const cols = 5, rows = 4; // 20칸 — 최대 9개(금·은·동 각 3개)까지 겹치지 않게 배치 가능
+  const cells = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push({ r, c });
+  for (let i = cells.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [cells[i], cells[j]] = [cells[j], cells[i]]; }
+  const toPoints = (arr) => arr.map(({ r, c }) => ({
+    x: (c + 0.5) / cols * 100 + (Math.random() * 8 - 4),
+    y: (r + 0.5) / rows * 100 + (Math.random() * 10 - 5),
+  }));
+  let idx = 0;
+  const layout = {};
+  ['GOLD', 'SILVER', 'BRONZE'].forEach((tier) => {
+    const n = itemCounts[tier] || 0;
+    layout[tier] = toPoints(cells.slice(idx, idx + n));
+    idx += n;
+  });
+  return layout;
 }
 // 독배 채우기(NIM) 미니게임: 정확한 숫자 대신, 잔이 얼마나 차올랐는지를 술잔 안에 차오르는
 // 액체로 보여준다. ratio(0~1)만 받아서 그린다 — 정확한 누적/한계 수치는 서버가 아예 내려주지 않음.
@@ -424,7 +351,7 @@ function detectImpacts(prev, next) {
     else if (nextResult === 'draw') impactFor('draw');
   }
   if (prev.me && next.me && Array.isArray(prev.me.room) && Array.isArray(next.me.room)) {
-    let revealed = null; // 우선순위: 독 > 해독제 > 문장 > 보석
+    let revealed = null; // 우선순위: 독 > 해독제 > 보석
     for (let r = 0; r < next.me.room.length; r++) {
       for (let c = 0; c < next.me.room[r].length; c++) {
         const before = prev.me.room[r] && prev.me.room[r][c];
@@ -432,18 +359,17 @@ function detectImpacts(prev, next) {
         if (before && !before.opened && after.opened) {
           if (after.type === 'P') revealed = 'P';
           else if (after.type === 'A' && revealed !== 'P') revealed = 'A';
-          else if (after.type === 'C' && !revealed) revealed = 'C';
           else if (after.type === 'GEM' && !revealed) revealed = 'GEM';
           // "칸을 열자마자 바로 다음으로 넘어가 뭘 열었는지 놓친다"는 피드백 — 이번 라운드에
           // 새로 연 칸을 전부 기록해뒀다가, ROUND_DONE(5초 대기) 화면에서 한눈에 보여준다.
           if (next.round !== roundOpenSummaryRound) { roundOpenSummary = []; roundOpenSummaryRound = next.round; }
-          roundOpenSummary.push({ row: r, col: c, type: after.type, crestId: after.crestId || null, piecePos: after.piecePos || null });
+          roundOpenSummary.push({ row: r, col: c, type: after.type, gemId: after.gemId || null });
         }
       }
     }
     if (revealed === 'P') impactFor('poison');
     else if (revealed === 'A') impactFor('antidote');
-    else if (revealed === 'C' || revealed === 'GEM') impactFor('treasure');
+    else if (revealed === 'GEM') impactFor('treasure');
   }
 }
 
@@ -458,6 +384,8 @@ socket.on('state', (state) => {
     guessCountTransitioned = false;
     guessCountEntry = '';
     guessCountScene = [];
+    sigilRound = null;
+    sigilLayout = null;
     bankDigits = [];
     bankFocusIndex = 0;
     bankRound = null;
@@ -636,6 +564,34 @@ function tickBombTimer() {
   }
   requestAnimationFrame(tickBombTimer);
 }
+// "장고 금지" 공통 타이머 — REFLEX/BOMB을 제외한 나머지 미니게임 타입 전부가 mg.deadlineAt을
+// 내려주므로, 종류에 상관없이 같은 배지 하나로 남은 시간을 보여준다. 시간이 다 되면 서버가
+// 알아서 무작위로 대신 결정하므로, 여기서는 그냥 숫자만 보여주면 된다(0 밑으로는 내려가지 않게).
+let decisionTicking = false;
+function tickDecisionTimer() {
+  const mg = lastState && lastState.minigame && lastState.minigame.public;
+  if (!lastState || lastState.phase !== 'ROUND_MINIGAME' || !mg || !mg.deadlineAt) { decisionTicking = false; return; }
+  const timerEl = document.getElementById('decisionTimer');
+  const remaining = mg.deadlineAt - Date.now();
+  if (timerEl) {
+    timerEl.textContent = `⏱ ${Math.max(0, Math.ceil(remaining / 1000))}초`;
+    timerEl.classList.toggle('timerLow', remaining <= 5000 && remaining > 0);
+  }
+  requestAnimationFrame(tickDecisionTimer);
+}
+// 본행동(칸 열기) "장고 금지" 타이머 — ROUND_ACTION 동안 계속 보여준다. 시간이 다 되면 서버가
+// 아직 다 안 연 사람의 나머지 칸을 대신 무작위로 열어준다(armActionTimer).
+let actionTimerTicking = false;
+function tickActionTimer() {
+  if (!lastState || lastState.phase !== 'ROUND_ACTION' || !lastState.actionDeadlineAt) { actionTimerTicking = false; return; }
+  const timerEl = document.getElementById('actionTimer');
+  const remaining = lastState.actionDeadlineAt - Date.now();
+  if (timerEl) {
+    timerEl.textContent = `⏱ ${Math.max(0, Math.ceil(remaining / 1000))}초`;
+    timerEl.classList.toggle('timerLow', remaining <= 8000 && remaining > 0);
+  }
+  requestAnimationFrame(tickActionTimer);
+}
 // 방금 끝난 미니게임의 승패(+ 와인잔 개수처럼 실제 정답이 궁금한 경우 정답 공개)를 ROUND_ACTION
 // 동안 잠깐 보여주는 패널. match.minigame은 다음 라운드 카운트다운이 시작되기 전까지 서버에
 // 그대로 남아있으므로, 그 값을 그대로 읽어서 보여주면 된다.
@@ -704,10 +660,10 @@ function renderRoundDone(state) {
   if (summary.length) {
     p.appendChild(el('p', 'hint', '이번 라운드에 내가 연 칸:'));
     const row = el('div', 'roundOpenSummaryRow');
-    summary.forEach(({ row: r, col: c, type, crestId, piecePos }) => {
+    summary.forEach(({ row: r, col: c, type }) => {
       const item = el('div', 'roundOpenSummaryItem');
       const icon = el('div', 'roundOpenSummaryIcon' + (type === 'E' ? '' : ' cellIcon-' + type));
-      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type, crestId, piecePos);
+      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type);
       item.appendChild(icon);
       item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${type === 'E' ? '빈 칸' : CELL_NAME[type]}`));
       row.appendChild(item);
@@ -847,19 +803,21 @@ function renderSetup(state) {
 function renderMidSetup(state) {
   const p = el('section', 'panel');
   p.appendChild(el('h2', null, '중반 재설치 — 처소가 6×6으로 확장됩니다'));
-  p.appendChild(el('p', 'hint', `상대(${state.opp ? state.opp.name : '상대'})의 처소에서 아직 열리지 않은 칸 중 ${state.config.POISON_MID}곳을 골라 독을 추가로 몰래 심으세요. 회색 칸은 상대가 이미 연 칸이라 대상이 될 수 없습니다. 후반에 새로 열리는 문장 조각도 이 배치가 끝난 뒤에 무작위로 흩뿌려집니다.`));
+  p.appendChild(el('p', 'hint', `상대(${state.opp ? state.opp.name : '상대'})의 처소에서 아직 열리지 않았고 아무것도 없는 빈 칸 중 ${state.config.POISON_MID}곳을 골라 독을 추가로 몰래 심으세요. 회색 칸은 이미 열렸거나, 이미 보석·해독제·독이 자리잡고 있어 대상이 될 수 없습니다.`));
 
-  const openedMask = state.oppOpenedMask || [];
+  // oppBlockedMask는 "이미 열렸거나 이미 뭔가(보석/해독제/독) 있는 칸"까지 함께 걸러준다.
+  // 구버전 서버와의 호환을 위해 없으면 oppOpenedMask로 대체한다.
+  const blockedMask = state.oppBlockedMask || state.oppOpenedMask || [];
   const already = state.midSetupDone && state.midSetupDone.me;
   const grid = el('div', 'grid6');
   for (let r = 0; r < state.config.ROWS_TOTAL; r++) {
     for (let c = 0; c < state.config.GRID; c++) {
       const cell = el('div', 'cell');
-      const isOpened = !!(openedMask[r] && openedMask[r][c]);
+      const isBlocked = !!(blockedMask[r] && blockedMask[r][c]);
       const isSel = midSetupSelection.some((s) => s.row === r && s.col === c);
-      if (isOpened) cell.classList.add('blockedSpot');
+      if (isBlocked) cell.classList.add('blockedSpot');
       if (isSel) cell.classList.add('selected');
-      if (!already && !isOpened) {
+      if (!already && !isBlocked) {
         cell.classList.add('pickable');
         cell.onclick = () => {
           const idx = midSetupSelection.findIndex((s) => s.row === r && s.col === c);
@@ -868,7 +826,7 @@ function renderMidSetup(state) {
           render(lastState);
         };
       }
-      cell.innerHTML = isSel ? selectionMarkSVG() : (isOpened ? '<span class="emptyMark">✕</span>' : '');
+      cell.innerHTML = isSel ? selectionMarkSVG() : (isBlocked ? '<span class="emptyMark">✕</span>' : '');
       grid.appendChild(cell);
     }
   }
@@ -1067,13 +1025,12 @@ function statGrid(p, config) {
   g.appendChild(statBox('poison', p.poison, '독 (종료 시 감점 — 2차 독이 더 아픔)', p.poison >= 2));
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
-  if (p.crestOpened != null) {
-    // 문장 세트 구조(총 3세트×4조각=12개)는 이제 공개 정보이므로 분모를 항상 보여준다.
-    const total = (config && config.CREST_TOTAL) || 12;
-    g.appendChild(statBox('crest', `${p.crestOpened} / ${total}`, '가문의 문장 조각'));
+  if (p.gemsFound != null) {
+    const total = (config && config.GEM_PIECES_TOTAL) || p.gemsTotal || '?';
+    g.appendChild(statBox('gem', `${p.gemsFound} / ${total}`, '보석 조각'));
   }
-  if (p.crestSetsCompleted != null) {
-    g.appendChild(statBox('crestSet', p.crestSetsCompleted.length, '완성한 문장 세트'));
+  if (p.gemsCompleted != null) {
+    g.appendChild(statBox('gemSet', p.gemsCompleted, '완성한 보석'));
   }
   return g;
 }
@@ -1114,7 +1071,7 @@ function buildRoomGrid(room, opts) {
       } else if (data.opened) {
         cell.classList.add('opened', data.type);
         // 빈 칸(E)은 아이콘이 없어 안 연 칸과 헷갈릴 수 있으므로, 큰 X로 "이미 열어봤음"을 표시한다.
-        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type, data.crestId, data.piecePos);
+        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type);
       } else if (opts.peekCell && opts.peekCell.row === r && opts.peekCell.col === c) {
         // 한 칸 정찰 보상: 실제로 연 것은 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
@@ -1144,24 +1101,33 @@ function renderMyRoomPanel(state) {
     p.appendChild(el('p', 'hint', '👉 칸 열기와 보상(정찰) 확인은 모두 "고르기" 화면에서 진행하세요.'));
     return p;
   }
+  if (state.actionDeadlineAt) {
+    const t = el('span', 'actionTimerBadge');
+    t.id = 'actionTimer';
+    p.appendChild(t);
+    if (!actionTimerTicking) { actionTimerTicking = true; requestAnimationFrame(tickActionTimer); }
+  }
   // 섬광 정찰(FLASH_ALL)을 골랐다면 실제로 번쩍이는 순간을 먼저 겪어야 칸을 열 수 있다 —
   // 서버도 doAction()에서 똑같이 막지만, 클릭해도 안 먹히는 것처럼 보이지 않도록 미리 잠근다.
   const waitingForFlash = !!(state.myReward && state.myReward.type === 'FLASH_ALL' && !state.myReward.used);
   const pickMode = state.isMyTurn && state.opensRemaining > 0 && !waitingForFlash;
 
-  // 처소 그리드(왼쪽)와 가문의 문장 조립(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
+  // 처소 그리드(왼쪽)와 보석 발견 현황(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
   // 스크롤이 생겨 불편하다는 피드백을 반영. 화면이 좁으면 CSS 미디어 쿼리로 다시 세로로 쌓인다.
   const split = el('div', 'roomCrestSplit');
 
   const left = el('div', 'roomCrestLeft');
   left.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
   if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
-  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
+  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 스페이스바를 누르면 그 자리에서 바로 철가방이 열립니다 — 번쩍인 뒤에 칸을 열 수 있습니다.'));
   split.appendChild(left);
 
-  const right = el('div', 'roomCrestRight');
-  right.appendChild(crestBoardWidget(state));
-  split.appendChild(right);
+  const gemWidget = gemStatusWidget(state);
+  if (gemWidget) {
+    const right = el('div', 'roomCrestRight');
+    right.appendChild(gemWidget);
+    split.appendChild(right);
+  }
 
   p.appendChild(split);
   return p;
@@ -1187,21 +1153,30 @@ function renderPickView(state) {
 
   const mine = el('div', 'panel');
   mine.appendChild(el('h2', null, `내 처소 (${state.me.name})`));
+  if (state.actionDeadlineAt) {
+    const t = el('span', 'actionTimerBadge');
+    t.id = 'actionTimer';
+    mine.appendChild(t);
+    if (!actionTimerTicking) { actionTimerTicking = true; requestAnimationFrame(tickActionTimer); }
+  }
 
-  // 처소 그리드(왼쪽)와 가문의 문장 조립(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
+  // 처소 그리드(왼쪽)와 보석 발견 현황(오른쪽)을 좌우로 나란히 배치한다 — 세로로 쌓으면
   // 스크롤이 생겨 불편하다는 피드백을 반영. 화면이 좁으면 CSS 미디어 쿼리로 다시 세로로 쌓인다.
   const split = el('div', 'roomCrestSplit');
 
   const left = el('div', 'roomCrestLeft');
   left.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
-  if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하거나, 오른쪽에서 보유한 문장 조각을 조립 구역에 놓으세요. (이번 턴에 ${state.opensRemaining}개 더 행동할 수 있습니다)`));
-  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 철가방 정찰이 터질 때까지 잠시 기다리세요.'));
+  if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
+  else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 스페이스바를 누르면 그 자리에서 바로 철가방이 열립니다.'));
   else if (!state.isMyTurn) left.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
   split.appendChild(left);
 
-  const right = el('div', 'roomCrestRight');
-  right.appendChild(crestBoardWidget(state));
-  split.appendChild(right);
+  const gemWidget = gemStatusWidget(state);
+  if (gemWidget) {
+    const right = el('div', 'roomCrestRight');
+    right.appendChild(gemWidget);
+    split.appendChild(right);
+  }
 
   mine.appendChild(split);
   wrap.appendChild(mine);
@@ -1302,16 +1277,48 @@ function renderMinigamePanel(state) {
     box.appendChild(grid);
     box.appendChild(turnBadge(mg.myTurn));
   } else if (type === 'SIGIL') {
-    box.appendChild(el('div', 'desc', '검은 독배를 베고, 독배는 방패에 스며들고, 방패는 검을 막습니다. 상대와 동시에 하나를 고르세요.'));
-    const row = el('div', 'btnRow');
-    [['SWORD', '🗡️ 검'], ['POISON', '☠️ 독배'], ['SHIELD', '🛡️ 방패']].forEach(([key, label]) => {
-      const b = el('button', 'action' + (mg.myPick === key ? ' primary' : ''), label);
-      b.disabled = !mg.waitingForMe;
-      b.onclick = () => socket.emit('minigame:move', { pick: key });
-      row.appendChild(b);
+    if (sigilRound !== state.round) {
+      sigilRound = state.round;
+      sigilLayout = computeSigilLayout(mg.itemCounts);
+    }
+    const TIERS = [['GOLD', 'gold'], ['SILVER', 'silver'], ['BRONZE', 'bronze']];
+    let neededTier = null;
+    for (const [key] of TIERS) {
+      if ((mg.myProgress[key] || 0) < (mg.itemCounts[key] || 0)) { neededTier = key; break; }
+    }
+
+    const guide = el('div', 'medalOrderGuide');
+    TIERS.forEach(([key, cls], i) => {
+      const doneAll = (mg.myProgress[key] || 0) >= (mg.itemCounts[key] || 0);
+      const extra = doneAll ? 'done' : (key === neededTier ? 'active' : '');
+      guide.appendChild(el('span', 'medalGuideItem', medalCupIconSVG(cls, extra)));
+      if (i < TIERS.length - 1) guide.appendChild(el('span', 'medalArrow', '→'));
     });
-    box.appendChild(row);
-    if (!mg.waitingForMe) box.appendChild(el('div', 'hint', mg.oppPicked ? '결과 공개 중...' : '상대의 선택을 기다리는 중...'));
+    box.appendChild(guide);
+
+    const area = el('div', 'medalScatterArea');
+    TIERS.forEach(([key, cls]) => {
+      const done = mg.myProgress[key] || 0;
+      const positions = (sigilLayout && sigilLayout[key] || []).slice(done);
+      const isActive = key === neededTier;
+      positions.forEach((pos) => {
+        const b = el('button', 'medalCupBtn', medalCupIconSVG(cls, isActive ? 'active' : ''));
+        b.style.left = pos.x + '%';
+        b.style.top = pos.y + '%';
+        b.disabled = !isActive;
+        b.onclick = () => socket.emit('minigame:move', { tier: key });
+        area.appendChild(b);
+      });
+    });
+    box.appendChild(area);
+
+    const infoRow = el('div', 'sigilInfoRow');
+    const totalItems = TIERS.reduce((s, [k]) => s + (mg.itemCounts[k] || 0), 0);
+    const myDone = TIERS.reduce((s, [k]) => s + Math.min(mg.myProgress[k] || 0, mg.itemCounts[k] || 0), 0);
+    const oppDone = TIERS.reduce((s, [k]) => s + Math.min(mg.oppProgress[k] || 0, mg.itemCounts[k] || 0), 0);
+    infoRow.appendChild(el('span', 'sigilInfoBadge', `나 ${myDone}/${totalItems}`));
+    infoRow.appendChild(el('span', 'sigilInfoBadge', `상대 ${oppDone}/${totalItems}`));
+    box.appendChild(infoRow);
   } else if (type === 'GUESS_COUNT') {
     if (guessCountRound !== state.round) {
       guessCountRound = state.round;
@@ -1440,6 +1447,14 @@ function renderMinigamePanel(state) {
     box.appendChild(row);
     if (!mg.waitingForMe) box.appendChild(el('div', 'hint', mg.oppActed ? '결과 공개 중...' : '상대의 선택을 기다리는 중...'));
   }
+  // "장고 금지" 타이머 — REFLEX/BOMB은 이미 각자의 실시간 연출(신호/폭탄 퓨즈)이 있으므로 제외하고,
+  // 나머지 타입은 전부 mg.deadlineAt을 공통으로 받으므로 한 곳에서 배지 하나로 통일해서 보여준다.
+  if (mg && mg.deadlineAt && type !== 'REFLEX' && type !== 'BOMB') {
+    const t = el('span', 'decisionTimer');
+    t.id = 'decisionTimer';
+    box.appendChild(t);
+    if (!decisionTicking) { decisionTicking = true; requestAnimationFrame(tickDecisionTimer); }
+  }
   p.appendChild(box);
   return p;
 }
@@ -1454,6 +1469,12 @@ function turnBadge(myTurn, label) {
 function renderActionPanel(state) {
   const p = el('div', 'panel');
   p.appendChild(el('h2', null, '본행동'));
+  if (state.actionDeadlineAt) {
+    const t = el('span', 'actionTimerBadge');
+    t.id = 'actionTimer';
+    p.appendChild(t);
+    if (!actionTimerTicking) { actionTimerTicking = true; requestAnimationFrame(tickActionTimer); }
+  }
   // 처소 열기는 두 사람이 동시에 각자 진행한다 — 서로 기다릴 필요 없이 바로 열면 된다.
   if (!state.isMyTurn) {
     p.appendChild(el('p', 'badge', '✅ 이번 라운드 몫을 다 열었습니다.'));
@@ -1472,11 +1493,13 @@ function renderRewardPanel(state) {
   const r = state.myReward;
 
   if (r.type === 'FLASH_ALL') {
-    // 정확히 언제 터질지는 이제 화면에 보여주지 않는다 — "몇 초 후 터집니다" 카운트다운이 없어야
-    // 기습적으로 느껴진다는 피드백. 서버는 여전히 fireAt을 알고 있고, 그 순간이 오기 전까지는
-    // (renderMyRoomPanel에서) 칸 열기 자체를 잠가 정보가 헛되지 않게 한다.
-    box.appendChild(el('div', 'desc', '🍱 철가방 정찰 — 곧(언제일지 모름) 내 처소 전체의 뚜껑이 확 열렸다가 저절로 잠깐 드러납니다. 그 전까지는 칸을 열 수 없습니다.'));
-    box.appendChild(el('div', 'hint', '⏳ 기다리는 중...'));
+    // 예전엔 0~10초 사이 무작위 순간에 자동으로 터졌지만, "내가 원할 때 스페이스바로 직접
+    // 터뜨리고 싶다"는 피드백으로 수동 트리거로 바꿨다 — 원하는 타이밍에 스페이스바(또는 버튼)를
+    // 누르면 그 즉시 내 처소 그 자리에 그대로 철가방이 열리는 연출이 나온다.
+    box.appendChild(el('div', 'desc', '🍱 철가방 정찰 — 원할 때 스페이스바를 누르면 그 즉시 내 처소 전체의 뚜껑이 확 열렸다가 저절로 잠깐 드러납니다.'));
+    const b = el('button', 'action primary', '🍱 지금 터뜨리기 (Space)');
+    b.onclick = () => socket.emit('reward:use', {});
+    box.appendChild(b);
   } else if (r.type === 'PEEK_CELL') {
     box.appendChild(el('div', 'desc', '내 처소에서 확인할 칸 1개를 고르세요 (아래는 내 처소의 좌표판입니다).'));
     const grid = el('div', 'grid6 pickerGrid');
@@ -1521,11 +1544,6 @@ function renderEnd(state) {
   banner.appendChild(el('p', null, state.endReason || ''));
   p.appendChild(banner);
 
-  if (state.crestRace) {
-    p.appendChild(el('h3', null, '가문의 문장 — 세트별 선점 결과'));
-    p.appendChild(crestRaceSummaryHTML(state));
-  }
-
   const cols = el('div', 'cols');
   const mine = el('div', 'col');
   mine.appendChild(el('h3', null, `내 처소 최종 (${state.me.name})`));
@@ -1568,23 +1586,11 @@ function buildRevealGrid(room) {
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
-      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.crestId, data.piecePos));
+      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type));
       grid.appendChild(cell);
     }
   }
   return grid;
-}
-
-function crestRaceSummaryHTML(state) {
-  const race = state.crestRace || {};
-  const box = el('div', 'crestRaceRow');
-  [1, 2, 3].forEach((cid) => {
-    const status = race[cid];
-    const cls = status === 'me' ? 'won' : status === 'opp' ? 'lost' : 'open';
-    const label = status === 'me' ? '내가 먼저 완성 (+3)' : status === 'opp' ? '상대가 먼저 완성' : '아무도 먼저 완성 못함';
-    box.appendChild(el('div', `crestRaceBadge ${cls}`, `${CREST_LABELS[cid] || cid}: ${label}`));
-  });
-  return box;
 }
 
 setInterval(() => {

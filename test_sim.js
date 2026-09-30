@@ -110,10 +110,6 @@ function onState(label, socket, s) {
   if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
     setTimeout(() => doRandomAction(label, socket, s), 30);
   }
-  // 재배치/회수도 이제 칸 열기와 같은 행동 예산을 쓰므로, 남은 행동이 있을 때만 시도한다.
-  if (s.phase === 'ROUND_ACTION' && s.isMyTurn) {
-    setTimeout(() => maybeRearrangeCrest(label, socket, s), 35);
-  }
 
   if (s.phase === 'ROUND_ACTION' && s.myReward && s.myReward.type && !s.myReward.used && !rewardUsed[label]) {
     rewardUsed[label] = true; // 라운드당 한 번만 시도(중복 emit 방지용 플래그, state 갱신시 아래에서 리셋)
@@ -128,8 +124,7 @@ function onState(label, socket, s) {
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
     console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/10, max possible per match = min(10,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
-    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, crestOpened: s.me.crestOpened, crestSetsCompleted: s.me.crestSetsCompleted, zones: s.me.zones });
-    console.log('crestRace(' + label + '):', JSON.stringify(s.crestRace));
+    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, gemsFound: s.me.gemsFound, gemsCompleted: s.me.gemsCompleted, gemsTotal: s.me.gemsTotal });
     setTimeout(() => process.exit(0), 200);
   }
 }
@@ -185,9 +180,10 @@ function playMinigame(label, socket, s) {
         socket.emit('minigame:move', { action: 'PICK', index });
       }
     }
-    if (type === 'SIGIL' && mg.waitingForMe) {
-      const opts = ['SWORD', 'POISON', 'SHIELD'];
-      socket.emit('minigame:move', { pick: opts[Math.floor(Math.random() * opts.length)] });
+    if (type === 'SIGIL' && mg.itemCounts) {
+      let t = null;
+      for (const k of ['GOLD', 'SILVER', 'BRONZE']) { if ((mg.myProgress[k] || 0) < (mg.itemCounts[k] || 0)) { t = k; break; } }
+      if (t) socket.emit('minigame:move', { tier: t });
     }
     if (type === 'GUESS_COUNT' && mg.myGuess == null) {
       const offset = Math.floor(Math.random() * 3) - 1;
@@ -237,87 +233,11 @@ function randomUniqueDigits(n, avoidSet) {
   return picked;
 }
 
-function findPlaceTarget(s) {
-  // 보유 중인 조각 하나를, 같은 세트가 이미 배정된 구역(우선) 또는 빈 구역의 빈 칸(slot) 중
-  // 하나로 놓을 수 있는 조합을 찾는다. 이제는 "정확한 순서"로 놓아야만 완성/보너스가 되므로,
-  // 자동화 테스트가 완성 경로(및 needsFix 상태)를 실제로 거치도록 그 조각의 정답 칸
-  // (piecePos-1)이 비어있으면 그걸 우선으로 쓰고, 이미 차 있으면(다른 조각이 잘못 그 자리에
-  // 있으면) 첫 번째로 비어있는 다른 칸에 임시로 놓는다.
-  const held = s.me.heldPieces || [];
-  for (const piece of held) {
-    let zoneIndex = s.me.zones.findIndex((z) => z.crestId === piece.crestId);
-    if (zoneIndex === -1) zoneIndex = s.me.zones.findIndex((z) => z.crestId === null);
-    if (zoneIndex === -1) continue;
-    const slots = s.me.zones[zoneIndex].slots;
-    const correctSlot = piece.piecePos - 1;
-    const slot = slots[correctSlot] == null ? correctSlot : slots.findIndex((v) => v == null);
-    if (slot === -1) continue;
-    return { piece, zoneIndex, slot };
-  }
-  return null;
-}
-
 function doRandomAction(label, socket, s) {
-  // 본행동은 "칸 열기" 또는 "보유 중인 문장 조각을 조립 구역에 놓기" 둘 중 하나 — 같은
-  // 행동 예산(opensRemaining)을 공유하므로, 놓을 수 있는 조각이 있으면 절반의 확률로 조립도
-  // 시도하게 해서(항상 조립만 하지도, 항상 칸만 열지도 않게) 두 행동 경로를 골고루 검증한다.
-  const placeTarget = findPlaceTarget(s);
-  if (placeTarget && Math.random() < 0.5) {
-    socket.emit('crest:move', {
-      crestId: placeTarget.piece.crestId, piecePos: placeTarget.piece.piecePos,
-      from: 'held', to: { zoneIndex: placeTarget.zoneIndex, slot: placeTarget.slot },
-    });
-    return;
-  }
+  // 본행동은 이제 "칸 열기"만 남았다(가문의 문장 조립은 제거되고 보석찾기로 교체되었으며,
+  // 보석은 칸을 여는 것만으로 즉시 발견/완성 처리되므로 별도의 배치 행동이 필요 없다).
   const target = findUnopened(s.me.room);
   if (target) socket.emit('action:open', target);
-  else if (placeTarget) {
-    socket.emit('crest:move', {
-      crestId: placeTarget.piece.crestId, piecePos: placeTarget.piece.piecePos,
-      from: 'held', to: { zoneIndex: placeTarget.zoneIndex, slot: placeTarget.slot },
-    });
-  }
-}
-
-// 이미 구역에 놓인 조각을 무료로(행동 예산 소모 없이) 다른 칸/구역으로 옮기거나 다시 보유
-// 목록으로 빼는 "재배치" 기능도 회귀 테스트가 실제로 건드려보게 한다 — 가끔 무작위로 한 번씩
-// 시도해서, 서버가 이 경로에서도 예외 없이 동작하는지 확인한다.
-function maybeRearrangeCrest(label, socket, s) {
-  if (Math.random() >= 0.15) return; // 너무 자주 하면 진행이 느려지므로 가끔만
-  const zones = s.me.zones || [];
-  const placed = [];
-  zones.forEach((z, zoneIndex) => (z.slots || []).forEach((piecePos, slot) => { if (piecePos != null) placed.push({ crestId: z.crestId, piecePos, zoneIndex, slot }); }));
-  if (!placed.length) return;
-
-  // 먼저 "정답 순서에서 벗어난" 조각이 있는지 찾아, 있으면 우선적으로 정답 칸으로 옮겨/바꿔본다
-  // (같은 구역 안이면 스왑 경로도 자연스럽게 타게 된다) — 그래야 자동화 테스트가 실제로
-  // "4/4인데 순서가 틀려 완성 안 됨" → "옮겨서 완성됨" 흐름을 거친다.
-  const misplaced = placed.find((p) => p.slot !== p.piecePos - 1);
-  if (misplaced && Math.random() < 0.6) {
-    const targetSlot = misplaced.piecePos - 1;
-    socket.emit('crest:move', {
-      crestId: misplaced.crestId, piecePos: misplaced.piecePos,
-      from: { zoneIndex: misplaced.zoneIndex, slot: misplaced.slot },
-      to: { zoneIndex: misplaced.zoneIndex, slot: targetSlot },
-    });
-    return;
-  }
-
-  const p = placed[Math.floor(Math.random() * placed.length)];
-  const sendToHeld = Math.random() < 0.3;
-  if (sendToHeld) {
-    socket.emit('crest:move', { crestId: p.crestId, piecePos: p.piecePos, from: { zoneIndex: p.zoneIndex, slot: p.slot }, to: 'held' });
-    return;
-  }
-  // 다른 빈 칸(같은 구역이든 다른 구역이든, 크레스트가 맞거나 비어있는 곳)으로 옮겨본다.
-  for (const [zoneIndex, zone] of zones.entries()) {
-    if (zone.crestId != null && zone.crestId !== p.crestId) continue;
-    const slot = zone.slots.findIndex((v, i) => v == null && !(zoneIndex === p.zoneIndex && i === p.slot));
-    if (slot !== -1) {
-      socket.emit('crest:move', { crestId: p.crestId, piecePos: p.piecePos, from: { zoneIndex: p.zoneIndex, slot: p.slot }, to: { zoneIndex, slot } });
-      return;
-    }
-  }
 }
 
 function findUnopened(room) {

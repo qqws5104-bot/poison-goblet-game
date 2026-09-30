@@ -110,12 +110,9 @@ function renderPlayerCard(p) {
   const openedCount = p.room.flat().filter((c) => c.opened).length;
   card.appendChild(el('h2', null,
     `${p.name} <span class="adminSub">${p.connected ? '' : '(연결 끊김) '}독${p.poison}(1차${p.poisonInitial}·2차${p.poisonMid}) · 해독${p.antidote} · 점수${p.score} · 연 칸 ${openedCount}/36</span>`));
-  if (p.zones) {
-    const zoneDesc = p.zones.map((z, i) => `${i + 1}번:${z.crestId ? `${z.crestId}세트(${z.slots.filter((s) => s != null).length}/4)` : '비어있음'}`).join(' · ');
-    const heldDesc = (p.heldPieces || []).map((h) => `${h.crestId}-${h.piecePos}`).join(', ') || '없음';
-    const doneDesc = (p.crestSetsCompleted || []).join(',') || '없음';
+  if (p.gemsFound != null) {
     card.appendChild(el('p', 'adminSub',
-      `🧩 조립구역 [${zoneDesc}] · 보유조각 [${heldDesc}] · 완성세트 [${doneDesc}]`));
+      `💎 보석 조각 ${p.gemsFound}/${p.gemsTotal} · 완성한 보석 ${p.gemsCompleted}개`));
   }
 
   const prev = prevOpened[p.name] || [];

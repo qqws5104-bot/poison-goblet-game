@@ -12,6 +12,7 @@
   --crimson-bright: #d1425a;
   --jade: #5f8f77;            /* 해독제 */
   --silver: #c9d3ea;
+  --bronze: #b5722e;          /* 금은동 쟁탈전: 동 술잔 */
   --ink: #0c0709;
   --white: #f3e9d2;           /* 고문서 아이보리 */
   --text: #e7d9c2;
@@ -203,39 +204,16 @@ button { font-family: inherit; cursor: pointer; }
 .stat.poison .v { color: var(--crimson-bright); }
 .stat.antidote .v { color: var(--jade); }
 .stat.score .v { color: var(--gold); }
-.stat.crest .v { color: #b98be0; font-size: 17px; }
-.stat.crestSet .v { color: #b98be0; }
+.stat.gem .v { color: #b98be0; font-size: 17px; }
+.stat.gemSet .v { color: #b98be0; }
 
-/* 문장 칸(C)의 배경 — 이제 안에는 범용 방패 아이콘 대신 실제 문장 조각 이미지가 들어가는
-   경우가 많아, 은은한 보라 톤 배경으로만 구분한다. */
-.cell.opened.C { background: linear-gradient(160deg, #241a30, #150f1c); }
-
-/* 가문의 문장 조각 이미지 — 셀/아이콘 박스를 꽉 채우면서 살짝 여백을 두고, 다른 아이콘들과
-   같은 톤의 보라색 발광 테두리로 "문장류"임을 계속 알아볼 수 있게 한다. */
-.crestTile {
-  width: 82%; height: 82%; object-fit: cover; border-radius: 4px; display: block;
-  box-shadow: 0 0 4px rgba(185,139,224,0.8), 0 0 8px rgba(185,139,224,0.4);
-}
-/* 조립 구역/보유 목록에서만 쓰는 래퍼 — 조각 위에 "정답 칸 번호" 배지를 겹쳐 보여주기 위함
-   (본 처소 격자나 종료 화면 공개에서는 showBadge를 끄므로 배지 없이 이미지만 나온다). */
-.crestTileWrap { position: relative; display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; }
-.crestPosBadge {
-  position: absolute; bottom: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 2px;
-  border-radius: 3px; background: #1c1220; border: 1px solid #b98be0; color: #d8b6f2;
-  font-size: 9px; line-height: 14px; text-align: center; font-weight: bold;
-}
-
-/* "가문의 문장" 확장판 조립 보드 — 3세트(그리핀/사자/드래곤) x 4조각, 조립 구역은 2개뿐이라
-   어느 세트를 먼저 완성할지 고민하게 만든다. 세트별 "먼저 완성" 경쟁 현황 + 구역 2개 +
-   아직 못 놓은 보유 조각 목록을 한 덩어리로 보여준다. */
-/* 처소 그리드(왼쪽) + 가문의 문장 조립(오른쪽) 좌우 배치. 세로로 쌓아 스크롤이 생기던 것을
+/* 처소 그리드(왼쪽) + 보석 발견 현황(오른쪽) 좌우 배치. 세로로 쌓아 스크롤이 생기던 것을
    가로로 펼쳐 한 화면에 다 보이게 한다. 화면이 넉넉히 넓을 때는 그리드가 원래 크기(420px)로
    커지고, 좁을 때는 두 칸 다 줄어들어(그리드도 함께 축소) 비교적 좁은 창에서도 옆으로 붙게
    한다 — 정말 좁을 때만 미디어 쿼리로 세로로 되돌린다. */
 .roomCrestSplit { display: flex; gap: 18px; align-items: flex-start; }
 .roomCrestLeft { flex: 1 1 280px; max-width: 420px; min-width: 260px; }
 .roomCrestRight { flex: 1 1 270px; min-width: 270px; }
-.roomCrestRight .crestBoard { margin-top: 0; }
 @media (max-width: 620px) {
   .mainView.wide { max-width: 560px; }
   .roomCrestSplit { flex-direction: column; }
@@ -243,67 +221,22 @@ button { font-family: inherit; cursor: pointer; }
   .roomCrestRight { flex: 1 1 auto; min-width: 0; width: 100%; }
 }
 
-.crestBoard { margin-top: 14px; }
-.crestBoard h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: normal; }
-
-.crestRaceRow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.crestRaceBadge {
-  font-size: 11px; padding: 4px 8px; border-radius: 3px; border: 1px solid var(--border);
+.sigilInfoRow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sigilInfoBadge {
+  font-size: 12px; padding: 4px 9px; border-radius: 3px; border: 1px solid var(--border);
   background: #150c10; color: var(--muted);
 }
-.crestRaceBadge.won { border-color: #b98be0; color: #d8b6f2; background: #241a30; }
-.crestRaceBadge.lost { border-color: var(--border); color: var(--muted); opacity: 0.6; text-decoration: line-through; }
-.crestRaceBadge.open { border-color: var(--border); color: var(--muted); }
 
-.crestZonesRow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-.crestZoneBox {
-  background: #150c10; border: 1px solid var(--border); border-radius: 4px; padding: 8px;
+/* 보석 발견 현황 — 읽기 전용 배지 목록. 하나도 못 찾은 보석은 서버가 애초에 안 내려주므로
+   여기엔 최소 한 조각이라도 찾은 보석만 나온다. */
+.gemStatusWrap { margin-top: 14px; }
+.gemStatusWrap h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: normal; }
+.gemStatusRow { display: flex; flex-wrap: wrap; gap: 6px; }
+.gemStatusBadge {
+  font-size: 12px; padding: 5px 9px; border-radius: 3px; border: 1px solid var(--border);
+  background: #150c10; color: var(--muted);
 }
-.crestZoneBox.empty { border-style: dashed; opacity: 0.75; }
-/* 4칸이 다 찼지만 순서가 틀려 완성 처리가 안 된 상태 — "찼다=끝"이 아니게 됐으므로 눈에 띄게
-   경고색(호박색)으로 구분해서, 정답이면 이미 즉시 비워졌을 거라는 걸 직관적으로 알려준다. */
-.crestZoneBox.needsFix { border-color: #e0a83b; box-shadow: 0 0 0 1px rgba(224,168,59,0.35) inset; }
-.crestZoneBox.needsFix .crestZoneLabel { color: #e0a83b; }
-.crestZoneLabel { font-size: 11px; color: var(--muted); margin-bottom: 6px; text-align: center; }
-.crestZoneGrid {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; max-width: 110px; margin: 0 auto;
-}
-.crestZoneSlot {
-  aspect-ratio: 1/1; background: #0f0a0d; border: 1px solid var(--border); border-radius: 3px;
-  display:flex; align-items:center; justify-content:center; overflow: hidden;
-}
-.crestZoneSlot.filled { border-color: #b98be0; }
-.crestZoneSlot img { width: 100%; height: 100%; object-fit: cover; display:block; }
-.crestSlotQ { font-size: 15px; color: var(--muted); opacity: 0.5; }
-/* 칸 하나하나가 드롭 대상이자(놓여 있으면) 드래그 시작점이다 — "4칸 중 어디에 놓을지"를
-   플레이어가 직접 고르므로, 하이라이트도 구역 전체가 아니라 칸 단위로 보여준다. */
-.crestZoneSlot.draggableHint { cursor: grab; }
-.crestZoneSlot.draggableHint:active { cursor: grabbing; }
-.crestZoneSlot.dragging { opacity: 0.35; }
-.crestZoneSlot.dragOver { border-color: #b98be0; background: #241a30; box-shadow: 0 0 0 2px rgba(185,139,224,0.5) inset; }
-/* 이번 턴에 남은 행동력이 없으면 이미 놓인 조각도 옮기거나 뺄 수 없다(전부 행동력을 쓰므로). */
-.crestZoneSlot.notDraggable { cursor: not-allowed; opacity: 0.7; }
-
-.crestHeldWrap { margin-top: 4px; }
-.crestHeldLabel { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
-.crestHeldRow {
-  display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; padding: 4px;
-  border-radius: 4px; transition: background .1s, box-shadow .1s;
-}
-/* 보유 목록도 드롭 대상이다 — 구역에 놓인 조각을 여기로 끌어오면 다시 뺄 수 있다. */
-.crestHeldRow.dragOver { background: #241a30; box-shadow: 0 0 0 2px rgba(185,139,224,0.5) inset; }
-.crestHeldEmptyHint { font-size: 11px; color: var(--muted); opacity: 0.6; padding: 8px 2px; }
-.crestHeldItem {
-  background: #150c10; border: 1px solid var(--border); border-radius: 4px; padding: 6px;
-  display: flex; flex-direction: column; align-items: center; gap: 5px; width: 78px;
-}
-.crestHeldItem .crestTile { width: 100%; height: auto; aspect-ratio: 1/1; }
-/* 드래그로 조립 구역에 놓는 조각 카드 — 잡을 수 있음을 커서로 알리고, 잡는 즉시
-   반투명해져서 "지금 이걸 옮기는 중"임을 보여준다(원본은 드롭 전까지 자리를 지킴). */
-.crestHeldItem.draggableHint { cursor: grab; }
-.crestHeldItem.draggableHint:active { cursor: grabbing; }
-.crestHeldItem.notDraggable { opacity: 0.5; cursor: not-allowed; }
-.crestHeldItem.dragging { opacity: 0.35; }
+.gemStatusBadge.complete { border-color: #b98be0; color: #d8b6f2; background: #241a30; }
 
 /* 아직 후반부가 열리지 않아 잠겨 있는 칸 — 6x4에서 6x6으로 확장되기 전까지 표시된다 */
 .cell.lockedSpot { background: #100a0d; border-style: dashed; cursor: not-allowed; opacity: 0.55; }
@@ -708,3 +641,68 @@ body.shake-lg { animation: shakeLg 450ms cubic-bezier(.36,.07,.19,.97); }
 .countdownPanel.finalRound { border-color: var(--crimson-bright); box-shadow: 0 3px 20px rgba(163,39,59,0.5), inset 0 0 0 1px rgba(209,66,90,0.25); }
 .countdownPanel.finalRound .countdownNum { color: var(--crimson-bright); text-shadow: 0 0 22px rgba(209,66,90,0.75); }
 .finalRoundBanner { color: var(--crimson-bright); font-weight: 800; letter-spacing: 2px; margin-bottom: 6px; }
+
+/* ---------------------------- 실시간 이벤트 팝업(토스트) ---------------------------- */
+#toastContainer {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 500; display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; width: min(92vw, 420px); align-items: center;
+}
+.toast {
+  background: var(--panel); border: 1px solid var(--border-bright); border-radius: 8px;
+  padding: 10px 16px; font-size: 14px; font-weight: 600; text-align: center;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.45);
+  opacity: 0; transform: translateY(-14px) scale(0.96);
+  transition: opacity 220ms ease, transform 220ms ease;
+  max-width: 100%;
+}
+.toast.toastShow { opacity: 1; transform: translateY(0) scale(1); }
+.toast-bad { border-color: var(--crimson-bright); color: #ffd9d9; background: rgba(163,39,59,0.22); }
+.toast-warn { border-color: var(--crimson-bright); color: var(--white); background: rgba(163,39,59,0.12); }
+.toast-good { border-color: var(--jade); color: #d8f5e6; background: rgba(95,143,119,0.22); }
+.toast-info { border-color: var(--border-bright); color: var(--text); background: rgba(201,162,75,0.12); }
+
+/* ---------------------------- "장고 금지" 타이머 배지 ---------------------------- */
+.decisionTimer {
+  display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 12px;
+  font-size: 13px; font-weight: 700; border: 1px solid var(--border);
+  background: #150c10; color: var(--gold);
+}
+.decisionTimer.timerLow { border-color: var(--crimson-bright); color: var(--crimson-bright); animation: statDangerPulse 700ms ease-in-out infinite; }
+.actionTimerBadge {
+  display: inline-block; margin-left: 10px; padding: 3px 10px; border-radius: 12px;
+  font-size: 12.5px; font-weight: 700; border: 1px solid var(--border); color: var(--gold);
+  background: #150c10; vertical-align: middle;
+}
+.actionTimerBadge.timerLow { border-color: var(--crimson-bright); color: var(--crimson-bright); }
+
+/* ---------------------------- 금은동 쟁탈전: 술잔 이모지(SVG)만으로 표현 ---------------------------- */
+.medalCupIcon { width: 100%; height: 100%; display: block; }
+.medalCupIcon .rim, .medalCupIcon .bowl, .medalCupIcon .stem, .medalCupIcon .base {
+  fill: none; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round;
+}
+.medalCupIcon.gold .rim, .medalCupIcon.gold .bowl, .medalCupIcon.gold .stem, .medalCupIcon.gold .base { stroke: var(--gold); }
+.medalCupIcon.silver .rim, .medalCupIcon.silver .bowl, .medalCupIcon.silver .stem, .medalCupIcon.silver .base { stroke: var(--silver); }
+.medalCupIcon.bronze .rim, .medalCupIcon.bronze .bowl, .medalCupIcon.bronze .stem, .medalCupIcon.bronze .base { stroke: var(--bronze); }
+.medalCupIcon.gold { filter: drop-shadow(0 0 3px rgba(201,162,75,0.7)); }
+.medalCupIcon.silver { filter: drop-shadow(0 0 3px rgba(201,211,234,0.7)); }
+.medalCupIcon.bronze { filter: drop-shadow(0 0 3px rgba(181,114,46,0.7)); }
+.medalCupIcon.active { filter: drop-shadow(0 0 7px rgba(255,255,255,0.95)); }
+.medalCupIcon.done { opacity: 0.28; filter: none; }
+
+.medalOrderGuide { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 10px; }
+.medalGuideItem { width: 26px; height: 26px; }
+.medalArrow { font-size: 15px; color: var(--muted); }
+
+.medalScatterArea {
+  position: relative; width: 100%; height: 190px; margin: 6px 0 10px;
+  background: #150c10; border: 1px solid var(--border); border-radius: 3px; overflow: hidden;
+}
+.medalCupBtn {
+  position: absolute; width: 40px; height: 40px; padding: 0; margin: 0;
+  background: transparent; border: none; cursor: pointer;
+  transform: translate(-50%, -50%);
+  transition: transform 120ms ease, opacity 150ms ease;
+}
+.medalCupBtn:hover:not(:disabled) { transform: translate(-50%, -50%) scale(1.18); }
+.medalCupBtn:disabled { cursor: default; opacity: 0.32; }
