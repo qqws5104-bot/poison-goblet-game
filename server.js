@@ -1151,8 +1151,11 @@ function handlePuzzleChooseCrest(id, payload) {
   if (!pp || pp.crest != null) return; // 세션 하나당 한 번만 고를 수 있음(중간에 바꾸기 없음)
   const crest = payload && payload.crest;
   if (!POISON_PUZZLE_CRESTS.includes(crest)) return;
-  pp.crest = crest;
   const player = match.players[id];
+  // "완료한 것은 클릭 안 되게" — 클라이언트에서 버튼을 막아도, 혹시 모를 중복/낡은 요청에 대비해
+  // 서버에서도 이미 완성한 문장은 다시 고를 수 없게 한 번 더 막는다.
+  if (player.crestPuzzles[crest] && player.crestPuzzles[crest].solved) return;
+  pp.crest = crest;
   if (!player.crestPuzzles[crest]) {
     const shape = puzzleShapeFor(crest);
     player.crestPuzzles[crest] = { tiles: shuffledPuzzleTiles(shape), solved: false };

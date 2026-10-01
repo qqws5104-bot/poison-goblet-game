@@ -543,6 +543,10 @@ button.diceHoldBtn.held {
   padding: 14px 18px; font-family: inherit; cursor: pointer; transition: border-color .15s, background .15s, transform .1s;
 }
 .puzzleCrestChoiceBtn:hover { border-color: var(--gold); background: #23151c; transform: translateY(-2px); }
+/* 완성한 문장은 다시 골라도 추가 보너스가 없으므로 아예 못 누르게 막는다(버튼 disabled) —
+   호버 효과도 끄고, 커서도 "누를 수 없음"으로 바꿔 눈으로도 바로 구분되게 한다. */
+.puzzleCrestChoiceBtn:disabled { cursor: not-allowed; }
+.puzzleCrestChoiceBtn:disabled:hover { border-color: var(--border); background: #1a0f14; transform: none; }
 .puzzleCrestThumb {
   width: 140px; height: 140px; border-radius: 6px; border: 1px solid var(--border);
   background-size: cover; background-position: center;

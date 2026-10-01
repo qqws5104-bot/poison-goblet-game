@@ -19,6 +19,11 @@ let guessCountEntry = ''; // 탁자 위 술잔 개수 세기: 숫자 키패드�
 let guessCountScene = []; // 화면에 흩뿌려 놓을 술잔 위치(라운드당 한 번만 계산 — 매번 다시 그릴 때 위치가 흔들리지 않도록)
 let sigilRound = null;
 let sigilLayout = null; // { GOLD:[{x,y}], SILVER:[...], BRONZE:[...] } — 라운드당 한 번만 계산(재렌더 시 안 흔들리도록)
+// "내가 누른 술잔이 안 사라지고 엉뚱한 다른 잔이 사라진다"는 피드백 — 예전엔 진행도(done) 개수만큼
+// 레이아웃 배열 앞에서부터 slice해 숨겼는데, 그러면 실제로 클릭한 위치와 무관하게 "목록상 순서가
+// 빠른" 잔이 사라져버렸다. 이제 각 잔마다 레이아웃 인덱스를 고유 id로 들고 있다가, 클릭한 바로 그
+// 인덱스만 즉시(서버 응답을 기다리지 않고) 숨긴다.
+let sigilConsumed = { GOLD: new Set(), SILVER: new Set(), BRONZE: new Set() };
 let bankDigits = []; // 금고 번호 맞추기: 자릿수별 칸에 입력 중인 값([null,'5',null] 형태)
 let bankFocusIndex = 0; // 지금 숫자를 채울 칸(자동으로 다음 빈 칸으로 이동)
 let bankRound = null;
@@ -481,6 +486,7 @@ socket.on('state', (state) => {
     guessCountScene = [];
     sigilRound = null;
     sigilLayout = null;
+    sigilConsumed = { GOLD: new Set(), SILVER: new Set(), BRONZE: new Set() };
     bankDigits = [];
     bankFocusIndex = 0;
     bankRound = null;
@@ -760,13 +766,16 @@ function buildPoisonPuzzleChoicePanel(pz) {
     b.appendChild(thumb);
     b.appendChild(el('div', 'puzzleCrestLabel', c.solved ? `✅ ${label}` : label));
     if (sizeTag) b.appendChild(el('div', 'puzzleCrestSizeTag', sizeTag));
-    b.onclick = () => socket.emit('puzzle:chooseCrest', { crest: c.key });
+    // "완료한 것은 클릭 안 되게" — 이미 완성한 문장은 다시 골라도 추가 점수가 없으니(실질적으로
+    // 할 일이 없으니), 아예 못 누르게 막는다.
+    b.disabled = !!c.solved;
+    if (!c.solved) b.onclick = () => socket.emit('puzzle:chooseCrest', { crest: c.key });
     list.appendChild(b);
   });
   panel.appendChild(list);
   // "선택 안하면 잠기진 않아" — 안 골라도 아무 페널티가 없다. 그냥 시간 안에 고르면 도전할
   // 기회가 있다는 것만 안내한다.
-  panel.appendChild(el('p', 'hint', '시간 안에 고르지 않아도 페널티는 없습니다. 완성한 문장을 다시 골라도 추가 점수는 없어요.'));
+  panel.appendChild(el('p', 'hint', '시간 안에 고르지 않아도 페널티는 없습니다. 이미 완성한 문장은 다시 고를 수 없어요.'));
   return panel;
 }
 // 화면 폭에 맞춰 퍼즐 타일 한 칸의 픽셀 크기를 정한다(좁은 화면에서 격자가 넘치지 않도록).
@@ -807,18 +816,17 @@ function buildPoisonPuzzleBoardPanel(pz) {
   panel.appendChild(el('p', 'hint', hint));
   return panel;
 }
-// "pick 화면에서 고르는 시간엔 계속 떠 있어야 하고, game 화면에도 같이 떠야 한다"는 피드백 —
-// 화면별로 보여주는 조건이 다르다:
-//  - "고르기"(pick) 화면: pz 세션이 살아있는 동안 페이즈와 무관하게 항상 보여준다("45초는
-//    그대로 유지" — pick 화면엔 달리 보여줄 다른 UI가 없어 겹칠 일이 없다).
-//  - "게임"(game) 화면과 레거시 단일화면(APP_ROLE===null): ROUND_ACTION(술잔 고르는 시간)일
-//    때만 보여준다 — 그 화면엔 미니게임/보상 모달도 뜨므로, 그 모달들이 뜨는 ROUND_MINIGAME
-//    등의 페이즈에는 겹치지 않게 숨긴다.
+// [2026-10-01 최종 확정] "pick 화면에서는 안 떠야해" — 고르기(pick) 화면에는 더 이상 띄우지
+// 않는다. 게임(game) 화면과 레거시 단일화면(APP_ROLE===null)에서만, 그것도 ROUND_ACTION(술잔
+// 고르는 시간)일 때만 보여준다 — 그 화면엔 미니게임/보상 모달도 뜨므로, 그 모달들이 뜨는
+// ROUND_MINIGAME 등의 페이즈에는 겹치지 않게 숨긴다.
+// (주의: 이 화면 노출 규칙은 이번 세션에서만 pick-only → game+pick → pick-only 순으로 세 번
+// 바뀌었다. 또 바꾸기 전에 정말 최종인지 한 번 더 확인할 것.)
 function renderPoisonPuzzleOverlay(state) {
   const holder = document.getElementById('poisonPuzzleOverlay');
   if (!holder) return;
   const pz = state.poisonPuzzle;
-  const hidden = !pz || (APP_ROLE !== 'pick' && state.phase !== 'ROUND_ACTION');
+  const hidden = !pz || APP_ROLE === 'pick' || state.phase !== 'ROUND_ACTION';
   if (hidden) {
     holder.innerHTML = '';
     holder.className = '';
@@ -831,7 +839,7 @@ function renderPoisonPuzzleOverlay(state) {
 }
 function tickPoisonPuzzleTimer() {
   const pz = lastState && lastState.poisonPuzzle;
-  const hidden = !pz || (APP_ROLE !== 'pick' && lastState.phase !== 'ROUND_ACTION');
+  const hidden = !pz || APP_ROLE === 'pick' || lastState.phase !== 'ROUND_ACTION';
   if (hidden) { poisonPuzzleTicking = false; return; }
   const timerEl = document.getElementById('poisonPuzzleTimer');
   if (timerEl) {
@@ -1530,6 +1538,7 @@ function renderMinigamePanel(state) {
     if (sigilRound !== state.round) {
       sigilRound = state.round;
       sigilLayout = computeSigilLayout(mg.itemCounts);
+      sigilConsumed = { GOLD: new Set(), SILVER: new Set(), BRONZE: new Set() };
     }
     const TIERS = [['GOLD', 'gold'], ['SILVER', 'silver'], ['BRONZE', 'bronze']];
     let neededTier = null;
@@ -1548,15 +1557,31 @@ function renderMinigamePanel(state) {
 
     const area = el('div', 'medalScatterArea');
     TIERS.forEach(([key, cls]) => {
+      const allPositions = (sigilLayout && sigilLayout[key]) || [];
+      const consumed = sigilConsumed[key];
+      // 새로고침/재접속 등으로 로컬 기록 없이 서버 진행도(done)만 더 앞서 있는 경우를 대비한
+      // 안전망 — 그럴 땐 어차피 "내가 어느 걸 눌렀는지"를 구분할 수 없으니, 앞에서부터 채워
+      // 맞춰준다(정상적인 클릭 흐름에서는 done이 항상 consumed.size와 같이 늘어나므로 영향 없음).
       const done = mg.myProgress[key] || 0;
-      const positions = (sigilLayout && sigilLayout[key] || []).slice(done);
+      for (let i = 0; consumed.size < done && i < allPositions.length; i++) {
+        if (!consumed.has(i)) consumed.add(i);
+      }
       const isActive = key === neededTier;
-      positions.forEach((pos) => {
+      allPositions.forEach((pos, idx) => {
+        if (consumed.has(idx)) return; // 이미 내가 누른(또는 서버가 반영한) 잔은 바로 숨긴다
         const b = el('button', 'medalCupBtn', medalCupIconSVG(cls, isActive ? 'active' : ''));
         b.style.left = pos.x + '%';
         b.style.top = pos.y + '%';
         b.disabled = !isActive;
-        b.onclick = () => socket.emit('minigame:move', { tier: key });
+        b.dataset.sigilTier = key;
+        b.dataset.sigilIdx = idx;
+        b.onclick = () => {
+          // 서버 응답(다음 state)을 기다리지 않고 내가 누른 바로 이 잔을 즉시 숨긴다 — 예전엔
+          // 진행도 개수만큼 레이아웃 앞에서부터 잘라 숨기는 방식이라, 클릭한 잔과 실제로 사라지는
+          // 잔이 서로 달라 보이는 문제가 있었다.
+          consumed.add(idx);
+          socket.emit('minigame:move', { tier: key });
+        };
         area.appendChild(b);
       });
     });
