@@ -1132,21 +1132,14 @@ function ensurePoisonPuzzleSession() {
   const [a, b] = match.order;
   const session = {
     deadlineAt: Date.now() + CONFIG.POISON_PUZZLE_MS,
-    perPlayer: { [a]: { crest: null, penalized: false }, [b]: { crest: null, penalized: false } },
+    perPlayer: { [a]: { crest: null }, [b]: { crest: null } },
   };
   match.poisonPuzzleSession = session;
   log('🧩 가문의 문장 도전 시간이 열렸습니다 — 45초 안에 문장 하나를 골라 맞추면 보너스 점수!');
   broadcastState();
+  // 안 골라도 페널티(칸 잠금)는 없다 — 그냥 시간이 지나면 이번 창은 닫힌다.
   setTimeout(() => {
     if (match.poisonPuzzleSession !== session) return; // 이미 끝난 세션(이론상 이 경로만 존재)
-    for (const id of match.order) {
-      const pp = session.perPlayer[id];
-      if (pp && pp.crest == null && !pp.penalized) {
-        pp.penalized = true;
-        log(`${match.players[id].name}이(가) 문장을 고르지 않아 처소 칸 1개가 무작위로 잠깁니다.`);
-        lockRandomCells(id, 1);
-      }
-    }
     match.poisonPuzzleSession = null;
     broadcastState();
   }, CONFIG.POISON_PUZZLE_MS + 50);

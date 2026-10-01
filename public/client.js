@@ -720,12 +720,13 @@ function tickDiceFace() {
 
 // ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
 // 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 45초짜리 도전 창이 자동으로
-// 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는 패널 형태) — "고르기"(pick) 화면과 레거시
-// 단일화면(APP_ROLE===null)에서만 보인다("게임" 화면엔 미니게임/보상 UI가 있어 겹쳐 보이니
-// 아예 띄우지 않는다). 문장을 아직 안 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의
-// 10칸 슬라이딩 퍼즐(3x3 격자 + 왼쪽 위 여분 1칸)을 보여준다. 상대와 겨루는 게 아니라 각자
-// 독립적인 개인전이라 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상
-// 떠 있어야 하므로 #app 밖의 독립된 오버레이 div를 직접 조작한다.
+// 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는 패널 형태) — "고르기"(pick) 화면에서는 페이즈와
+// 무관하게 세션이 살아있는 내내 보이고, "게임"(game) 화면과 레거시 단일화면에서는 ROUND_ACTION
+// 페이즈일 때만 보인다(그 화면들엔 미니게임/보상 모달도 뜨므로 겹치지 않게). 문장을 아직 안
+// 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의 슬라이딩 퍼즐(격자 + 왼쪽 위 여분
+// 1칸, 문장마다 2x2/2x3/3x3로 크기가 다름)을 보여준다. 상대와 겨루는 게 아니라 각자 독립적인
+// 개인전이라 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상 떠 있어야
+// 하므로 #app 밖의 독립된 오버레이 div를 직접 조작한다.
 let poisonPuzzleTicking = false;
 const POISON_PUZZLE_CREST_LABELS = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
 // 퍼즐판은 총 (rows*cols + 1)칸 — pos 0은 격자(pos 1~rows*cols, 가로쓰기 순서) 왼쪽 위 바깥에
@@ -763,8 +764,14 @@ function buildPoisonPuzzleChoicePanel(pz) {
     list.appendChild(b);
   });
   panel.appendChild(list);
-  panel.appendChild(el('p', 'hint', '고르지 않으면 창이 닫힐 때 내 처소 칸 1개가 무작위로 잠깁니다. 완성한 문장을 다시 골라도 페널티는 피하지만 추가 점수는 없습니다.'));
+  // "선택 안하면 잠기진 않아" — 안 골라도 아무 페널티가 없다. 그냥 시간 안에 고르면 도전할
+  // 기회가 있다는 것만 안내한다.
+  panel.appendChild(el('p', 'hint', '시간 안에 고르지 않아도 페널티는 없습니다. 완성한 문장을 다시 골라도 추가 점수는 없어요.'));
   return panel;
+}
+// 화면 폭에 맞춰 퍼즐 타일 한 칸의 픽셀 크기를 정한다(좁은 화면에서 격자가 넘치지 않도록).
+function puzzleTileSizePx() {
+  return window.innerWidth <= 620 ? 58 : 72;
 }
 // 문장을 고른 뒤 — 실제 슬라이딩 퍼즐(격자 rows×cols + 왼쪽 위 여분 1칸).
 function buildPoisonPuzzleBoardPanel(pz) {
@@ -779,8 +786,9 @@ function buildPoisonPuzzleBoardPanel(pz) {
   const board = el('div', 'puzzleBoard');
   const extraRow = el('div', 'puzzleExtraRow');
   const grid = el('div', 'puzzleGrid');
-  grid.style.gridTemplateColumns = `repeat(${shape.cols}, 58px)`;
-  grid.style.gridTemplateRows = `repeat(${shape.rows}, 58px)`;
+  const tilePx = puzzleTileSizePx();
+  grid.style.gridTemplateColumns = `repeat(${shape.cols}, ${tilePx}px)`;
+  grid.style.gridTemplateRows = `repeat(${shape.rows}, ${tilePx}px)`;
   pz.tiles.forEach((val, pos) => {
     const isBlank = !resolved && val === blankValue;
     const div = el('div', 'puzzleTile' + (isBlank ? ' puzzleTileBlank' : ''));
@@ -799,19 +807,18 @@ function buildPoisonPuzzleBoardPanel(pz) {
   panel.appendChild(el('p', 'hint', hint));
   return panel;
 }
-// "독배와 무관하게, 술잔 고르는 시간(pick 화면)이 열릴 때마다 45초 내내 떠 있어야 한다"는
-// 피드백 — 이제 "고르기(pick)" 화면에서 보여준다("game" 화면에는 미니게임/보상 등 다른 UI가
-// 있어 겹쳐 보이니 아예 띄우지 않는다). pick 화면은 평소 방 그리드 외엔 달리 보여줄 게 없으므로,
-// 라운드가 넘어가 미니게임 페이즈가 되어도(같은 pick 화면은 그냥 "미니게임 진행 중" 안내만
-// 보여줄 뿐이라) 계속 띄워둬도 겹칠 UI가 없다 — 그래서 pick 화면에서는 페이즈와 무관하게 세션이
-// 살아있는 동안 계속 보여준다("45초는 그대로 유지"). 레거시 단일화면(APP_ROLE===null, 같은
-// 화면에 미니게임 모달도 뜨는 구조)에서만 예외적으로 ROUND_ACTION 페이즈일 때만 보여줘 겹침을
-// 피한다.
+// "pick 화면에서 고르는 시간엔 계속 떠 있어야 하고, game 화면에도 같이 떠야 한다"는 피드백 —
+// 화면별로 보여주는 조건이 다르다:
+//  - "고르기"(pick) 화면: pz 세션이 살아있는 동안 페이즈와 무관하게 항상 보여준다("45초는
+//    그대로 유지" — pick 화면엔 달리 보여줄 다른 UI가 없어 겹칠 일이 없다).
+//  - "게임"(game) 화면과 레거시 단일화면(APP_ROLE===null): ROUND_ACTION(술잔 고르는 시간)일
+//    때만 보여준다 — 그 화면엔 미니게임/보상 모달도 뜨므로, 그 모달들이 뜨는 ROUND_MINIGAME
+//    등의 페이즈에는 겹치지 않게 숨긴다.
 function renderPoisonPuzzleOverlay(state) {
   const holder = document.getElementById('poisonPuzzleOverlay');
   if (!holder) return;
   const pz = state.poisonPuzzle;
-  const hidden = !pz || APP_ROLE === 'game' || (!APP_ROLE && state.phase !== 'ROUND_ACTION');
+  const hidden = !pz || (APP_ROLE !== 'pick' && state.phase !== 'ROUND_ACTION');
   if (hidden) {
     holder.innerHTML = '';
     holder.className = '';
@@ -824,7 +831,7 @@ function renderPoisonPuzzleOverlay(state) {
 }
 function tickPoisonPuzzleTimer() {
   const pz = lastState && lastState.poisonPuzzle;
-  const hidden = !pz || APP_ROLE === 'game' || (!APP_ROLE && lastState.phase !== 'ROUND_ACTION');
+  const hidden = !pz || (APP_ROLE !== 'pick' && lastState.phase !== 'ROUND_ACTION');
   if (hidden) { poisonPuzzleTicking = false; return; }
   const timerEl = document.getElementById('poisonPuzzleTimer');
   if (timerEl) {

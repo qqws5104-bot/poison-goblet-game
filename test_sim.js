@@ -36,8 +36,8 @@ let bankCandidates = { A: null, B: null };
 let bankRoundSeen = { A: null, B: null };
 
 // ---- 독배 슬라이딩 퍼즐(가문의 문장) 봇 로직 ----
-// A는 도전 창이 뜨면 항상 문장을 골라 끝까지 푼다. B는 "고르지 않으면 칸이 잠긴다"는 페널티
-// 경로를 확인하기 위해 처음 한 번은 일부러 무시하고, 그다음 세션부터는 정상적으로 도전한다.
+// A는 도전 창이 뜨면 항상 문장을 골라 끝까지 푼다. B는 "안 골라도 페널티가 없다"는 경로를
+// 확인하기 위해 처음 한 번은 일부러 무시하고, 그다음 세션부터는 정상적으로 도전한다.
 // 문장마다 격자 크기(2x2/2x3/3x3)가 다르므로, 인접 그래프도 서버와 동일하게 그때그때 만들어낸다.
 function puzzleAdjFor(shape) {
   const { rows, cols } = shape;
@@ -96,7 +96,7 @@ function playPoisonPuzzle(label, socket, s) {
   if (!pz.myCrest) {
     if (label === 'B' && !puzzleIgnoredOnce.B) {
       puzzleIgnoredOnce.B = true;
-      console.log(`[PUZZLE] ${label} 일부러 이번 세션엔 문장을 고르지 않음(잠금 페널티 경로 확인용)`);
+      console.log(`[PUZZLE] ${label} 일부러 이번 세션엔 문장을 고르지 않음(무페널티 경로 확인용)`);
       return;
     }
     const choice = pz.crests[Math.floor(Math.random() * pz.crests.length)];
