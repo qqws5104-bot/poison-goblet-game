@@ -82,6 +82,10 @@ button { font-family: inherit; cursor: pointer; }
 #app {
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
   padding: 18px; max-width: 1200px; width: 100%; margin: 0 auto;
+  /* 페이즈가 바뀌어 내용을 통째로 다시 그릴 때 client.js가 스크롤을 맨 위로 되돌리는데,
+     브라우저의 기본 스크롤 앵커링(overflow-anchor)이 "사용자가 보던 지점"을 유지하려고
+     그 리셋을 다시 덮어써버리는 경우가 있어(새 화면 위쪽이 잘려 보이는 원인) 꺼둔다. */
+  overflow-anchor: none;
 }
 .panel {
   background: linear-gradient(180deg, var(--panel), var(--panel-alt));

@@ -10,6 +10,12 @@ const statusBar = document.getElementById('statusBar');
 const logBox = document.getElementById('log');
 
 let lastState = null;
+let lastRenderedPhase = null; // "#app이 스크롤된 채로 화면이 바뀌어 새 화면 위쪽이 잘려 보인다"는
+// 피드백 대응용 — #app은 내용이 넘칠 때 자체적으로 스크롤되는데(overflow-y:auto), 매 상태 갱신마다
+// innerHTML을 통째로 다시 그려도 scrollTop은 그대로 남아있어서, 이전 화면에서 아래로 스크롤해둔
+// 채로 "라운드 종료" 같은 짧은 새 화면으로 넘어가면 그 화면의 위쪽이 스크롤에 가려 안 보이는
+// 문제가 있었다. 페이즈가 실제로 바뀔 때만(같은 페이즈 안에서 상대 행동 등으로 재렌더될 때는
+// 사용자가 보던 스크롤 위치를 그대로 유지하도록) #app을 맨 위로 되돌린다.
 let setupSelection = []; // [{row,col}]
 let midSetupSelection = []; // 중반 독 추가 설치: [{row,col}]
 let guessCountRound = null;
@@ -874,6 +880,15 @@ function render(state) {
   if (!state) return;
   renderStatusBar(state);
   renderPoisonPuzzleOverlay(state); // #app과 무관한 독립 오버레이 — 페이즈 분기보다 먼저 처리
+  const phaseChanged = state.phase !== lastRenderedPhase;
+  if (phaseChanged) {
+    lastRenderedPhase = state.phase;
+    app.scrollTop = 0;
+    // 일부 브라우저의 스크롤 앵커링이 방금 되돌린 scrollTop을 다음 레이아웃에서 다시 덮어쓰는
+    // 경우를 대비해(위 #app의 overflow-anchor:none이 주 방어, 이건 이중 안전장치), 새 내용이
+    // 실제로 그려지고 난 다음 프레임에 한 번 더 맨 위로 되돌린다.
+    requestAnimationFrame(() => { app.scrollTop = 0; });
+  }
   app.innerHTML = '';
   if (state.phase === 'LOBBY') return renderLobby(state);
   if (state.phase === 'SETUP_DONE') return renderSetupDone(state);
