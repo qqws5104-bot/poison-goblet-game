@@ -47,15 +47,18 @@ const CONFIG = {
   // "장고 금지" 타이머 — 시간이 다 되면 아직 결정을 안 내린 쪽의 몫을 서버가 무작위로 대신
   // 결정해버린다(핸들러 함수를 그대로 재사용하므로 검증/승패 판정 로직은 완전히 동일하다).
   DECISION_TIMER_MS: 15000, // NIM/HAND/PIN/GUESS_COUNT/DICE/SIGIL처럼 결정이 한 번(또는 교대로 한 번씩)인 미니게임
-  LOCK_PENALTY_CELLS: 1, // 장고 페널티 — 시간 안에 결정 못 하면 자기 처소의 칸이 이만큼 무작위로 영구히 잠긴다("잠기는건 한개만 되게끔" 피드백으로 2→1)
+  // [2026-10-01] 장고 페널티(시간 초과 시 칸 잠금)는 폐지됨 — 이제 시간 초과는 즉시 패배로
+  // 처리되고(아래 armXxxTimer들 참고), 패배 자체가 유일한 페널티다.
   DICE_CYCLE_MS: 100, // 주사위 누르기 — 스페이스바를 누르고 있는 동안 이 간격(ms)마다 눈금이 1~6으로 순환하며, 뗀 시점의 경과시간으로 서버가 눈을 확정한다(220→100, "눈이 더 빠르게 흘러가게" 피드백)
   DICE_MAX_TIE_REPLAYS: 2, // 동점이면 이 횟수만큼 다시 굴린다 — 그래도 계속 동점이면 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
-  // 독배 슬라이딩 퍼즐(가문의 문장) — 독배를 마신 순간 시작되는 45초 창 동안, 3개 문장 중 하나를
-  // 직접 골라 풀면 처음 맞췄을 때 한정으로 보너스 점수를 받는다. 진행 상황은 문장별로 매치 내내
-  // 그대로 이어진다(다 못 맞추고 창이 닫혀도 다음에 같은 문장을 다시 고르면 이어서 풀 수 있다).
-  POISON_PUZZLE_MS: 45000,
+  // 독배 슬라이딩 퍼즐(가문의 문장) — 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 3개 문장 중
+  // 하나를 직접 골라 풀면 처음 맞췄을 때 한정으로 보너스 점수를 받는다. 진행 상황은 문장별로
+  // 매치 내내 그대로 이어진다(다 못 맞추고 창이 닫혀도 다음에 같은 문장을 다시 고르면 이어서
+  // 풀 수 있다). "두 타이머 숫자가 서로 달라서 헷갈린다"는 피드백으로, 더 이상 독자적인 제한
+  // 시간을 따로 두지 않고 본행동 타이머(ROUND_ACTION_TIMER_MS/match.actionDeadlineAt)를 그대로
+  // 공유한다 — ensurePoisonPuzzleSession() 참고.
   // 퍼즐판 크기는 이제 문장별로 다르다(POISON_PUZZLE_CREST_SHAPE 참고: 2x2/2x3/3x3) — 여기 고정값은 없음.
   POISON_PUZZLE_BONUS_PTS: 3, // 문장 하나를 처음으로 완성했을 때 받는 보너스 점수(문장별 최초 1회만)
 };
@@ -253,6 +256,7 @@ function freshMatch() {
     midSetupDoneEndsAt: null, // MID_SETUP_DONE(중반 재설치 완료 안내) 대기가 몇 시에 끝나는지
     pendingReward: null, // 이번 라운드 미니게임 승자가 고를(또는 이미 고른) 보상 — { winnerId, choices, type, used, expiresAt }
     actionOpens: {}, // 라운드 액션(칸 열기)은 이제 순서 교대가 아니라 각자 독립적으로 동시에 진행됨
+    actionForfeited: {}, // 시간 안에 다 못 고른 몫을 "그냥 넘어감" 처리했는지
     actionDeadlineAt: null, // "장고 금지" — 본행동(칸 열기) 라운드가 몇 시에 시간초과되어 자동 진행되는지
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
     rematchReady: {},
@@ -261,9 +265,10 @@ function freshMatch() {
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
     splitMode: false,
-    // 독배 슬라이딩 퍼즐(가문의 문장) — 진행 중인 45초 도전 창. 없으면 null. 각 플레이어의
-    // 실제 퍼즐 진행상황(tiles)은 세션이 아니라 player.crestPuzzles에 영구히 저장된다 — 이
-    // 세션 객체는 그저 "지금 45초 창이 열려 있고, 누가 아직 문장을 안 골랐는지"만 추적한다.
+    // 독배 슬라이딩 퍼즐(가문의 문장) — 진행 중인 도전 창(본행동 타이머와 같은 시간 동안 열림).
+    // 없으면 null. 각 플레이어의 실제 퍼즐 진행상황(tiles)은 세션이 아니라 player.crestPuzzles에
+    // 영구히 저장된다 — 이 세션 객체는 그저 "지금 창이 열려 있고, 누가 아직 문장을 안 골랐는지"만
+    // 추적한다.
     poisonPuzzleSession: null,
   };
 }
@@ -408,10 +413,14 @@ function startRound() {
 }
 
 // "장고 금지" 타이머 — 결정을 안 내리고 시간을 끄는 걸 막기 위해, 미니게임마다 데드라인을
-// 하나 걸어두고 시간이 다 되면 서버가 대신 무작위로 결정해버린다. 실제 판정/검증 로직은 새로
-// 만들지 않고 기존 handleXxx()를 그대로 재사용한다(플레이어가 직접 눌렀을 때와 완전히 동일한
-// 경로를 타므로 버그가 생길 여지가 없다). mg.deadlineAt에 찍힌 시각과 실제 예약된 시각(token)이
-// 서로 다르면(그 사이에 다시 armDecisionTimer가 불려 갱신됐다는 뜻) 낡은 타이머이므로 무시한다.
+// 하나 걸어둔다. [2026-10-01] "시간이 지나도록 아무것도 안 하면 자동선택 말고 그냥 즉시 패배로
+// 하자"는 피드백으로, 시간이 다 되면 더 이상 서버가 대신 무작위로 입력을 채워주지 않는다 — 그
+// 차례였던(또는 아직 결정을 안 한) 사람이 그 자리에서 바로 패배 처리된다. 칸 잠금(장고 페널티)도
+// "패배 자체가 이미 페널티"라는 이유로 함께 폐지했다(패배 외 추가 처벌 없음). 양쪽이 각자
+// 독립적으로 결정하는 미니게임(주사위/금고/촛불개수/잔 낚아채기/금은동쟁탈전)에서 시간이 다
+// 되도록 "양쪽 다" 전혀 결판을 못 낸 경우는 어느 한쪽 탓으로 돌릴 수 없으므로 무승부로 처리한다.
+// mg.deadlineAt에 찍힌 시각과 실제 예약된 시각(token)이 서로 다르면(그 사이에 다시
+// armDecisionTimer가 불려 갱신됐다는 뜻) 낡은 타이머이므로 무시한다.
 function armDecisionTimer(mg, ms, onTimeout) {
   mg.deadlineAt = Date.now() + ms;
   const token = mg.deadlineAt;
@@ -420,90 +429,62 @@ function armDecisionTimer(mg, ms, onTimeout) {
     onTimeout();
   }, ms);
 }
-// 장고 페널티 — 시간 안에 결정을 못 내려 서버가 대신 무작위로 처리한 사람은, 그 대가로 자기
-// 처소의 아직 안 연(그리고 아직 안 잠긴) 칸 중 무작위로 몇 곳이 그 자리에서 잠겨 다시는 열 수
-// 없게 된다. CONFIG.LOCK_PENALTY_CELLS(기본 1)개를 잠그며, 남은 칸이 그보다 적으면 있는 만큼만.
-function lockRandomCells(id, count) {
-  const player = match.players[id];
-  if (!player) return;
-  const candidates = [];
-  for (const row of player.room) {
-    for (const cell of row) {
-      if (!cell.opened && !cell.locked) candidates.push(cell);
-    }
-  }
-  const picked = shuffle(candidates).slice(0, count);
-  picked.forEach((cell) => { cell.locked = true; });
-  if (picked.length) {
-    log(`${player.name}이(가) 장고 페널티로 처소의 칸 ${picked.length}개가 영구히 잠겼습니다.`);
-  }
-}
 function armNimTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 서버가 대신 무작위로 채웁니다.`);
-    lockRandomCells(mg.turn, CONFIG.LOCK_PENALTY_CELLS);
-    handleNim(mg.turn, { n: randInt(1, 3) }, mg);
+    log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(mg.turn));
   });
 }
 function armPinTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    const remaining = mg.pulled.map((p, i) => (p ? null : i)).filter((i) => i != null);
-    if (!remaining.length) return;
-    log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 서버가 대신 안전핀을 뽑습니다.`);
-    lockRandomCells(mg.turn, CONFIG.LOCK_PENALTY_CELLS);
-    handlePin(mg.turn, { action: 'PICK', index: remaining[randInt(0, remaining.length - 1)] }, mg);
+    log(`${match.players[mg.turn].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(mg.turn));
   });
 }
 function armHandTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
     if (mg.hiderPick == null) {
-      log(`${match.players[mg.hider].name}이(가) 너무 오래 고민해 서버가 대신 손을 숨깁니다.`);
-      lockRandomCells(mg.hider, CONFIG.LOCK_PENALTY_CELLS);
-      handleHand(mg.hider, { hand: Math.random() < 0.5 ? 'L' : 'R' }, mg);
+      log(`${match.players[mg.hider].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+      endMinigame(mg.guesser);
     } else if (mg.guesserPick == null) {
-      log(`${match.players[mg.guesser].name}이(가) 너무 오래 고민해 서버가 대신 지목합니다.`);
-      lockRandomCells(mg.guesser, CONFIG.LOCK_PENALTY_CELLS);
-      handleHand(mg.guesser, { hand: Math.random() < 0.5 ? 'L' : 'R' }, mg);
+      log(`${match.players[mg.guesser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+      endMinigame(mg.hider);
     }
   });
 }
 function armSigilTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    const totalItems = MEDAL_ORDER.reduce((s, t) => s + mg.itemCounts[t], 0);
-    for (const id of match.order) {
-      if (mg.result != null) break;
-      log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 진행합니다.`);
-      lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
-      let guard = 0;
-      while (mg.result == null && guard < totalItems + 3) {
-        guard += 1;
-        const neededTier = sigilNeededTier(mg, id);
-        if (neededTier == null) break;
-        handleSigil(id, { tier: neededTier }, mg);
-      }
-    }
+    // 이 타이머가 울렸다는 건 mg.result가 아직 비어있다는 뜻 — 아직 아무도 금·은·동을 순서대로
+    // 다 끝내지 못했다. 어느 한쪽이 조금 더 앞서 있었어도 승부를 억지로 가르지 않고 무승부로
+    // 처리한다("양쪽 다 시간초과" 경우와 동일하게 취급).
+    log('아무도 시간 안에 금·은·동을 다 끝내지 못해 무승부로 처리합니다.');
+    endMinigameDraw();
   });
 }
 function armGuessCountTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    for (const id of match.order) {
-      if (mg.guesses[id] == null) {
-        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 추측합니다.`);
-        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
-        handleGuessCount(id, { guess: randInt(0, CONFIG.GUESS_COUNT_MAX) }, mg);
-      }
+    const [a, b] = match.order;
+    const aDone = mg.guesses[a] != null, bDone = mg.guesses[b] != null;
+    if (!aDone && !bDone) {
+      log('둘 다 시간 안에 추측하지 못해 무승부로 처리합니다.');
+      return endMinigameDraw();
     }
+    const loser = aDone ? b : a; // 아직 안 고른 쪽이 패배
+    log(`${match.players[loser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(loser));
   });
 }
 function armDiceTimer(mg) {
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    for (const id of match.order) {
-      if (mg.results[id] == null) {
-        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 주사위를 굴립니다.`);
-        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
-        finalizeDiceResult(id, mg, randInt(1, 6));
-      }
+    const [a, b] = match.order;
+    const aDone = mg.results[a] != null, bDone = mg.results[b] != null;
+    if (!aDone && !bDone) {
+      log('둘 다 시간 안에 주사위를 굴리지 못해 무승부로 처리합니다.');
+      return endMinigameDraw();
     }
+    const loser = aDone ? b : a; // 아직 안 굴린 쪽이 패배
+    log(`${match.players[loser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(loser));
   });
 }
 function armReflexTimer(mg) {
@@ -511,34 +492,31 @@ function armReflexTimer(mg) {
   // 정상적으로 반응하는 플레이어라면 이 데드라인보다 훨씬 먼저 이미 클릭했을 것이므로,
   // 화면에 별도 카운트다운 배지는 띄우지 않는다(신호-반응 몰입감을 해치지 않기 위해).
   armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
-    for (const id of match.order) {
-      if (mg.result != null) break;
-      if (!mg.clicks[id]) {
-        log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 잔을 낚아챕니다.`);
-        lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
-        handleReflex(id, {}, mg);
-      }
+    const [a, b] = match.order;
+    const aDone = !!mg.clicks[a], bDone = !!mg.clicks[b];
+    if (!aDone && !bDone) {
+      log('둘 다 시간 안에 반응하지 않아 무승부로 처리합니다.');
+      return endMinigameDraw();
     }
+    const loser = aDone ? b : a; // 아직 반응하지 않은 쪽이 패배
+    log(`${match.players[loser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(loser));
   });
 }
 function armBankTimer(mg) {
   armDecisionTimer(mg, CONFIG.BANK_TIMER_MS, () => {
-    for (const id of match.order) {
-      if (mg.result != null) break;
-      log(`${match.players[id].name}이(가) 너무 오래 고민해 서버가 대신 금고를 계속 시도합니다.`);
-      lockRandomCells(id, CONFIG.LOCK_PENALTY_CELLS);
-      let guard = 0;
-      while (mg.result == null && guard < 3000) {
-        guard += 1;
-        handleBank(id, { guess: randomDistinctDigits(CONFIG.BANK_DIGITS) }, mg);
-      }
-    }
+    // 이 타이머가 울렸다는 건 아직 아무도 자기 금고를 못 열었다는 뜻("양쪽 다 시간초과"와
+    // 동일한 경우)이므로 무승부로 처리한다.
+    log('아무도 시간 안에 금고를 열지 못해 무승부로 처리합니다.');
+    endMinigameDraw();
   });
 }
-// 본행동(칸 열기) 라운드에도 같은 "장고 금지" 원칙을 적용한다 — 시간이 다 되면 아직 이번
-// 라운드 몫(OPENS_PER_TURN)을 다 못 연 사람의 나머지 칸을 무작위로 대신 열어준다. 철가방
+// 본행동(칸 열기) 라운드가 시간 안에 안 끝나면: "선택 안 하면 랜덤으로 안 골라졌으면 해" 피드백에
+// 따라, 서버가 대신 무작위로 칸을 열어주지 않는다 — 그냥 이번 라운드에 못 연 나머지 칸은 넘어가고
+// (그 칸들은 열리지 않은 채로 남아 다음 라운드 이후에도 계속 선택 가능), 라운드만 정상적으로
+// 다음으로 진행되게 한다(그래야 한쪽이 고르지 않아도 상대가 계속 묶여 있지 않는다). 철가방
 // 정찰(FLASH_ALL)을 고르고도 아직 터뜨리지 않은 상태라면, doAction()이 칸 열기 자체를 막고
-// 있으므로 그것부터 대신 터뜨려준 뒤에 칸을 연다.
+// 있으므로 그것만은 예외적으로 대신 터뜨려준다(안 그러면 그 라운드 내내 아예 못 열게 됨).
 function armActionTimer() {
   const roundAtArm = match.round;
   match.actionDeadlineAt = Date.now() + CONFIG.ROUND_ACTION_TIMER_MS;
@@ -552,24 +530,12 @@ function armActionTimer() {
         log(`${player.name}이(가) 너무 오래 고민해 철가방 정찰이 서버에 의해 자동으로 발동됩니다.`);
         fireFlashAll(id);
       }
-      let opens = match.actionOpens[id] || 0;
+      const opens = match.actionOpens[id] || 0;
       if (opens >= CONFIG.OPENS_PER_TURN) continue;
-      log(`${player.name}이(가) 너무 오래 고민해 서버가 대신 나머지 칸을 엽니다.`);
-      let guard = 0;
-      while (opens < CONFIG.OPENS_PER_TURN && guard < CONFIG.OPENS_PER_TURN + 5) {
-        guard += 1;
-        const candidates = [];
-        for (let r = 0; r < player.room.length; r++) {
-          for (let c = 0; c < player.room[r].length; c++) {
-            if (!player.room[r][c].opened && !player.room[r][c].locked) candidates.push({ row: r, col: c });
-          }
-        }
-        if (!candidates.length) break; // 더 열 칸이 없으면 중단(이론상 거의 발생하지 않음)
-        const { row, col } = candidates[randInt(0, candidates.length - 1)];
-        doAction(id, 'OPEN', { row, col });
-        opens = match.actionOpens[id] || 0;
-      }
+      log(`${player.name}이(가) 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘깁니다.`);
+      match.actionForfeited[id] = true;
     }
+    checkRoundActionDone();
   }, CONFIG.ROUND_ACTION_TIMER_MS);
 }
 
@@ -697,10 +663,11 @@ function endMinigame(winnerId) {
 
   // 본행동(칸 열기)은 더 이상 순서 교대가 아니라 두 사람이 동시에 독립적으로 진행한다.
   match.actionOpens = {};
+  match.actionForfeited = {}; // 시간 안에 다 못 고른 몫을 "그냥 넘어감" 처리했는지(라운드마다 초기화)
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 보상을 직접 고릅니다.`);
   armActionTimer();
-  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 45초 문장 도전 창을 연다(독배와 무관)
+  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 본행동과 같은 길이의 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -710,11 +677,12 @@ function endMinigameDraw() {
   match.minigame.result = 'DRAW';
   match.pendingReward = null;
   match.actionOpens = {};
+  match.actionForfeited = {}; // 시간 안에 다 못 고른 몫을 "그냥 넘어감" 처리했는지(라운드마다 초기화)
   match.phase = 'ROUND_ACTION';
   match.streak = { winnerId: null, count: 0 }; // 무승부는 스트릭을 끊는다
   log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
   armActionTimer();
-  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 45초 문장 도전 창을 연다(독배와 무관)
+  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 본행동과 같은 길이의 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -1057,8 +1025,8 @@ function notifyNeutralize(id, count) {
 }
 
 // ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
-// 독배를 마셨는지와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 45초짜리 도전 창이
-// 자동으로 열린다(이미 열려 있으면 새로 열지 않고 그대로 유지). 그 안에서 각자 "가문의 문장"
+// 독배를 마셨는지와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 본행동 타이머와
+// 같은 길이의 도전 창이 자동으로 열린다(라운드마다 새로 연다). 그 안에서 각자 "가문의 문장"
 // 그림 3종(독수리 2x2/사자 2x3/용 3x3, public/crest/*_full.png) 중 하나를 직접 골라(+왼쪽 위
 // 여분 1칸) 슬라이딩 퍼즐에 도전한다. 상대와 경쟁하는 게 아니라 각자 독립적으로 자기 진행상황을
 // 쌓아가는 개인전이다 — 문장 하나를 "처음" 완성했을 때만 보너스 점수를 받는다(문장별 최초 1회).
@@ -1124,26 +1092,23 @@ function shuffledPuzzleTiles(shape) {
   }
   return tiles;
 }
-// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 호출된다 — 이미 도전
-// 창이 열려 있으면(직전 라운드 세션이 아직 45초를 다 못 채웠으면) 그대로 둔다(재시작하지 않음).
-// 두 사람 다 "이번 창에서 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황은 각자
-// player.crestPuzzles에 영구히 남는다(라운드가 바뀌어도, 다 못 풀고 창이 닫혀도 그대로 유지).
+// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 호출된다(항상 armActionTimer()
+// 바로 다음에 호출됨). "본행동 타이머랑 문장 도전 타이머 숫자가 서로 달라서 헷갈린다"는 피드백
+// 으로, 더 이상 독자적인 45초 창을 따로 열지 않고 이번 라운드의 본행동 제한시간
+// (match.actionDeadlineAt)을 그대로 가져다 써서 두 시계가 항상 똑같이 움직이게 한다 — 그래서
+// 라운드마다(매 호출마다) 새로 연다(이전 라운드 선택은 들고 가지 않는다). 각자 "이번 라운드에
+// 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황(타일 배치)은 player.crestPuzzles에
+// 영구히 남는다(라운드가 바뀌어도, 다 못 풀고 창이 닫혀도 그대로 유지).
 function ensurePoisonPuzzleSession() {
-  if (match.poisonPuzzleSession) return;
   const [a, b] = match.order;
-  const session = {
-    deadlineAt: Date.now() + CONFIG.POISON_PUZZLE_MS,
+  match.poisonPuzzleSession = {
+    deadlineAt: match.actionDeadlineAt,
     perPlayer: { [a]: { crest: null }, [b]: { crest: null } },
   };
-  match.poisonPuzzleSession = session;
-  log('🧩 가문의 문장 도전 시간이 열렸습니다 — 45초 안에 문장 하나를 골라 맞추면 보너스 점수!');
-  broadcastState();
-  // 안 골라도 페널티(칸 잠금)는 없다 — 그냥 시간이 지나면 이번 창은 닫힌다.
-  setTimeout(() => {
-    if (match.poisonPuzzleSession !== session) return; // 이미 끝난 세션(이론상 이 경로만 존재)
-    match.poisonPuzzleSession = null;
-    broadcastState();
-  }, CONFIG.POISON_PUZZLE_MS + 50);
+  log('🧩 가문의 문장 도전 시간이 열렸습니다 — 이번 라운드 안에 문장 하나를 골라 맞추면 보너스 점수!');
+  // 안 골라도 페널티(칸 잠금)는 없다 — 그냥 라운드(ROUND_ACTION)가 끝나면 이번 창도 함께 닫힌다.
+  // 호출한 쪽(endMinigame/endMinigameDraw)이 바로 뒤이어 broadcastState()를 호출하므로 여기선
+  // 따로 broadcast하지 않는다.
 }
 function handlePuzzleChooseCrest(id, payload) {
   const session = match.poisonPuzzleSession;
@@ -1275,7 +1240,7 @@ function handleRewardUse(id, payload) {
 function checkRoundActionDone() {
   broadcastState();
   if (match.phase !== 'ROUND_ACTION') return;
-  const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN);
+  const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN || match.actionForfeited[pid]);
   if (!allDone) return;
   if (match.round >= CONFIG.ROUNDS_TOTAL) return endMatchByScore();
   // 전반 마지막 라운드가 끝나면 다음 라운드로 바로 넘어가지 않고, 처소 확장 + 중반 독 추가
@@ -1437,10 +1402,14 @@ function buildClientState(forId) {
     streakOwner: match.streak.winnerId == null ? null : (match.streak.winnerId === forId ? 'me' : 'opp'),
     streakCount: match.streak.count,
     // 처소 열기는 두 사람이 동시에 독립적으로 진행 — "내 턴"은 이제 "아직 이번 라운드 몫이 남았는가"를 뜻한다.
-    isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN,
-    opensRemaining: CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
-    oppOpensRemaining: oppId ? CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0) : null,
-    // 독배 슬라이딩 퍼즐 — 라운드/미니게임 단계와 무관하게(독립적으로 45초 실시간 타이머로) 뜨고,
+    isMyTurn: match.phase === 'ROUND_ACTION' && (match.actionOpens[forId] || 0) < CONFIG.OPENS_PER_TURN && !match.actionForfeited[forId],
+    opensRemaining: match.actionForfeited[forId] ? 0 : CONFIG.OPENS_PER_TURN - (match.actionOpens[forId] || 0),
+    oppOpensRemaining: oppId ? (match.actionForfeited[oppId] ? 0 : CONFIG.OPENS_PER_TURN - (match.actionOpens[oppId] || 0)) : null,
+    // "선택 안 하면 랜덤으로 안 골라졌으면 해" — 시간 초과로 이번 라운드 나머지 선택을 그냥
+    // 넘긴 경우를 "다 열었음"과 구분해서 보여주기 위한 플래그.
+    myActionForfeited: !!match.actionForfeited[forId],
+    oppActionForfeited: oppId ? !!match.actionForfeited[oppId] : false,
+    // 독배 슬라이딩 퍼즐 — 본행동 타이머와 같은 시간 동안 열리고(두 타이머 숫자가 항상 같다),
     // 오직 이 화면("게임" 화면)에만 보인다. 상대와 경쟁하는 경주가 아니라 각자 독립적인 개인전이라
     // 상대 진행상황은 아예 안 내려준다. 아직 문장을 안 골랐으면 tiles는 null(3개 중 고르는 화면),
     // 골랐으면 그 문장의 영구 진행상황(player.crestPuzzles)을 그대로 보여준다.

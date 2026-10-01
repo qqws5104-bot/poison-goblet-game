@@ -670,8 +670,9 @@ function tickBombTimer() {
   requestAnimationFrame(tickBombTimer);
 }
 // "장고 금지" 공통 타이머 — REFLEX/BOMB을 제외한 나머지 미니게임 타입 전부가 mg.deadlineAt을
-// 내려주므로, 종류에 상관없이 같은 배지 하나로 남은 시간을 보여준다. 시간이 다 되면 서버가
-// 알아서 무작위로 대신 결정하므로, 여기서는 그냥 숫자만 보여주면 된다(0 밑으로는 내려가지 않게).
+// 내려주므로, 종류에 상관없이 같은 배지 하나로 남은 시간을 보여준다. 시간이 다 되면 결정하지
+// 않은 쪽이 그 자리에서 즉시 패배(또는 양쪽 다 안 했으면 무승부) 처리되므로, 여기서는 그냥
+// 숫자만 보여주면 된다(0 밑으로는 내려가지 않게).
 let decisionTicking = false;
 function tickDecisionTimer() {
   const mg = lastState && lastState.minigame && lastState.minigame.public;
@@ -1442,7 +1443,13 @@ function renderPickView(state) {
   left.appendChild(buildRoomGrid(state.me.room, { pickMode, onOpen: (r, c) => socket.emit('action:open', { row: r, col: c }), flashRoom, peekCell }));
   if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 스페이스바를 누르면 그 자리에서 바로 철가방이 열립니다.'));
-  else if (!state.isMyTurn) left.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...' : '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.'));
+  else if (!state.isMyTurn) {
+    let msg;
+    if (state.myActionForfeited) msg = '⏱ 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘겼습니다.';
+    else if (state.oppOpensRemaining > 0) msg = '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...';
+    else msg = '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.';
+    left.appendChild(el('p', 'hint', msg));
+  }
   split.appendChild(left);
 
   const right = el('div', 'roomCrestRight');
@@ -1740,7 +1747,8 @@ function renderActionPanel(state) {
   }
   // 처소 열기는 두 사람이 동시에 각자 진행한다 — 서로 기다릴 필요 없이 바로 열면 된다.
   if (!state.isMyTurn) {
-    p.appendChild(el('p', 'badge', '✅ 이번 라운드 몫을 다 열었습니다.'));
+    // "선택 안 하면 랜덤으로 안 골라짐" — 시간 초과로 그냥 넘긴 경우를 "다 열었음"과 구분해서 보여준다.
+    p.appendChild(el('p', 'badge', state.myActionForfeited ? '⏱ 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘겼습니다.' : '✅ 이번 라운드 몫을 다 열었습니다.'));
     p.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? `상대는 아직 ${state.oppOpensRemaining}칸 더 열어야 합니다...` : '상대도 완료했습니다 — 다음 라운드로 넘어갑니다.'));
     return p;
   }
