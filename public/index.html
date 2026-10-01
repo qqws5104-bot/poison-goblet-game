@@ -19,6 +19,7 @@
       <ellipse class="cut" cx="17.6" cy="13.2" rx="0.8" ry="1"/>
       <rect class="cut" x="14.7" y="15.5" width="2.6" height="0.9" rx="0.3"/>
     </svg></span><span class="titleGlow">당신의 술잔에 독배를</span><span class="ver">— 왕위를 건 형제의 밀실 암투</span></h1>
+    <div id="scoreBar" class="scoreBar"></div>
     <div id="statusBar" class="statusBar"></div>
   </header>
 
@@ -27,11 +28,6 @@
       <p>서버에 접속 중...</p>
     </section>
   </main>
-
-  <!-- 독배 슬라이딩 퍼즐 — #app과 무관하게 화면 전체를 덮는 별도 오버레이. #app은 페이즈가
-       바뀔 때마다 innerHTML이 통째로 새로 그려지지만, 이 퍼즐은 페이즈와 무관하게(실시간
-       35초 타이머로) 떴다 사라져야 하므로 독립된 컨테이너로 둔다. -->
-  <div id="poisonPuzzleOverlay"></div>
 
   <footer>
     <div id="log" class="log"></div>

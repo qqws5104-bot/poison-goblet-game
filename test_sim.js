@@ -1,7 +1,11 @@
 // 자동 스모크 테스트: 두 개의 소켓 클라이언트로 전반 셋업(6×4) + 8라운드 + 중반 재설치
 // (독 추가 2칸 + 6×6 확장) + 후반 7라운드, 총 15라운드를 진행시켜 서버 로직이 예외 없이
-// 동작하는지, 10종 미니게임과 보상 시스템, 동적 문장(가문의 문장) 즉시승리 조건이 모두
+// 동작하는지, 9종 미니게임과 보상 시스템(철가방/한칸/가로줄/세로줄 정찰 + 협박 표식)이 모두
 // 정상 동작하는지 확인한다.
+// [2026-10-01] "암살 긴장감을 더 줘야 한다"는 피드백으로 독배와 무관한 가문의 문장 슬라이딩
+// 퍼즐을 완전히 삭제하면서, 이 테스트의 퍼즐 봇 로직(puzzleAdjFor/bfsNextMove/playPoisonPuzzle
+// 등)도 함께 제거했다 — 대신 신규 보상 "협박 표식"(MARK)을 자동으로 고르고 사용해보는 로직을
+// 추가했다.
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
@@ -34,83 +38,6 @@ let rewardUsed = { A: false, B: false };
 let rewardChosen = { A: false, B: false };
 let bankCandidates = { A: null, B: null };
 let bankRoundSeen = { A: null, B: null };
-
-// ---- 독배 슬라이딩 퍼즐(가문의 문장) 봇 로직 ----
-// A는 도전 창이 뜨면 항상 문장을 골라 끝까지 푼다. B는 "안 골라도 페널티가 없다"는 경로를
-// 확인하기 위해 처음 한 번은 일부러 무시하고, 그다음 세션부터는 정상적으로 도전한다.
-// 문장마다 격자 크기(2x2/2x3/3x3)가 다르므로, 인접 그래프도 서버와 동일하게 그때그때 만들어낸다.
-function puzzleAdjFor(shape) {
-  const { rows, cols } = shape;
-  const adj = { 0: [1] };
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const pos = 1 + r * cols + c;
-      const list = [];
-      if (r === 0 && c === 0) list.push(0);
-      if (c > 0) list.push(pos - 1);
-      if (c < cols - 1) list.push(pos + 1);
-      if (r > 0) list.push(pos - cols);
-      if (r < rows - 1) list.push(pos + cols);
-      adj[pos] = list;
-    }
-  }
-  return adj;
-}
-function puzzleSolved(tiles, shape) {
-  const blank = shape.rows * shape.cols;
-  return tiles.every((v, i) => v === (i === 0 ? blank : i - 1));
-}
-function bfsNextMove(tiles, shape) {
-  // 얕은 BFS로 "정답까지 가는 첫 수"만 구한다(정답판 자체가 200수 이내 셔플이라 얕게 찾아도 충분히 빠름).
-  const blank = shape.rows * shape.cols;
-  const adj = puzzleAdjFor(shape);
-  const startKey = tiles.join(',');
-  const seen = new Set([startKey]);
-  let frontier = [{ tiles, first: null }];
-  for (let depth = 0; depth < 60; depth++) {
-    const next = [];
-    for (const node of frontier) {
-      const blankPos = node.tiles.indexOf(blank);
-      for (const nb of adj[blankPos]) {
-        const t2 = node.tiles.slice();
-        [t2[blankPos], t2[nb]] = [t2[nb], t2[blankPos]];
-        const key = t2.join(',');
-        if (seen.has(key)) continue;
-        const first = node.first == null ? nb : node.first;
-        if (puzzleSolved(t2, shape)) return first;
-        seen.add(key);
-        next.push({ tiles: t2, first });
-      }
-    }
-    frontier = next;
-    if (!frontier.length) break;
-  }
-  return null;
-}
-let puzzleIgnoredOnce = { A: false, B: false };
-let puzzleSolvedCount = { A: 0, B: 0 };
-let puzzleMoveBusy = { A: false, B: false };
-function playPoisonPuzzle(label, socket, s) {
-  const pz = s.poisonPuzzle;
-  if (!pz) return;
-  if (!pz.myCrest) {
-    if (label === 'B' && !puzzleIgnoredOnce.B) {
-      puzzleIgnoredOnce.B = true;
-      console.log(`[PUZZLE] ${label} 일부러 이번 세션엔 문장을 고르지 않음(무페널티 경로 확인용)`);
-      return;
-    }
-    const choice = pz.crests[Math.floor(Math.random() * pz.crests.length)];
-    socket.emit('puzzle:chooseCrest', { crest: choice.key });
-    return;
-  }
-  if (pz.solved || puzzleMoveBusy[label]) return;
-  const shape = pz.shape || { rows: 3, cols: 3 };
-  const move = bfsNextMove(pz.tiles, shape);
-  if (move == null) return;
-  puzzleMoveBusy[label] = true;
-  socket.emit('puzzle:move', { pos: move });
-  setTimeout(() => { puzzleMoveBusy[label] = false; }, 15);
-}
 
 function allPermutations(n) {
   const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -188,11 +115,6 @@ function onState(label, socket, s) {
     setTimeout(() => doRandomAction(label, socket, s), 30);
   }
 
-  if (s.poisonPuzzle) {
-    if (s.poisonPuzzle.myCrest && s.poisonPuzzle.solved) puzzleSolvedCount[label] = puzzleSolvedCount[label] || 1;
-    setTimeout(() => playPoisonPuzzle(label, socket, s), 20);
-  }
-
   if (s.phase === 'ROUND_ACTION' && s.myReward && s.myReward.type && !s.myReward.used && !rewardUsed[label]) {
     rewardUsed[label] = true; // 라운드당 한 번만 시도(중복 emit 방지용 플래그, state 갱신시 아래에서 리셋)
     setTimeout(() => useReward(label, socket, s), 40 + Math.random() * 80);
@@ -205,9 +127,8 @@ function onState(label, socket, s) {
     // 미니게임이 10종이고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 10종이 전부
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
     console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9, max possible per match = min(9,ROUNDS_TOTAL))`);
-    console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
+    console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/5)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, gemsFound: s.me.gemsFound, gemsCompleted: s.me.gemsCompleted, gemsTotal: s.me.gemsTotal });
-    console.log('puzzle solved (' + label + '):', puzzleSolvedCount[label] || 0, '| B ignored-once fired:', puzzleIgnoredOnce.B);
     setTimeout(() => process.exit(0), 200);
   }
 }
@@ -234,6 +155,20 @@ function useReward(label, socket, s) {
     const cats = Object.keys(s.clueCatNames);
     const cat = cats[Math.floor(Math.random() * cats.length)];
     return socket.emit('reward:use', { targetType: cat });
+  }
+  if (r.type === 'MARK') {
+    // 협박 표식 — 상대 처소에서 서버가 내려주는 markTargets(찍을 수 있는 칸) 중 무작위로 하나 고른다.
+    const targets = s.markTargets;
+    if (!targets) return;
+    const candidates = [];
+    for (let rr = 0; rr < targets.length; rr++) {
+      for (let cc = 0; cc < targets[rr].length; cc++) {
+        if (targets[rr][cc]) candidates.push({ row: rr, col: cc });
+      }
+    }
+    if (!candidates.length) return; // 찍을 수 있는 칸이 하나도 없으면(거의 다 열렸거나 이미 다 표식됨) 포기
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    return socket.emit('reward:use', { row: pick.row, col: pick.col });
   }
 }
 

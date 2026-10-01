@@ -7,6 +7,7 @@ const APP_SLOT = ROUTE_MATCH ? ROUTE_MATCH[2] : null; // 'A' | 'B' | null
 const socket = APP_SLOT ? io({ query: { slot: APP_SLOT } }) : io();
 const app = document.getElementById('app');
 const statusBar = document.getElementById('statusBar');
+const scoreBar = document.getElementById('scoreBar');
 const logBox = document.getElementById('log');
 
 let lastState = null;
@@ -440,6 +441,12 @@ socket.on('rewardResult', (payload) => {
     lastRewardResult = text;
     lastRewardResultRound = lastState ? lastState.round : null;
   }
+  if (payload.kind === 'MARK') {
+    const text = `😨 협박 표식 — 상대 처소 (${payload.row + 1},${payload.col + 1})에 표식을 남겼습니다.`;
+    addLog(text);
+    lastRewardResult = text;
+    lastRewardResultRound = lastState ? lastState.round : null;
+  }
   render(lastState);
 });
 
@@ -731,131 +738,6 @@ function tickDiceFace() {
   requestAnimationFrame(tickDiceFace);
 }
 
-// ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
-// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 45초짜리 도전 창이 자동으로
-// 뜬다(팝업이 아니라 화면 한쪽에 계속 붙어있는 패널 형태) — "고르기"(pick) 화면에서는 페이즈와
-// 무관하게 세션이 살아있는 내내 보이고, "게임"(game) 화면과 레거시 단일화면에서는 ROUND_ACTION
-// 페이즈일 때만 보인다(그 화면들엔 미니게임/보상 모달도 뜨므로 겹치지 않게). 문장을 아직 안
-// 골랐으면 3개 중 하나를 고르는 화면을, 골랐으면 그 문장의 슬라이딩 퍼즐(격자 + 왼쪽 위 여분
-// 1칸, 문장마다 2x2/2x3/3x3로 크기가 다름)을 보여준다. 상대와 겨루는 게 아니라 각자 독립적인
-// 개인전이라 상대 진행상황은 아예 안 내려온다. #app의 페이즈 분기와 무관하게 항상 떠 있어야
-// 하므로 #app 밖의 독립된 오버레이 div를 직접 조작한다.
-let poisonPuzzleTicking = false;
-const POISON_PUZZLE_CREST_LABELS = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
-// 퍼즐판은 총 (rows*cols + 1)칸 — pos 0은 격자(pos 1~rows*cols, 가로쓰기 순서) 왼쪽 위 바깥에
-// 붙은 여분 칸이다. 문장마다 난이도(격자 크기)가 다르다(서버의 POISON_PUZZLE_CREST_SHAPE와
-// 동일해야 함 — 2x2/2x3/3x3). 조각 값의 "제 자리"는 격자 안 위치(그 값+1)이므로, 배경 자르기는
-// 항상 그 제자리 좌표 기준으로 계산한다(지금 어느 pos에 놓여 있는지와 무관하게 조각 자체의
-// 그림은 고정).
-function applyPuzzleTileBg(div, val, crest, shape) {
-  const { rows, cols } = shape;
-  const tr = Math.floor(val / cols), tc = val % cols;
-  div.style.backgroundImage = `url(/crest/${crest}_full.png)`;
-  div.style.backgroundSize = `${cols * 100}% ${rows * 100}%`;
-  div.style.backgroundPosition = `${cols > 1 ? (tc * 100) / (cols - 1) : 0}% ${rows > 1 ? (tr * 100) / (rows - 1) : 0}%`;
-}
-// 아직 문장을 안 고른 상태 — 3개 중 하나를 직접 고르는 화면.
-function buildPoisonPuzzleChoicePanel(pz) {
-  const panel = el('div', 'puzzlePanel choosing');
-  panel.appendChild(el('h3', null, '🧩 가문의 문장 — 도전할 문장을 고르세요'));
-  const timer = el('div', 'puzzleTimerBadge');
-  timer.id = 'poisonPuzzleTimer';
-  panel.appendChild(timer);
-  const list = el('div', 'puzzleCrestChoiceList');
-  pz.crests.forEach((c) => {
-    const label = POISON_PUZZLE_CREST_LABELS[c.key] || c.key;
-    const sizeTag = c.shape ? `${c.shape.rows}×${c.shape.cols}` : '';
-    // 텍스트만으로는 뭘 고르는지 안 와닿는다는 피드백 — 실제 문장 그림을 썸네일로 보여주고
-    // 그중 하고 싶은 걸 직접 고르게 한다. 문장마다 난이도(격자 크기)가 다르므로 같이 보여준다.
-    const b = el('button', 'puzzleCrestChoiceBtn' + (c.solved ? ' solved' : ''));
-    const thumb = el('div', 'puzzleCrestThumb');
-    thumb.style.backgroundImage = `url(/crest/${c.key}_full.png)`;
-    b.appendChild(thumb);
-    b.appendChild(el('div', 'puzzleCrestLabel', c.solved ? `✅ ${label}` : label));
-    if (sizeTag) b.appendChild(el('div', 'puzzleCrestSizeTag', sizeTag));
-    // "완료한 것은 클릭 안 되게" — 이미 완성한 문장은 다시 골라도 추가 점수가 없으니(실질적으로
-    // 할 일이 없으니), 아예 못 누르게 막는다.
-    b.disabled = !!c.solved;
-    if (!c.solved) b.onclick = () => socket.emit('puzzle:chooseCrest', { crest: c.key });
-    list.appendChild(b);
-  });
-  panel.appendChild(list);
-  // "선택 안하면 잠기진 않아" — 안 골라도 아무 페널티가 없다. 그냥 시간 안에 고르면 도전할
-  // 기회가 있다는 것만 안내한다.
-  panel.appendChild(el('p', 'hint', '시간 안에 고르지 않아도 페널티는 없습니다. 이미 완성한 문장은 다시 고를 수 없어요.'));
-  return panel;
-}
-// 화면 폭에 맞춰 퍼즐 타일 한 칸의 픽셀 크기를 정한다(좁은 화면에서 격자가 넘치지 않도록).
-function puzzleTileSizePx() {
-  return window.innerWidth <= 620 ? 58 : 72;
-}
-// 문장을 고른 뒤 — 실제 슬라이딩 퍼즐(격자 rows×cols + 왼쪽 위 여분 1칸).
-function buildPoisonPuzzleBoardPanel(pz) {
-  const resolved = !!pz.solved;
-  const shape = pz.shape || { rows: 3, cols: 3 };
-  const blankValue = shape.rows * shape.cols;
-  const panel = el('div', 'puzzlePanel' + (resolved ? ' won' : ''));
-  panel.appendChild(el('h3', null, `🧩 ${POISON_PUZZLE_CREST_LABELS[pz.myCrest] || '문장'} 맞추기 (${shape.rows}×${shape.cols})`));
-  const timer = el('div', 'puzzleTimerBadge');
-  timer.id = 'poisonPuzzleTimer';
-  panel.appendChild(timer);
-  const board = el('div', 'puzzleBoard');
-  const extraRow = el('div', 'puzzleExtraRow');
-  const grid = el('div', 'puzzleGrid');
-  const tilePx = puzzleTileSizePx();
-  grid.style.gridTemplateColumns = `repeat(${shape.cols}, ${tilePx}px)`;
-  grid.style.gridTemplateRows = `repeat(${shape.rows}, ${tilePx}px)`;
-  pz.tiles.forEach((val, pos) => {
-    const isBlank = !resolved && val === blankValue;
-    const div = el('div', 'puzzleTile' + (isBlank ? ' puzzleTileBlank' : ''));
-    if (!isBlank) {
-      applyPuzzleTileBg(div, val, pz.myCrest, shape);
-      if (!resolved) div.onclick = () => socket.emit('puzzle:move', { pos });
-    }
-    if (pos === 0) extraRow.appendChild(div);
-    else grid.appendChild(div);
-  });
-  board.appendChild(extraRow);
-  board.appendChild(grid);
-  panel.appendChild(board);
-  let hint = '왼쪽 위 여분 칸까지 활용해서 맞춰보세요 — 상대보다 먼저 맞추면 +3점, 상대가 이미 맞췄다면 +1점! 3개 문장을 모두 가장 먼저 다 맞추면 +5점 추가. 못 맞춰도 페널티는 없고, 다음에 또 고르면 지금 상태 그대로 이어집니다.';
-  if (resolved) hint = '이 문장은 이미 완성했습니다. (문장당 보너스는 완성 시점 1회만 지급됨)';
-  panel.appendChild(el('p', 'hint', hint));
-  return panel;
-}
-// [2026-10-01 최종 확정] "pick 화면에서는 안 떠야해" — 고르기(pick) 화면에는 더 이상 띄우지
-// 않는다. 게임(game) 화면과 레거시 단일화면(APP_ROLE===null)에서만, 그것도 ROUND_ACTION(술잔
-// 고르는 시간)일 때만 보여준다 — 그 화면엔 미니게임/보상 모달도 뜨므로, 그 모달들이 뜨는
-// ROUND_MINIGAME 등의 페이즈에는 겹치지 않게 숨긴다.
-// (주의: 이 화면 노출 규칙은 이번 세션에서만 pick-only → game+pick → pick-only 순으로 세 번
-// 바뀌었다. 또 바꾸기 전에 정말 최종인지 한 번 더 확인할 것.)
-function renderPoisonPuzzleOverlay(state) {
-  const holder = document.getElementById('poisonPuzzleOverlay');
-  if (!holder) return;
-  const pz = state.poisonPuzzle;
-  const hidden = !pz || APP_ROLE === 'pick' || state.phase !== 'ROUND_ACTION';
-  if (hidden) {
-    holder.innerHTML = '';
-    holder.className = '';
-    return;
-  }
-  holder.className = 'show';
-  holder.innerHTML = '';
-  holder.appendChild(pz.myCrest ? buildPoisonPuzzleBoardPanel(pz) : buildPoisonPuzzleChoicePanel(pz));
-  if (!poisonPuzzleTicking) { poisonPuzzleTicking = true; requestAnimationFrame(tickPoisonPuzzleTimer); }
-}
-function tickPoisonPuzzleTimer() {
-  const pz = lastState && lastState.poisonPuzzle;
-  const hidden = !pz || APP_ROLE === 'pick' || lastState.phase !== 'ROUND_ACTION';
-  if (hidden) { poisonPuzzleTicking = false; return; }
-  const timerEl = document.getElementById('poisonPuzzleTimer');
-  if (timerEl) {
-    const remaining = pz.deadlineAt - Date.now();
-    timerEl.textContent = `⏱ ${Math.max(0, Math.ceil(remaining / 1000))}초`;
-    timerEl.classList.toggle('timerLow', remaining <= 10000 && remaining > 0);
-  }
-  requestAnimationFrame(tickPoisonPuzzleTimer);
-}
 // 방금 끝난 미니게임의 승패(+ 와인잔 개수처럼 실제 정답이 궁금한 경우 정답 공개)를 ROUND_ACTION
 // 동안 잠깐 보여주는 패널. match.minigame은 다음 라운드 카운트다운이 시작되기 전까지 서버에
 // 그대로 남아있으므로, 그 값을 그대로 읽어서 보여주면 된다.
@@ -877,10 +759,42 @@ function renderLastMinigameRecap(state) {
   return p;
 }
 
+// 상단 정중앙 점수판 — 내 점수·상대 점수를 항상 실시간으로 보여준다. 로비(아직 me가 없는 상태)
+// 에서는 표시할 점수가 없으므로 비워둔다.
+// [2026-10-01] "암살 긴장감을 더 줘야 한다" — 점수가 벌어져 있으면 안심하고 쫄리지 않는다는
+// 피드백으로, 점수 차가 좁을 때(TENSE_SCORE_GAP 이하)는 점수판 자체가 붉게 박동하도록 긴장
+// 신호를 추가했다. 양쪽 다 긴장할 만큼 가까우면 같은 신호를 둘 다에게 보여준다.
+const TENSE_SCORE_GAP = 3;
+function renderScoreBar(state) {
+  if (!scoreBar) return;
+  if (!state.me) { scoreBar.innerHTML = ''; scoreBar.classList.remove('tense'); return; }
+  const myScore = state.me.score ?? 0;
+  const oppScore = state.opp && state.opp.score != null ? state.opp.score : 0;
+  scoreBar.innerHTML = `
+    <span class="scLabel">나</span><span class="scNum mine">${myScore}</span>
+    <span class="scSep">:</span>
+    <span class="scNum opp">${oppScore}</span><span class="scLabel">상대</span>
+  `;
+  scoreBar.classList.toggle('tense', Math.abs(myScore - oppScore) <= TENSE_SCORE_GAP);
+}
+
+// 독배를 마시는 순간의 리빌 연출 — 서버의 'drama' 이벤트('popup'과 별개)를 받아, 화면 전체가
+// 짧게 번쩍이고 흔들리게 한다. 마신 사람 본인(self)은 더 강하게, 지켜보는 상대(opp)는 더
+// 약하게 — "내가 암살당했다"와 "상대가 뭔가 마셨다"는 체감이 달라야 한다는 설계 의도.
+function triggerPoisonDrama(role) {
+  document.body.classList.remove('poisonFlashSelf', 'poisonFlashOpp');
+  // 같은 클래스를 바로 다시 붙여도 CSS 애니메이션이 재생되도록 한 프레임 쉬고 붙인다.
+  requestAnimationFrame(() => {
+    document.body.classList.add(role === 'self' ? 'poisonFlashSelf' : 'poisonFlashOpp');
+    setTimeout(() => document.body.classList.remove('poisonFlashSelf', 'poisonFlashOpp'), 650);
+  });
+}
+socket.on('drama', ({ kind, role }) => { if (kind === 'POISON') triggerPoisonDrama(role); });
+
 function render(state) {
   if (!state) return;
   renderStatusBar(state);
-  renderPoisonPuzzleOverlay(state); // #app과 무관한 독립 오버레이 — 페이즈 분기보다 먼저 처리
+  renderScoreBar(state);
   const phaseChanged = state.phase !== lastRenderedPhase;
   if (phaseChanged) {
     lastRenderedPhase = state.phase;
@@ -1271,8 +1185,9 @@ function renderStatsPanel(state) {
   mine.appendChild(statGrid(state.me, state.config));
   wrap.appendChild(mine);
 
-  // 상대의 점수/독/해독제 현황은 게임이 끝나기 전까지 비공개 — 서로의 패를 못 보게 하는 것이
-  // 이 게임의 핵심 재미이므로, 실시간으로 다 보여주지 않는다(최종 결과 화면에서만 공개).
+  // 상대의 독/해독제 현황(그리고 이 패널의 세부 점수 내역)은 게임이 끝나기 전까지 비공개 —
+  // 서로의 패를 못 보게 하는 것이 이 게임의 핵심 재미이므로, 세부 내용은 실시간으로 보여주지
+  // 않는다(최종 결과 화면에서만 공개). 단, 점수 "총점"만은 상단 점수판에 예외적으로 실시간 노출된다.
   if (state.opp) {
     const opp = el('div', 'col');
     opp.appendChild(el('h3', null, `상대 (${state.opp.name}) ${state.opp.connected ? '' : '<span class="hint">(연결 끊김)</span>'}`));
@@ -1353,6 +1268,11 @@ function buildRoomGrid(room, opts) {
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
         cell.classList.add('peekLit', opts.peekCell.type);
         cell.innerHTML = opts.peekCell.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(opts.peekCell.type);
+      } else if (data.marked) {
+        // 상대가 남긴 협박 표식 — 실제 정체는 전혀 모른 채, "누군가 여길 노려봤다"는 불안감만
+        // 보여준다(statDangerPulse로 계속 붉게 박동).
+        cell.classList.add('threatMark');
+        cell.innerHTML = '<span class="threatMarkIcon">❗</span>';
       } else {
         cell.textContent = '';
       }
@@ -1803,6 +1723,22 @@ function renderRewardPanel(state) {
       typeRow.appendChild(b);
     });
     box.appendChild(typeRow);
+  } else if (r.type === 'MARK') {
+    // 다른 세 보상과 반대로 "상대 처소"를 겨냥한다 — 어느 칸이 뭔지는 나도 전혀 모른다(기억이나
+    // 감으로 찍는 것). state.markTargets는 서버가 내려주는 "찍을 수 있는 칸" 마스크일 뿐,
+    // 내용물 정보는 전혀 들어있지 않다.
+    box.appendChild(el('div', 'desc', '😨 협박 표식 — 상대 처소의 아직 안 연 칸 하나를 찍으세요. 그 칸이 뭔지는 당신도 모릅니다 — 순전한 심리전입니다.'));
+    const grid = el('div', 'grid6 pickerGrid');
+    const targets = state.markTargets || [];
+    for (let rr = 0; rr < targets.length; rr++) {
+      for (let cc = 0; cc < (targets[rr] || []).length; cc++) {
+        const pickable = !!targets[rr][cc];
+        const cell = el('div', 'cell' + (pickable ? ' pickable' : ' lockedSpot'));
+        if (pickable) cell.onclick = () => socket.emit('reward:use', { row: rr, col: cc });
+        grid.appendChild(cell);
+      }
+    }
+    box.appendChild(grid);
   }
   p.appendChild(box);
   return p;

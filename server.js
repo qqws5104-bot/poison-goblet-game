@@ -24,10 +24,18 @@ const CONFIG = {
   SECOND_HALF_GEM_SIZES: [2, 2, 1], // 후반 확장분(2x6=12칸) 보석 구성 — 2조각 2개, 1조각 1개
   SECOND_HALF_ANTIDOTE_COUNT: 1,
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
-  POISON_PENALTY: 2,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -2점
-  POISON_PENALTY_MID: 3,  // 종료 시, 무효화되지 않은 "2차(중반 재설치)" 독 1개당 -3점 — 후반에 심는
+  // [2026-10-01] "암살 긴장감을 더 올려야 한다"는 피드백으로 독배 감점을 올렸다(2→3 / 3→5) —
+  // 독을 무효화하지 못하면 더 아프게 대가를 치러야 "암살당할 수도 있다"는 공포가 실감난다.
+  // 가문의 문장 퍼즐(독배와 무관한 병렬 미니게임)을 완전히 삭제하면서 빈 점수 배분(매치당 최대
+  // 14점)을 여기와 FULL_NEUTRALIZE_BONUS_PTS로 옮겨, 보상도 핵심 독배 루프 안에서만 나오게 했다.
+  POISON_PENALTY: 3,      // 종료 시, 무효화되지 않은 "1차(전반 셋업)" 독 1개당 -3점
+  POISON_PENALTY_MID: 5,  // 종료 시, 무효화되지 않은 "2차(중반 재설치)" 독 1개당 -5점 — 후반에 심는
                            // 독이 더 아파야 중반 재설치가 실제로 위협적으로 느껴진다는 피드백. 해독은
                            // (checkNeutralize에서) 항상 더 비싼 2차 독부터 자동으로 상쇄된다.
+  FULL_NEUTRALIZE_BONUS_PTS: 4, // 종료 시 독을 하나라도 마셨지만(poisonInitial+poisonMid 누적 발견 ≥1)
+                                 // 전부 해독해 최종 감점이 0인 경우의 "생환 보너스" — 독배를 들이켜고도
+                                 // 살아남았다는 긴장감의 보상. 독을 아예 안 마신 매치에는 주지 않는다
+                                 // (마신 적도 없이 자동으로 받는 보너스는 "암살 위기를 넘겼다"는 서사와 안 맞음).
   ROUNDS_FIRST_HALF: 8,   // 전반(6×4) 라운드 수
   ROUNDS_TOTAL: 15,       // 총 라운드 수(전반 8 + 후반 7)
   OPENS_PER_TURN: 2,      // 본행동: 내 턴마다 내 처소에서 열 술잔 개수
@@ -53,19 +61,11 @@ const CONFIG = {
   DICE_MAX_TIE_REPLAYS: 2, // 동점이면 이 횟수만큼 다시 굴린다 — 그래도 계속 동점이면 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
-  // 독배 슬라이딩 퍼즐(가문의 문장) — 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 3개 문장 중
-  // 하나를 직접 골라 풀면 처음 맞췄을 때 한정으로 보너스 점수를 받는다. 진행 상황은 문장별로
-  // 매치 내내 그대로 이어진다(다 못 맞추고 창이 닫혀도 다음에 같은 문장을 다시 고르면 이어서
-  // 풀 수 있다). "두 타이머 숫자가 서로 달라서 헷갈린다"는 피드백으로, 더 이상 독자적인 제한
-  // 시간을 따로 두지 않고 본행동 타이머(ROUND_ACTION_TIMER_MS/match.actionDeadlineAt)를 그대로
-  // 공유한다 — ensurePoisonPuzzleSession() 참고.
-  // 퍼즐판 크기는 이제 문장별로 다르다(POISON_PUZZLE_CREST_SHAPE 참고: 2x2/2x3/3x3) — 여기 고정값은 없음.
-  // [2026-10-01] "문장 먼저 맞추면 +3, 나중에 맞추면 +1, 먼저 3개 다 맞추면 +5로 하자" — 같은
-  // 이름의 문장이라도 두 사람은 각자 자기 퍼즐판을 푸는 것이므로(독립적인 개인전), 그 문장을
-  // 상대보다 먼저 완성하면 더 큰 보너스를 받는다.
-  POISON_PUZZLE_FIRST_PTS: 3, // 그 문장을 (상대보다) 먼저 완성했을 때
-  POISON_PUZZLE_LATER_PTS: 1, // 그 문장을 상대가 이미 먼저 완성한 뒤에 완성했을 때
-  POISON_PUZZLE_ALL_THREE_BONUS_PTS: 5, // 3개 문장을 전부 먼저 완성한 쪽에게 주는 추가 보너스(매치당 1명만)
+  // [2026-10-01] "독배로 암살한다는 긴장감을 더 줘야 한다"는 피드백으로, 독배와 무관하게 따로
+  // 떠 있던 가문의 문장 슬라이딩 퍼즐(개인전 미니게임)은 완전히 삭제했다. 대신 보상(정찰) 체계에
+  // 상대를 직접 심리적으로 흔드는 "협박 표식"(MARK, REWARD_TYPES 참고)을 추가해, 모든 상호작용이
+  // 독배 루프 안에서만 일어나게 했다.
+  MARK_USE_LIMIT: 2, // 협박 표식은 다른 보상(3회)보다 더 강력하므로 한 사람당 매치 전체에서 2회로 제한
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
 CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
@@ -122,12 +122,18 @@ const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸
 const CLUE_CATS = ['P', 'GEM', 'A'];
 const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제' };
 
-const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
+// [2026-10-01] "암살 긴장감을 더 줘야 한다" — 기존 4종은 전부 "내 처소를 들여다보는" 정찰
+// 일변도였다. MARK("협박 표식")를 추가해 처음으로 "상대 처소"에 직접 심리적 흔적을 남기는
+// 보상을 넣었다 — 내 칸이 아니라 상대가 아직 안 연 칸 하나를 겨냥해 불안감을 심는다(실제 정체는
+// 절대 새지 않음). 공격자도 그 칸의 정체를 모른 채(아는 척) 찍을 수도 있으므로 진짜/허세가 섞인
+// 기만 신호가 된다 — handleRewardUse의 MARK 분기, player.threatMarks 참고.
+const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT', 'MARK'];
 const REWARD_NAMES = {
   FLASH_ALL: '철가방 정찰 — 무작위 순간, 내 처소 전체가 뚜껑처럼 확 열렸다가 저절로 잠깐 드러남',
   PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
   ROW_COUNT: '가로줄 정찰 — 내 처소에서 종류 하나를 고르면, 현재 열려 있는 가로줄 전부에 몇 개씩 있는지 확인',
   COL_COUNT: '세로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 세로줄 전부에 몇 개씩 있는지 확인',
+  MARK: '협박 표식 — 상대 처소의 아직 안 연 칸 하나를 찍어 "누군가 노리고 있다"는 불안감을 심음(실제 정체는 새지 않음)',
 };
 
 // 밸런스 테스트 편의를 위해 환경변수로 숫자 설정값을 덮어쓸 수 있게 함
@@ -183,6 +189,9 @@ function newPlayer(id, name) {
     // 독은 언제 심어졌는지(1차/2차)에 따라 종료 시 감점이 다르므로 따로 센다 — 합계가 필요한
     // 곳(화면에 늘 보이는 총 독 개수 등)은 poisonTotal(player)로 구한다.
     poisonInitial: 0, poisonMid: 0, antidote: 0, score: 0, finalScore: null,
+    // 해독해서 poisonInitial/poisonMid가 줄어들어도 이 값은 절대 줄지 않는다 — "독을 마신 적이
+    // 있었는지"(생환 보너스 자격)를 끝까지 판별하기 위한 누적 카운터. endMatchByScore 참고.
+    poisonEverFound: 0,
     // 보석 registry — gemId → { size, cells: [{row,col}] }. 완성 여부/찾은 조각 수는 필요할 때마다
     // room의 opened 상태를 기준으로 바로 계산한다(따로 들고 다니지 않아도 항상 정확하다).
     gems: {},
@@ -190,11 +199,11 @@ function newPlayer(id, name) {
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
-    rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
-    // 독배 슬라이딩 퍼즐(가문의 문장) — 문장 키(crest1/2/3)별 진행 상황. 고른 적 없으면 키 자체가
-    // 없다(lazy). 다 못 맞추고 창이 닫혀도 tiles를 그대로 들고 있어서, 나중에 같은 문장을 다시
-    // 고르면 이어서 풀 수 있다("건든 상태 그대로 나두도록" 피드백).
-    crestPuzzles: {},
+    rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0, MARK: 0 },
+    // 상대가 "협박 표식"(MARK)을 내 처소 어느 칸에 남겼는지 — [{row,col}] (중복 좌표는 안 쌓임,
+    // 이미 연 칸엔 표식을 남길 수 없다). 내 칸의 실제 정체(type)는 전혀 새지 않고, 그 칸이
+    // "누군가 주목하고 있다"는 사실만 보여준다 — handleRewardUse의 MARK 분기 참고.
+    threatMarks: [],
   };
 }
 // 보석 하나(size=1|2|4)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
@@ -270,17 +279,6 @@ function freshMatch() {
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
     splitMode: false,
-    // 독배 슬라이딩 퍼즐(가문의 문장) — 진행 중인 도전 창(본행동 타이머와 같은 시간 동안 열림).
-    // 없으면 null. 각 플레이어의 실제 퍼즐 진행상황(tiles)은 세션이 아니라 player.crestPuzzles에
-    // 영구히 저장된다 — 이 세션 객체는 그저 "지금 창이 열려 있고, 누가 아직 문장을 안 골랐는지"만
-    // 추적한다.
-    poisonPuzzleSession: null,
-    // 문장별로 "누가 먼저 완성했는지"(매치 내내 유지, crest1~3 키) — 같은 이름의 문장도 두 사람이
-    // 각자 독립적으로 풀므로, 먼저 완성한 쪽만 더 큰 보너스(POISON_PUZZLE_FIRST_PTS)를 받고 나중에
-    // 완성한 쪽은 POISON_PUZZLE_LATER_PTS만 받는다. 값이 없으면 아직 아무도 그 문장을 안 끝냄.
-    puzzleFirstSolver: {},
-    // 3개 문장을 전부 먼저 끝낸 사람의 id — 매치당 한 번만 추가 보너스를 주기 위한 플래그.
-    puzzleAllThreeFirstId: null,
   };
 }
 let match = freshMatch();
@@ -292,6 +290,8 @@ const socketSlot = {};
 const slotSockets = { A: new Set(), B: new Set() };
 
 function otherId(id) { return match.order.find((x) => x !== id); }
+// 협박 표식(MARK)은 다른 정찰 보상(3회)보다 강력하므로 별도 한도(MARK_USE_LIMIT=2)를 쓴다.
+function rewardUseLimitFor(type) { return type === 'MARK' ? CONFIG.MARK_USE_LIMIT : CONFIG.REWARD_USE_LIMIT; }
 function poisonTotal(player) { return player.poisonInitial + player.poisonMid; }
 function poisonPenaltyTotal(player) { return player.poisonInitial * CONFIG.POISON_PENALTY + player.poisonMid * CONFIG.POISON_PENALTY_MID; }
 function log(msg) { match.log.push({ t: Date.now(), msg }); if (match.log.length > 300) match.log.shift(); io.emit('log', { msg }); }
@@ -660,9 +660,9 @@ function endMinigame(winnerId) {
 
   // "보상은 승자가 직접 고르는 구조로" — 이제 라운드 시작 전 보상이 미리 하나로 고정되지 않고,
   // 미니게임 승자가 후보 중 하나를 스스로 골라야 종류(type)가 정해진다. 단, 종류별로 이미
-  // REWARD_USE_LIMIT(3)번을 다 쓴 종류는 후보에서 빠진다 — 한 종류만 무한정 우려먹지 못하게.
+  // rewardUseLimitFor(t)번을 다 쓴 종류는 후보에서 빠진다 — 한 종류만 무한정 우려먹지 못하게.
   const winner = match.players[winnerId];
-  let availableTypes = REWARD_TYPES.filter((t) => (winner.rewardUses[t] || 0) < CONFIG.REWARD_USE_LIMIT);
+  let availableTypes = REWARD_TYPES.filter((t) => (winner.rewardUses[t] || 0) < rewardUseLimitFor(t));
   // 네 종류를 전부 다 써버린 극단적인 경우(이론상 라운드 수가 아주 많아야 가능)에는 선택지가
   // 텅 비는 것보다는, 그냥 모든 종류를 다시 후보로 열어주는 쪽이 안전하다.
   if (availableTypes.length === 0) availableTypes = REWARD_TYPES.slice();
@@ -682,7 +682,6 @@ function endMinigame(winnerId) {
   match.phase = 'ROUND_ACTION';
   log(`미니게임 승리: ${match.players[winnerId].name} → 보상을 직접 고릅니다.`);
   armActionTimer();
-  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 본행동과 같은 길이의 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -697,7 +696,6 @@ function endMinigameDraw() {
   match.streak = { winnerId: null, count: 0 }; // 무승부는 스트릭을 끊는다
   log('무승부 — 이번 라운드는 보상 없이 넘어갑니다.');
   armActionTimer();
-  ensurePoisonPuzzleSession(); // 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 자동으로 본행동과 같은 길이의 문장 도전 창을 연다(독배와 무관)
   broadcastState();
 }
 
@@ -963,6 +961,10 @@ function doAction(id, kind, payload) {
 
 function resolveOpen(id, player, row, col, cell) {
   cell.opened = true;
+  // 이 칸에 상대가 남겨둔 협박 표식이 있었다면, 더 이상 "안 연 칸"이 아니므로 표식도 함께 지운다.
+  if (player.threatMarks && player.threatMarks.length) {
+    player.threatMarks = player.threatMarks.filter((m) => !(m.row === row && m.col === col));
+  }
   const t = cell.type;
   actionLog(player, `술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
   if (t === 'P') {
@@ -971,6 +973,7 @@ function resolveOpen(id, player, row, col, cell) {
     // 있어 원래는 구분할 수 없는 정보다) — 그래서 여기서는 구체적인 감점 액수를 밝히지 않고,
     // 정확한 액수는 게임이 끝났을 때(최종 점수 내역)만 공개한다.
     if (cell.poisonWave === 2) player.poisonMid += 1; else player.poisonInitial += 1;
+    player.poisonEverFound += 1;
     actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     notifyPoisonDrink(id);
     checkNeutralize(id, player);
@@ -1031,165 +1034,18 @@ function notifyPoisonDrink(id) {
   const oppId = otherId(id);
   io.to(id).emit('popup', { text: '🍷 내가 독배를 마심!', tone: 'bad' });
   if (oppId) io.to(oppId).emit('popup', { text: `🍷 ${player.name}이(가) 독배를 마심!`, tone: 'warn' });
+  // [2026-10-01] "암살 긴장감을 더 줘야 한다" — 토스트 문구만으론 약하니, 독을 발견한 바로 그
+  // 순간 화면이 직접 반응하는 전용 이벤트를 추가한다('popup'과 별개로, 클라이언트가 화면 전체
+  // 플래시/흔들림 연출을 트리거하는 데만 쓴다). 마신 사람은 'self', 지켜보는 상대는 'opp'로
+  // 받아 서로 다른(더 약한) 연출을 보여줄 수 있게 구분한다.
+  io.to(id).emit('drama', { kind: 'POISON', role: 'self' });
+  if (oppId) io.to(oppId).emit('drama', { kind: 'POISON', role: 'opp', name: player.name });
 }
 function notifyNeutralize(id, count) {
   const player = match.players[id];
   const oppId = otherId(id);
   io.to(id).emit('popup', { text: `💊 해독제 ${count}개 발견으로 독을 해독!`, tone: 'good' });
   if (oppId) io.to(oppId).emit('popup', { text: `💊 상대가 해독제 ${count}개 발견으로 독을 해독!`, tone: 'info' });
-}
-
-// ------------------------- 독배 슬라이딩 퍼즐(가문의 문장, 개인전) -------------------------
-// 독배를 마셨는지와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 본행동 타이머와
-// 같은 길이의 도전 창이 자동으로 열린다(라운드마다 새로 연다). 그 안에서 각자 "가문의 문장"
-// 그림 3종(독수리 2x2/사자 2x3/용 3x3, public/crest/*_full.png) 중 하나를 직접 골라(+왼쪽 위
-// 여분 1칸) 슬라이딩 퍼즐에 도전한다. 상대와 경쟁하는 게 아니라 각자 독립적으로 자기 진행상황을
-// 쌓아가는 개인전이다 — 문장 하나를 "처음" 완성했을 때만 보너스 점수를 받는다(문장별 최초 1회).
-// 시간 안에 못 고르거나 못 다 맞춰도 아무 페널티가 없다(예전엔 안 고르면 처소 칸이 잠겼지만,
-// "선택 안하면 잠기는 페널티 없애자"는 피드백으로 완전히 제거됨). 다음에 같은 문장을 또 고르면
-// 두었던 자리 그대로 이어서 풀 수 있다(player.crestPuzzles에 영구 보관). 이 화면은 "게임" 화면
-// (APP_ROLE==='game', 그리고 APP_ROLE이 없는 레거시 단일화면)에서 ROUND_ACTION일 때만 보여준다
-// — "고르기"(pick) 화면에는 더 이상 보여주지 않는다.
-const POISON_PUZZLE_CRESTS = ['crest1', 'crest2', 'crest3'];
-const POISON_PUZZLE_CREST_NAMES = { crest1: '독수리 문장', crest2: '사자 문장', crest3: '용 문장' };
-// 문장마다 난이도(격자 크기)를 다르게 준다 — 독수리는 쉬운 2x2, 사자는 중간 2x3, 용은 원래의 3x3.
-const POISON_PUZZLE_CREST_SHAPE = {
-  crest1: { rows: 2, cols: 2 },
-  crest2: { rows: 2, cols: 3 },
-  crest3: { rows: 3, cols: 3 },
-};
-function puzzleShapeFor(crest) { return POISON_PUZZLE_CREST_SHAPE[crest] || { rows: 3, cols: 3 }; }
-// 퍼즐판은 총 (rows*cols + 1)칸 — 위치 0은 격자 왼쪽 위 바깥에 붙은 여분 칸(완성 시 빈칸이 쉬는
-// 자리), 위치 1~(rows*cols)이 실제 격자(가로쓰기 순서). 위치 0은 위치 1(격자의 왼쪽 위 칸)하고만
-// 붙어 있어서 오직 그 경계로만 조각이 드나든다. "정답을 맞출 수 있는 구조" 요청대로, 완성 상태에서는
-// 격자 칸이 전부 그림 조각으로 꽉 차고(빠짐없이 보임) 빈칸은 격자 밖 이 여분 칸에 가 있다.
-// rows/cols에 따라 인접 그래프를 그때그때 만들어낸다(3x3 전용으로 하드코딩했던 것을 일반화).
-function puzzleAdjFor(shape) {
-  const { rows, cols } = shape;
-  const adj = { 0: [1] };
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const pos = 1 + r * cols + c;
-      const list = [];
-      if (r === 0 && c === 0) list.push(0);
-      if (c > 0) list.push(pos - 1);
-      if (c < cols - 1) list.push(pos + 1);
-      if (r > 0) list.push(pos - cols);
-      if (r < rows - 1) list.push(pos + cols);
-      adj[pos] = list;
-    }
-  }
-  return adj;
-}
-function puzzleBlankValue(shape) { return shape.rows * shape.cols; } // 조각은 0~(rows*cols-1), 그 다음 수가 빈칸
-function puzzleSolvedTiles(shape) {
-  const blank = puzzleBlankValue(shape);
-  const tiles = [blank];
-  for (let i = 0; i < blank; i++) tiles.push(i);
-  return tiles;
-}
-function isPuzzleSolved(tiles, shape) {
-  const blank = puzzleBlankValue(shape);
-  return tiles.every((v, i) => v === (i === 0 ? blank : i - 1));
-}
-function shuffledPuzzleTiles(shape) {
-  const tiles = puzzleSolvedTiles(shape);
-  const adj = puzzleAdjFor(shape);
-  let blank = 0;
-  // 순열을 통째로 무작위로 뽑으면 절반은 원리적으로 풀 수 없는 배치가 나온다(홀짝성 문제).
-  // 완성 상태에서 "실제로 가능한 이동"만 거꾸로 반복해 섞으면 이 판 모양이 어떻든(2x2든 3x3이든)
-  // 항상 풀 수 있는 배치만 나온다(그래프 형태에 의존하지 않는 범용적인 방법).
-  for (let i = 0; i < 200; i++) {
-    const options = adj[blank];
-    const swapWith = options[randInt(0, options.length - 1)];
-    [tiles[blank], tiles[swapWith]] = [tiles[swapWith], tiles[blank]];
-    blank = swapWith;
-  }
-  return tiles;
-}
-// 독배와 무관하게, 술잔 고르는 시간(ROUND_ACTION)이 열릴 때마다 호출된다(항상 armActionTimer()
-// 바로 다음에 호출됨). "본행동 타이머랑 문장 도전 타이머 숫자가 서로 달라서 헷갈린다"는 피드백
-// 으로, 더 이상 독자적인 45초 창을 따로 열지 않고 이번 라운드의 본행동 제한시간
-// (match.actionDeadlineAt)을 그대로 가져다 써서 두 시계가 항상 똑같이 움직이게 한다 — 그래서
-// 라운드마다(매 호출마다) 새로 연다(이전 라운드 선택은 들고 가지 않는다). 각자 "이번 라운드에
-// 문장을 골랐는지"만 세션에 기록하고, 실제 퍼즐 진행상황(타일 배치)은 player.crestPuzzles에
-// 영구히 남는다(라운드가 바뀌어도, 다 못 풀고 창이 닫혀도 그대로 유지).
-function ensurePoisonPuzzleSession() {
-  const [a, b] = match.order;
-  match.poisonPuzzleSession = {
-    deadlineAt: match.actionDeadlineAt,
-    perPlayer: { [a]: { crest: null }, [b]: { crest: null } },
-  };
-  log('🧩 가문의 문장 도전 시간이 열렸습니다 — 이번 라운드 안에 문장 하나를 골라 맞추면 보너스 점수!');
-  // 안 골라도 페널티(칸 잠금)는 없다 — 그냥 라운드(ROUND_ACTION)가 끝나면 이번 창도 함께 닫힌다.
-  // 호출한 쪽(endMinigame/endMinigameDraw)이 바로 뒤이어 broadcastState()를 호출하므로 여기선
-  // 따로 broadcast하지 않는다.
-}
-function handlePuzzleChooseCrest(id, payload) {
-  const session = match.poisonPuzzleSession;
-  if (!session) return;
-  const pp = session.perPlayer[id];
-  if (!pp || pp.crest != null) return; // 세션 하나당 한 번만 고를 수 있음(중간에 바꾸기 없음)
-  const crest = payload && payload.crest;
-  if (!POISON_PUZZLE_CRESTS.includes(crest)) return;
-  const player = match.players[id];
-  // "완료한 것은 클릭 안 되게" — 클라이언트에서 버튼을 막아도, 혹시 모를 중복/낡은 요청에 대비해
-  // 서버에서도 이미 완성한 문장은 다시 고를 수 없게 한 번 더 막는다.
-  if (player.crestPuzzles[crest] && player.crestPuzzles[crest].solved) return;
-  pp.crest = crest;
-  if (!player.crestPuzzles[crest]) {
-    const shape = puzzleShapeFor(crest);
-    player.crestPuzzles[crest] = { tiles: shuffledPuzzleTiles(shape), solved: false };
-  }
-  log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[crest]}]을(를) 골라 도전합니다.`);
-  broadcastState();
-}
-function handlePuzzleMove(id, payload) {
-  const session = match.poisonPuzzleSession;
-  if (!session) return;
-  const pp = session.perPlayer[id];
-  if (!pp || pp.crest == null) return;
-  if (Date.now() > session.deadlineAt) return; // 서버가 최종 판단 — 클라 표시 지연에 기대지 않는다
-  const player = match.players[id];
-  const puzzle = player.crestPuzzles[pp.crest];
-  if (!puzzle || puzzle.solved) return;
-  const shape = puzzleShapeFor(pp.crest);
-  const adj = puzzleAdjFor(shape);
-  const maxPos = shape.rows * shape.cols; // 전체 슬롯은 0~maxPos
-  const pos = Number(payload && payload.pos);
-  if (!Number.isInteger(pos) || pos < 0 || pos > maxPos) return;
-  const tiles = puzzle.tiles;
-  const blank = tiles.indexOf(puzzleBlankValue(shape));
-  if (!adj[blank].includes(pos)) return; // 빈칸과 인접한 칸만 이동 가능
-  [tiles[blank], tiles[pos]] = [tiles[pos], tiles[blank]];
-  if (isPuzzleSolved(tiles, shape)) {
-    puzzle.solved = true;
-    // "문장 먼저 맞추면 +3, 나중에 맞추면 +1" — 같은 이름의 문장이라도 두 사람은 각자 독립된
-    // 퍼즐판을 풀고 있으므로, 그 문장을 상대보다 먼저 끝냈는지로 보너스 크기가 갈린다.
-    const crest = pp.crest;
-    const wasFirst = !match.puzzleFirstSolver[crest];
-    if (wasFirst) match.puzzleFirstSolver[crest] = id;
-    const pts = wasFirst ? CONFIG.POISON_PUZZLE_FIRST_PTS : CONFIG.POISON_PUZZLE_LATER_PTS;
-    player.score += pts;
-    const crestName = POISON_PUZZLE_CREST_NAMES[crest];
-    log(`${player.name}이(가) [${crestName}]을(를) ${wasFirst ? '상대보다 먼저' : '나중에'} 완성해 보너스 +${pts}점을 얻었습니다!`);
-    io.to(id).emit('popup', { text: `🧩 문장 완성! +${pts}점${wasFirst ? ' (선취)' : ''}`, tone: 'good' });
-    const oppId = otherId(id);
-    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 [${crestName}]을(를) 완성했습니다.`, tone: 'info' });
-
-    // "먼저 3개 다 맞추면 +5" — 매치 전체에서 가장 먼저 3개 문장을 모두 끝낸 사람에게만 1회 지급.
-    if (!match.puzzleAllThreeFirstId) {
-      const solvedAll = POISON_PUZZLE_CRESTS.every((c) => player.crestPuzzles[c] && player.crestPuzzles[c].solved);
-      if (solvedAll) {
-        match.puzzleAllThreeFirstId = id;
-        player.score += CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS;
-        log(`${player.name}이(가) 가문의 문장 3개를 모두 가장 먼저 완성해 추가 보너스 +${CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS}점을 얻었습니다!`);
-        io.to(id).emit('popup', { text: `🏆 문장 3개 모두 선(先)완성! +${CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS}점`, tone: 'good' });
-        if (oppId) io.to(oppId).emit('popup', { text: `🏆 상대가 가문의 문장 3개를 모두 먼저 완성했습니다.`, tone: 'info' });
-      }
-    }
-  }
-  broadcastState();
 }
 
 // 철가방 정찰(FLASH_ALL) 실제 발동 — 스페이스바(handleRewardUse)나 본행동 타이머 만료(안전장치)
@@ -1266,6 +1122,27 @@ function handleRewardUse(id, payload) {
     broadcastState();
     return;
   }
+  // 협박 표식(MARK) — 다른 4종과 반대로 "내 처소"가 아니라 상대 처소의 아직 안 연 칸 하나를
+  // 겨냥한다. 공격자도 그 칸의 실제 정체는 전혀 모른 채(기억이나 짐작으로만) 찍는 것이라 진짜
+  // 경고일 수도, 순전한 허세일 수도 있다 — 그래서 cell.type은 절대 건드리지 않고 opp.threatMarks
+  // 에만 좌표를 추가한다(실제 정체 유출 없음).
+  if (pr.type === 'MARK') {
+    const row = Number(payload.row), col = Number(payload.col);
+    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.ROWS_TOTAL || col < 0 || col >= CONFIG.GRID) return;
+    const targetCell = opp.room[row] && opp.room[row][col];
+    if (!targetCell || targetCell.locked || targetCell.opened) return;
+    if (!opp.threatMarks) opp.threatMarks = [];
+    if (opp.threatMarks.some((m) => m.row === row && m.col === col)) return; // 이미 표식이 있는 칸은 중복 금지
+    pr.used = true;
+    player.rewardUses.MARK = (player.rewardUses.MARK || 0) + 1;
+    opp.threatMarks.push({ row, col });
+    actionLog(player, `보상 사용 — 상대 처소 (${row + 1},${col + 1})에 협박 표식을 남겼습니다.`);
+    io.to(id).emit('rewardResult', { kind: 'MARK', row, col });
+    const oppId = otherId(id);
+    if (oppId) io.to(oppId).emit('popup', { text: '😨 누군가 내 처소 어딘가에 표식을 남겼다...', tone: 'warn' });
+    broadcastState();
+    return;
+  }
 }
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
@@ -1305,6 +1182,17 @@ function advanceAfterRoundAction() {
 function endMatchByScore() {
   const [a, b] = match.order;
   const pa = match.players[a], pb = match.players[b];
+  // "완전 해독 생환 보너스" — 독을 한 번이라도 마셨지만(poisonEverFound≥1) 끝까지 전부 해독해
+  // 최종 감점이 0이라면, 암살 위기를 넘겼다는 의미로 추가 점수를 준다. 독을 아예 안 마신
+  // 경우는 "위기 자체가 없었다"는 뜻이라 지급하지 않는다.
+  const survivalBonus = (p) => (p.poisonEverFound > 0 && poisonPenaltyTotal(p) === 0) ? CONFIG.FULL_NEUTRALIZE_BONUS_PTS : 0;
+  [pa, pb].forEach((p) => {
+    const bonus = survivalBonus(p);
+    if (bonus > 0) {
+      p.score += bonus;
+      log(`${p.name}이(가) 독배를 전부 해독해 완전 해독 생환 보너스 +${bonus}점을 얻었습니다!`);
+    }
+  });
   const finalize = (p) => p.score - poisonPenaltyTotal(p);
   const fa = finalize(pa), fb = finalize(pb);
   pa.finalScore = fa; pb.finalScore = fb;
@@ -1389,12 +1277,14 @@ function buildClientState(forId) {
   const me = match.players[forId];
   const oppId = otherId(forId);
   const opp = oppId ? match.players[oppId] : null;
-  const sanitizeRoom = (room, revealAll) =>
-    room.map((row) => row.map((cell) => ({
+  const sanitizeRoom = (ownerPlayer, revealAll) =>
+    ownerPlayer.room.map((row, r) => row.map((cell, c) => ({
       opened: cell.opened,
       locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
+      // 상대가 남긴 협박 표식 — 실제 정체(type)는 전혀 안 알려주고, "표식이 있다"는 사실만.
+      marked: !cell.opened && (ownerPlayer.threatMarks || []).some((m) => m.row === r && m.col === c),
       // 같은 보석의 조각끼리 묶어서 보여주기 위한 id — 실제로 공개된 보석 칸일 때만 내려준다.
       gemId: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemId : null,
       // 이 칸이 보석 전체에서 어느 조각(위/아래, 좌상/좌하/우상/우하 등)인지 — 옛 "가문의 문장"
@@ -1433,7 +1323,7 @@ function buildClientState(forId) {
       used: pr.used,
       choices: pr.type ? null : pr.choices.map((t) => ({
         type: t, name: REWARD_NAMES[t],
-        usesLeft: CONFIG.REWARD_USE_LIMIT - (me.rewardUses[t] || 0),
+        usesLeft: rewardUseLimitFor(t) - (me.rewardUses[t] || 0),
       })),
     } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
@@ -1449,29 +1339,13 @@ function buildClientState(forId) {
     // 넘긴 경우를 "다 열었음"과 구분해서 보여주기 위한 플래그.
     myActionForfeited: !!match.actionForfeited[forId],
     oppActionForfeited: oppId ? !!match.actionForfeited[oppId] : false,
-    // 독배 슬라이딩 퍼즐 — 본행동 타이머와 같은 시간 동안 열리고(두 타이머 숫자가 항상 같다),
-    // 오직 이 화면("게임" 화면)에만 보인다. 상대와 경쟁하는 경주가 아니라 각자 독립적인 개인전이라
-    // 상대 진행상황은 아예 안 내려준다. 아직 문장을 안 골랐으면 tiles는 null(3개 중 고르는 화면),
-    // 골랐으면 그 문장의 영구 진행상황(player.crestPuzzles)을 그대로 보여준다.
-    poisonPuzzle: (() => {
-      const session = match.poisonPuzzleSession;
-      if (!session) return null;
-      const pp = session.perPlayer[forId];
-      const myCrest = pp ? pp.crest : null;
-      const myPuzzle = myCrest ? me.crestPuzzles[myCrest] : null;
-      return {
-        deadlineAt: session.deadlineAt,
-        myCrest,
-        crests: POISON_PUZZLE_CRESTS.map((c) => ({
-          key: c,
-          solved: !!(me.crestPuzzles[c] && me.crestPuzzles[c].solved),
-          shape: puzzleShapeFor(c), // 문장마다 난이도(격자 크기)가 달라 선택 화면에도 크기를 보여준다
-        })),
-        shape: myCrest ? puzzleShapeFor(myCrest) : null,
-        tiles: myPuzzle ? myPuzzle.tiles.slice() : null,
-        solved: myPuzzle ? !!myPuzzle.solved : false,
-      };
-    })(),
+    // 협박 표식(MARK) 보상을 고른 뒤, 아직 어느 칸을 찍을지 안 정했을 때만 내려준다 — 상대 처소의
+    // "찍을 수 있는 칸"(안 잠기고, 안 열리고, 아직 표식도 없는 칸) 마스크만 알려주고 내용물은
+    // 전혀 알려주지 않는다(공격자도 모른 채 찍는 것이 이 보상의 핵심).
+    markTargets: (pr && pr.winnerId === forId && pr.type === 'MARK' && !pr.used && opp)
+      ? opp.room.map((row, r) => row.map((cell, c) =>
+          !cell.locked && !cell.opened && !(opp.threatMarks || []).some((m) => m.row === r && m.col === c)))
+      : null,
     // 세트 구조(3세트x4조각) 자체는 이제 공개 정보지만, 어느 칸에 무슨 조각이 있는지는 여전히
     // 비공개다. 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/
     // poisonMid — 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
@@ -1483,18 +1357,20 @@ function buildClientState(forId) {
       gemsFound: gemSummary(me).piecesFound,
       gemsCompleted: gemSummary(me).completed,
       gemsTotal: CONFIG.GEM_PIECES_TOTAL,
-      room: sanitizeRoom(me.room, match.phase === 'END'),
+      room: sanitizeRoom(me, match.phase === 'END'),
       history: me.history || [],
     },
-    // 상대의 점수/독/해독제/처소는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다
+    // 상대의 독/해독제/처소는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다
     // (콘솔로 훔쳐보기 방지). 4대 분리 모드에서도 "고르기" 화면은 이제 본인 처소만 보여주므로,
     // 레거시 2인 모드와 동일하게 상대 처소는 계속 비공개다 — "서로 뭘 골랐는지"는 화면을
     // 소프트웨어로 합쳐 보여주는 대신, 컴퓨터를 마주보게 배치하는 물리적 방식으로 해결한다.
     // MID_SETUP 동안만은 예외로, 상대 처소의 "이미 열렸는지 여부/이미 뭔가 있는지"만(내용은 여전히
     // 비공개) 알려줘야 중반 독 추가 설치에서 고를 수 없는 칸을 화면에서 걸러줄 수 있다.
+    // 단, 점수(score)는 상단 점수판 요청에 따라 예외적으로 실시간 공개한다 — 독/해독제/처소
+    // 내용은 여전히 비공개이므로 "패를 읽는" 추리 재미 자체는 유지된다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, gems: gemSummary(opp).gems, gemsFound: gemSummary(opp).piecesFound, gemsCompleted: gemSummary(opp).completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
-      : { name: opp.name, connected: opp.connected, room: null }),
+      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, gems: gemSummary(opp).gems, gemsFound: gemSummary(opp).piecesFound, gemsCompleted: gemSummary(opp).completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL, connected: opp.connected, room: sanitizeRoom(opp, true) }
+      : { name: opp.name, connected: opp.connected, room: null, score: opp.score }),
     oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     // 상대 처소에서 "이미 뭔가 있어(독/보석/해독제) 중반 독 추가 대상이 될 수 없는 칸"까지 함께
     // 알려준다 — 내용물이 무엇인지는 여전히 비공개, 오직 "고를 수 없다"는 사실만.
@@ -1622,10 +1498,6 @@ function buildAdminState() {
       confirmed: !!match.midSetupSelections[id],
       cells: match.midSetupSelections[id] || [],
     })) : null,
-    poisonPuzzle: match.poisonPuzzleSession ? {
-      deadlineAt: match.poisonPuzzleSession.deadlineAt,
-      choices: match.order.map((id) => ({ name: match.players[id].name, crest: match.poisonPuzzleSession.perPlayer[id].crest })),
-    } : null,
     players: match.order.map((id) => {
       const p = match.players[id];
       const gs = gemSummary(p);
@@ -1635,6 +1507,7 @@ function buildAdminState() {
         poison: poisonTotal(p), poisonInitial: p.poisonInitial, poisonMid: p.poisonMid, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
         gems: gs.gems, gemsFound: gs.piecesFound, gemsCompleted: gs.completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL,
         opens: match.actionOpens[id] || 0,
+        threatMarks: p.threatMarks || [],
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
         room: p.room.map((row) => row.map((cell) => ({
@@ -1767,8 +1640,6 @@ io.on('connection', (socket) => {
 
   socket.on('minigame:move', (payload) => handleMinigameMove(slot, payload || {}));
   socket.on('action:open', (p) => doAction(slot, 'OPEN', p || {}));
-  socket.on('puzzle:chooseCrest', (p) => handlePuzzleChooseCrest(slot, p || {}));
-  socket.on('puzzle:move', (p) => handlePuzzleMove(slot, p || {}));
   socket.on('reward:use', (p) => handleRewardUse(slot, p || {}));
   socket.on('reward:choose', (p) => handleRewardChoose(slot, p || {}));
   socket.on('rematch:ready', () => handleRematchReady(slot));
