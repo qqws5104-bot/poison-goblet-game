@@ -818,8 +818,8 @@ function buildPoisonPuzzleBoardPanel(pz) {
   board.appendChild(extraRow);
   board.appendChild(grid);
   panel.appendChild(board);
-  let hint = '왼쪽 위 여분 칸까지 활용해서 맞춰보세요 — 다 맞추면 처음 한 번만 보너스 점수! 못 맞춰도 페널티는 없고, 다음에 또 고르면 지금 상태 그대로 이어집니다.';
-  if (resolved) hint = '이 문장은 이미 완성했습니다. (보너스는 문장당 최초 1회)';
+  let hint = '왼쪽 위 여분 칸까지 활용해서 맞춰보세요 — 상대보다 먼저 맞추면 +3점, 상대가 이미 맞췄다면 +1점! 3개 문장을 모두 가장 먼저 다 맞추면 +5점 추가. 못 맞춰도 페널티는 없고, 다음에 또 고르면 지금 상태 그대로 이어집니다.';
+  if (resolved) hint = '이 문장은 이미 완성했습니다. (문장당 보너스는 완성 시점 1회만 지급됨)';
   panel.appendChild(el('p', 'hint', hint));
   return panel;
 }
@@ -1444,10 +1444,13 @@ function renderPickView(state) {
   if (pickMode) left.appendChild(el('p', 'hint', `열고 싶은 칸을 클릭하세요. (이번 턴에 ${state.opensRemaining}개 더 열 수 있습니다)`));
   else if (waitingForFlash) left.appendChild(el('p', 'hint', '🍱 스페이스바를 누르면 그 자리에서 바로 철가방이 열립니다.'));
   else if (!state.isMyTurn) {
+    // [2026-10-01] "둘 다 칸 열기를 마쳐도 문장 퍼즐 시간이 남았으면 화면이 안 바뀌었으면 해" —
+    // 이제 둘 다 마쳐도 곧바로 다음 라운드로 넘어가지 않고, 본행동 타이머(=문장 퍼즐 타이머)가
+    // 다 될 때까지 이 화면 그대로 유지된다.
     let msg;
     if (state.myActionForfeited) msg = '⏱ 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘겼습니다.';
     else if (state.oppOpensRemaining > 0) msg = '✅ 이번 라운드 몫을 다 열었습니다. 상대를 기다리는 중...';
-    else msg = '✅ 양쪽 모두 완료 — 다음 라운드로 넘어갑니다.';
+    else msg = '✅ 양쪽 모두 완료 — 라운드 시간이 끝날 때까지 잠시만 기다려주세요.';
     left.appendChild(el('p', 'hint', msg));
   }
   split.appendChild(left);
@@ -1749,7 +1752,7 @@ function renderActionPanel(state) {
   if (!state.isMyTurn) {
     // "선택 안 하면 랜덤으로 안 골라짐" — 시간 초과로 그냥 넘긴 경우를 "다 열었음"과 구분해서 보여준다.
     p.appendChild(el('p', 'badge', state.myActionForfeited ? '⏱ 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘겼습니다.' : '✅ 이번 라운드 몫을 다 열었습니다.'));
-    p.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? `상대는 아직 ${state.oppOpensRemaining}칸 더 열어야 합니다...` : '상대도 완료했습니다 — 다음 라운드로 넘어갑니다.'));
+    p.appendChild(el('p', 'hint', state.oppOpensRemaining > 0 ? `상대는 아직 ${state.oppOpensRemaining}칸 더 열어야 합니다...` : '상대도 완료했습니다 — 라운드 시간이 끝날 때까지 잠시만 기다려주세요.'));
     return p;
   }
   p.appendChild(el('p', 'badge turn', `왼쪽 "내 처소"에서 열고 싶은 칸 ${state.opensRemaining}개를 고르세요 (상대와 동시에 진행됩니다)`));

@@ -60,7 +60,12 @@ const CONFIG = {
   // 시간을 따로 두지 않고 본행동 타이머(ROUND_ACTION_TIMER_MS/match.actionDeadlineAt)를 그대로
   // 공유한다 — ensurePoisonPuzzleSession() 참고.
   // 퍼즐판 크기는 이제 문장별로 다르다(POISON_PUZZLE_CREST_SHAPE 참고: 2x2/2x3/3x3) — 여기 고정값은 없음.
-  POISON_PUZZLE_BONUS_PTS: 3, // 문장 하나를 처음으로 완성했을 때 받는 보너스 점수(문장별 최초 1회만)
+  // [2026-10-01] "문장 먼저 맞추면 +3, 나중에 맞추면 +1, 먼저 3개 다 맞추면 +5로 하자" — 같은
+  // 이름의 문장이라도 두 사람은 각자 자기 퍼즐판을 푸는 것이므로(독립적인 개인전), 그 문장을
+  // 상대보다 먼저 완성하면 더 큰 보너스를 받는다.
+  POISON_PUZZLE_FIRST_PTS: 3, // 그 문장을 (상대보다) 먼저 완성했을 때
+  POISON_PUZZLE_LATER_PTS: 1, // 그 문장을 상대가 이미 먼저 완성한 뒤에 완성했을 때
+  POISON_PUZZLE_ALL_THREE_BONUS_PTS: 5, // 3개 문장을 전부 먼저 완성한 쪽에게 주는 추가 보너스(매치당 1명만)
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
 CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
@@ -270,6 +275,12 @@ function freshMatch() {
     // 영구히 저장된다 — 이 세션 객체는 그저 "지금 창이 열려 있고, 누가 아직 문장을 안 골랐는지"만
     // 추적한다.
     poisonPuzzleSession: null,
+    // 문장별로 "누가 먼저 완성했는지"(매치 내내 유지, crest1~3 키) — 같은 이름의 문장도 두 사람이
+    // 각자 독립적으로 풀므로, 먼저 완성한 쪽만 더 큰 보너스(POISON_PUZZLE_FIRST_PTS)를 받고 나중에
+    // 완성한 쪽은 POISON_PUZZLE_LATER_PTS만 받는다. 값이 없으면 아직 아무도 그 문장을 안 끝냄.
+    puzzleFirstSolver: {},
+    // 3개 문장을 전부 먼저 끝낸 사람의 id — 매치당 한 번만 추가 보너스를 주기 위한 플래그.
+    puzzleAllThreeFirstId: null,
   };
 }
 let match = freshMatch();
@@ -517,6 +528,10 @@ function armBankTimer(mg) {
 // 다음으로 진행되게 한다(그래야 한쪽이 고르지 않아도 상대가 계속 묶여 있지 않는다). 철가방
 // 정찰(FLASH_ALL)을 고르고도 아직 터뜨리지 않은 상태라면, doAction()이 칸 열기 자체를 막고
 // 있으므로 그것만은 예외적으로 대신 터뜨려준다(안 그러면 그 라운드 내내 아예 못 열게 됨).
+// [2026-10-01] "둘 다 칸 열기를 마쳐도, 문장 퍼즐 시간이 남았으면 화면이 안 바뀌었으면 해" —
+// 이제 이 타이머가 유일하게 ROUND_ACTION을 끝내는 지점이다(checkRoundActionDone()은 더 이상
+// 둘 다 마쳤다고 먼저 다음 단계로 넘기지 않음). 그래서 매 라운드는 둘 다 칸을 금방 다 열어도
+// 항상 이 타이머(= 문장 퍼즐 타이머와 공유하는 시각)가 다 될 때까지 유지된다.
 function armActionTimer() {
   const roundAtArm = match.round;
   match.actionDeadlineAt = Date.now() + CONFIG.ROUND_ACTION_TIMER_MS;
@@ -535,7 +550,7 @@ function armActionTimer() {
       log(`${player.name}이(가) 시간 안에 다 고르지 못해 이번 라운드 나머지 선택을 넘깁니다.`);
       match.actionForfeited[id] = true;
     }
-    checkRoundActionDone();
+    advanceAfterRoundAction();
   }, CONFIG.ROUND_ACTION_TIMER_MS);
 }
 
@@ -1149,11 +1164,30 @@ function handlePuzzleMove(id, payload) {
   [tiles[blank], tiles[pos]] = [tiles[pos], tiles[blank]];
   if (isPuzzleSolved(tiles, shape)) {
     puzzle.solved = true;
-    player.score += CONFIG.POISON_PUZZLE_BONUS_PTS;
-    log(`${player.name}이(가) [${POISON_PUZZLE_CREST_NAMES[pp.crest]}]을(를) 완성해 보너스 +${CONFIG.POISON_PUZZLE_BONUS_PTS}점을 얻었습니다!`);
-    io.to(id).emit('popup', { text: `🧩 문장 완성! +${CONFIG.POISON_PUZZLE_BONUS_PTS}점`, tone: 'good' });
+    // "문장 먼저 맞추면 +3, 나중에 맞추면 +1" — 같은 이름의 문장이라도 두 사람은 각자 독립된
+    // 퍼즐판을 풀고 있으므로, 그 문장을 상대보다 먼저 끝냈는지로 보너스 크기가 갈린다.
+    const crest = pp.crest;
+    const wasFirst = !match.puzzleFirstSolver[crest];
+    if (wasFirst) match.puzzleFirstSolver[crest] = id;
+    const pts = wasFirst ? CONFIG.POISON_PUZZLE_FIRST_PTS : CONFIG.POISON_PUZZLE_LATER_PTS;
+    player.score += pts;
+    const crestName = POISON_PUZZLE_CREST_NAMES[crest];
+    log(`${player.name}이(가) [${crestName}]을(를) ${wasFirst ? '상대보다 먼저' : '나중에'} 완성해 보너스 +${pts}점을 얻었습니다!`);
+    io.to(id).emit('popup', { text: `🧩 문장 완성! +${pts}점${wasFirst ? ' (선취)' : ''}`, tone: 'good' });
     const oppId = otherId(id);
-    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 가문의 문장을 완성했습니다.`, tone: 'info' });
+    if (oppId) io.to(oppId).emit('popup', { text: `🧩 상대가 [${crestName}]을(를) 완성했습니다.`, tone: 'info' });
+
+    // "먼저 3개 다 맞추면 +5" — 매치 전체에서 가장 먼저 3개 문장을 모두 끝낸 사람에게만 1회 지급.
+    if (!match.puzzleAllThreeFirstId) {
+      const solvedAll = POISON_PUZZLE_CRESTS.every((c) => player.crestPuzzles[c] && player.crestPuzzles[c].solved);
+      if (solvedAll) {
+        match.puzzleAllThreeFirstId = id;
+        player.score += CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS;
+        log(`${player.name}이(가) 가문의 문장 3개를 모두 가장 먼저 완성해 추가 보너스 +${CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS}점을 얻었습니다!`);
+        io.to(id).emit('popup', { text: `🏆 문장 3개 모두 선(先)완성! +${CONFIG.POISON_PUZZLE_ALL_THREE_BONUS_PTS}점`, tone: 'good' });
+        if (oppId) io.to(oppId).emit('popup', { text: `🏆 상대가 가문의 문장 3개를 모두 먼저 완성했습니다.`, tone: 'info' });
+      }
+    }
   }
   broadcastState();
 }
@@ -1235,13 +1269,19 @@ function handleRewardUse(id, payload) {
 }
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
-// 처소 열기는 두 사람이 각자 동시에 진행하므로, 한 명이 칸을 열 때마다 이 함수로 상태를 갱신하고
-// 두 사람 모두 이번 라운드 몫(OPENS_PER_TURN)을 다 열었을 때만 다음 라운드로 넘어간다.
+// 처소 열기는 두 사람이 각자 동시에 진행하므로, 한 명이 칸을 열 때마다 이 함수로 상태를 갱신한다.
+// [2026-10-01] "둘 다 칸 열기를 마쳐도 문장 퍼즐 시간이 남았으면 화면이 안 바뀌었으면 해" 피드백
+// 으로, 더 이상 여기서 "둘 다 마쳤으니 바로 다음 단계로" 넘기지 않는다 — 다음 단계로의 전환은
+// armActionTimer()의 타이머가 끝나는 시점(advanceAfterRoundAction())에서만 일어난다. 그래서 이제
+// 매 라운드는 둘 다 금방 다 열어도 본행동 타이머(=문장 퍼즐 타이머)가 끝날 때까지 항상 유지된다.
 function checkRoundActionDone() {
   broadcastState();
+}
+
+// 본행동(ROUND_ACTION) 타이머가 끝나는 시점에만 호출된다 — 이 시점엔 armActionTimer()가 못 다
+// 연 나머지를 전부 "포기(forfeit)" 처리해둔 뒤이므로, 두 사람 다 항상 "마쳤거나 포기함" 상태다.
+function advanceAfterRoundAction() {
   if (match.phase !== 'ROUND_ACTION') return;
-  const allDone = match.order.length === 2 && match.order.every((pid) => (match.actionOpens[pid] || 0) >= CONFIG.OPENS_PER_TURN || match.actionForfeited[pid]);
-  if (!allDone) return;
   if (match.round >= CONFIG.ROUNDS_TOTAL) return endMatchByScore();
   // 전반 마지막 라운드가 끝나면 다음 라운드로 바로 넘어가지 않고, 처소 확장 + 중반 독 추가
   // 설치(MID_SETUP)를 먼저 거친다.
