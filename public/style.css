@@ -98,13 +98,6 @@ button { font-family: inherit; cursor: pointer; }
   75% { transform: translate(-2px, 1px); }
 }
 
-/* 협박 표식(MARK 보상) — 상대가 내 처소 어딘가에 남긴 심리적 흔적. 실제 정체는 전혀 몰라도
-   되므로 일반 "clued"(금색, 아는 정보)와는 다르게 crimson으로 위협적인 느낌을 준다. */
-.cell.threatMark {
-  border: 2px dashed var(--crimson-bright);
-  animation: statDangerPulse 1300ms ease-in-out infinite;
-}
-.threatMarkIcon { font-size: 18px; filter: drop-shadow(0 0 4px rgba(209,66,90,0.8)); }
 .topbar h1 { display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
 .topbar .crownIcon {
   width: 30px; height: 30px; flex: none; display: inline-block;

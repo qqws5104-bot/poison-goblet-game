@@ -11,17 +11,20 @@ const CONFIG = {
   GRID: 6,                // 가로(열) 칸 수는 항상 6
   ROWS_FIRST_HALF: 4,     // 전반전에 활성화된 줄 수 — 6×4 = 24칸
   ROWS_TOTAL: 6,          // 후반전에 확장된 뒤의 전체 줄 수 — 6×6 = 36칸
-  // 보석찾기 — 동그란 보석(1칸, 즉시 완성) · 긴 보석(세로로 붙은 2칸) · 네모난 보석(2x2, 4칸)
-  // 세 가지 모양이 처소 안에 무작위로 흩뿌려진다. 조각을 "발견"(칸을 여는 순간)하면 그 즉시
-  // +GEM_PIECE_PTS를 받고, 같은 보석의 나머지 조각까지 전부 다 찾아 완성하면 조각 점수와는
-  // 별개로 크기 × GEM_COMPLETE_BONUS_PER_PIECE 만큼 추가 보너스를 더 받는다(예: 4조각 보석을
-  // 완성하면 조각당 +1씩 4점 + 완성 보너스 4점 = 총 8점). 여러 칸짜리 보석의 첫 조각을 찾으면
-  // 나머지 조각이 어느 방향(위/아래/좌/우)에 붙어 있는지 즉시 알려준다.
+  // 보석찾기 — 동그란 보석(1칸, 즉시 완성) · 긴 보석(세로로 붙은 2칸) 두 가지 모양이 처소 안에
+  // 무작위로 흩뿌려진다. 조각을 "발견"(칸을 여는 순간)하면 그 즉시 +GEM_PIECE_PTS를 받고, 같은
+  // 보석의 나머지 조각까지 전부 다 찾아 완성하면 조각 점수와는 별개로 크기 ×
+  // GEM_COMPLETE_BONUS_PER_PIECE 만큼 추가 보너스를 더 받는다(예: 2조각 보석을 완성하면 조각당
+  // +1씩 2점 + 완성 보너스 2점 = 총 4점). 2칸짜리 보석의 첫 조각을 찾으면 나머지 조각이 어느
+  // 방향(위/아래/좌/우)에 붙어 있는지 즉시 알려준다.
+  // [2026-10-01] "보석 개수도 너무 많고 크기도 너무 많다"는 피드백으로, 가장 크고 복잡한
+  // 네모난 보석(2x2, 4칸)을 없애고 전체 개수도 줄였다(전반 6개→4개, 후반 3개→2개) — 독배
+  // 암투에 집중하도록 "보물찾기" 비중을 낮추는 방향.
   GEM_PIECE_PTS: 1,
   GEM_COMPLETE_BONUS_PER_PIECE: 1,
-  FIRST_HALF_GEM_SIZES: [4, 2, 2, 1, 1, 1], // 전반(6x4) 보석 구성 — 4조각 1개, 2조각 2개, 1조각 3개
+  FIRST_HALF_GEM_SIZES: [2, 2, 1, 1], // 전반(6x4) 보석 구성 — 2조각 2개, 1조각 2개
   FIRST_HALF_ANTIDOTE_COUNT: 5, // 전반에서 보석을 뺀 나머지 칸 중 해독제로 채울 개수(나머지는 빈 칸)
-  SECOND_HALF_GEM_SIZES: [2, 2, 1], // 후반 확장분(2x6=12칸) 보석 구성 — 2조각 2개, 1조각 1개
+  SECOND_HALF_GEM_SIZES: [2, 1], // 후반 확장분(2x6=12칸) 보석 구성 — 2조각 1개, 1조각 1개
   SECOND_HALF_ANTIDOTE_COUNT: 1,
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   // [2026-10-01] "암살 긴장감을 더 올려야 한다"는 피드백으로 독배 감점을 올렸다(2→3 / 3→5) —
@@ -62,10 +65,9 @@ const CONFIG = {
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
   // [2026-10-01] "독배로 암살한다는 긴장감을 더 줘야 한다"는 피드백으로, 독배와 무관하게 따로
-  // 떠 있던 가문의 문장 슬라이딩 퍼즐(개인전 미니게임)은 완전히 삭제했다. 대신 보상(정찰) 체계에
-  // 상대를 직접 심리적으로 흔드는 "협박 표식"(MARK, REWARD_TYPES 참고)을 추가해, 모든 상호작용이
-  // 독배 루프 안에서만 일어나게 했다.
-  MARK_USE_LIMIT: 2, // 협박 표식은 다른 보상(3회)보다 더 강력하므로 한 사람당 매치 전체에서 2회로 제한
+  // 떠 있던 가문의 문장 슬라이딩 퍼즐(개인전 미니게임)은 완전히 삭제했다. 보상(정찰) 체계에
+  // "협박 표식"(상대 처소에 직접 흔적을 남기는 기만 보상)을 한때 추가했으나 "어울리지 않는다"는
+  // 피드백으로 다시 뺐다 — 보상은 기존 4종(철가방/한칸/가로줄/세로줄 정찰)으로 되돌아간다.
 };
 // 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
 CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
@@ -116,24 +118,18 @@ function buildMinigameOrder() {
 const MEDAL_ORDER = ['GOLD', 'SILVER', 'BRONZE'];
 // 보석(GEM)은 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸 중에서 매치마다 무작위 위치로
 // 배치되고(finalizeSetup/startMidSetup에서 실제 배치), 본인도 어디 있는지 모른 채 칸을 열다가
-// 우연히 발견한다. 모양(동그라미=1칸/긴 것=세로 2칸/네모=2x2 4칸)에 따라 여러 칸에 걸쳐
-// 나뉘어 있을 수 있고, 그 조각들은 gemId로 서로 묶인다(placeOneGem 참고).
+// 우연히 발견한다. 모양(동그라미=1칸/긴 것=세로 2칸)에 따라 여러 칸에 걸쳐 나뉘어 있을 수 있고,
+// 그 조각들은 gemId로 서로 묶인다(placeOneGem 참고).
 const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸' };
 const CLUE_CATS = ['P', 'GEM', 'A'];
 const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제' };
 
-// [2026-10-01] "암살 긴장감을 더 줘야 한다" — 기존 4종은 전부 "내 처소를 들여다보는" 정찰
-// 일변도였다. MARK("협박 표식")를 추가해 처음으로 "상대 처소"에 직접 심리적 흔적을 남기는
-// 보상을 넣었다 — 내 칸이 아니라 상대가 아직 안 연 칸 하나를 겨냥해 불안감을 심는다(실제 정체는
-// 절대 새지 않음). 공격자도 그 칸의 정체를 모른 채(아는 척) 찍을 수도 있으므로 진짜/허세가 섞인
-// 기만 신호가 된다 — handleRewardUse의 MARK 분기, player.threatMarks 참고.
-const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT', 'MARK'];
+const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
   FLASH_ALL: '철가방 정찰 — 무작위 순간, 내 처소 전체가 뚜껑처럼 확 열렸다가 저절로 잠깐 드러남',
   PEEK_CELL: '한 칸 정찰 — 내 처소 원하는 1칸의 정체 확인',
   ROW_COUNT: '가로줄 정찰 — 내 처소에서 종류 하나를 고르면, 현재 열려 있는 가로줄 전부에 몇 개씩 있는지 확인',
   COL_COUNT: '세로줄 정찰 — 내 처소에서 종류 하나를 고르면, 6개 세로줄 전부에 몇 개씩 있는지 확인',
-  MARK: '협박 표식 — 상대 처소의 아직 안 연 칸 하나를 찍어 "누군가 노리고 있다"는 불안감을 심음(실제 정체는 새지 않음)',
 };
 
 // 밸런스 테스트 편의를 위해 환경변수로 숫자 설정값을 덮어쓸 수 있게 함
@@ -199,17 +195,15 @@ function newPlayer(id, name) {
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
-    rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0, MARK: 0 },
-    // 상대가 "협박 표식"(MARK)을 내 처소 어느 칸에 남겼는지 — [{row,col}] (중복 좌표는 안 쌓임,
-    // 이미 연 칸엔 표식을 남길 수 없다). 내 칸의 실제 정체(type)는 전혀 새지 않고, 그 칸이
-    // "누군가 주목하고 있다"는 사실만 보여준다 — handleRewardUse의 MARK 분기 참고.
-    threatMarks: [],
+    rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
   };
 }
-// 보석 하나(size=1|2|4)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
+// 보석 하나(size=1|2)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
 // 정해지지 않은(null) 칸들 중에서 찾아 실제로 배치한다 — 1칸(동그라미)은 아무 빈 칸,
-// 2칸(긴 것)은 세로로 붙은 빈 칸 한 쌍, 4칸(네모)은 2x2로 붙은 빈 칸 네 개를 찾는다.
-// 자리가 전혀 없으면(이 칸 수로는 사실상 발생하지 않음) 조용히 포기한다.
+// 2칸(긴 것)은 세로로 붙은 빈 칸 한 쌍을 찾는다. 자리가 전혀 없으면(이 칸 수로는 사실상
+// 발생하지 않음) 조용히 포기한다.
+// [2026-10-01] 가장 크고 복잡했던 네모난 보석(2x2, 4칸)은 "보석 종류가 너무 많다"는 피드백으로
+// 삭제했다 — 1칸/2칸 두 모양만 남긴다.
 function placeOneGem(player, room, rowStart, rowEnd, size) {
   const cols = CONFIG.GRID;
   const isFree = (r, c) => r >= rowStart && r < rowEnd && c >= 0 && c < cols && room[r][c].type === null;
@@ -224,21 +218,12 @@ function placeOneGem(player, room, rowStart, rowEnd, size) {
       if (isFree(r, c) && isFree(r + 1, c)) candidates.push([{ row: r, col: c }, { row: r + 1, col: c }]);
     }
     if (candidates.length) shapeCells = shuffle(candidates)[0];
-  } else if (size === 4) {
-    const candidates = [];
-    for (let r = rowStart; r < rowEnd - 1; r++) for (let c = 0; c < cols - 1; c++) {
-      if (isFree(r, c) && isFree(r + 1, c) && isFree(r, c + 1) && isFree(r + 1, c + 1)) {
-        candidates.push([{ row: r, col: c }, { row: r + 1, col: c }, { row: r, col: c + 1 }, { row: r + 1, col: c + 1 }]);
-      }
-    }
-    if (candidates.length) shapeCells = shuffle(candidates)[0];
   }
   if (!shapeCells) return; // 자리가 없으면 포기
   const gemId = player.nextGemId++;
-  // 조각 위치 라벨 — 예전 "가문의 문장" 조각 이미지처럼 칸을 열면 전체 보석의 "반쪽/한 조각"만
-  // 보이게 하기 위한 것. size1(동그라미)은 조각이 하나뿐이라 라벨이 필요 없고, size2(긴 것)는
-  // 세로로 위/아래, size4(네모)는 2x2 배치 순서(TL,BL,TR,BR)를 그대로 라벨로 쓴다.
-  const pieceLabels = size === 1 ? ['SOLO'] : size === 2 ? ['TOP', 'BOTTOM'] : ['TL', 'BL', 'TR', 'BR'];
+  // 조각 위치 라벨 — 칸을 열면 전체 보석의 "반쪽/한 조각"만 보이게 하기 위한 것. size1(동그라미)은
+  // 조각이 하나뿐이라 라벨이 필요 없고, size2(긴 것)는 세로로 위/아래 라벨을 쓴다.
+  const pieceLabels = size === 1 ? ['SOLO'] : ['TOP', 'BOTTOM'];
   shapeCells.forEach(({ row, col }, i) => { room[row][col].type = 'GEM'; room[row][col].gemId = gemId; room[row][col].gemPiece = pieceLabels[i]; });
   player.gems[gemId] = { size, cells: shapeCells };
 }
@@ -290,8 +275,6 @@ const socketSlot = {};
 const slotSockets = { A: new Set(), B: new Set() };
 
 function otherId(id) { return match.order.find((x) => x !== id); }
-// 협박 표식(MARK)은 다른 정찰 보상(3회)보다 강력하므로 별도 한도(MARK_USE_LIMIT=2)를 쓴다.
-function rewardUseLimitFor(type) { return type === 'MARK' ? CONFIG.MARK_USE_LIMIT : CONFIG.REWARD_USE_LIMIT; }
 function poisonTotal(player) { return player.poisonInitial + player.poisonMid; }
 function poisonPenaltyTotal(player) { return player.poisonInitial * CONFIG.POISON_PENALTY + player.poisonMid * CONFIG.POISON_PENALTY_MID; }
 function log(msg) { match.log.push({ t: Date.now(), msg }); if (match.log.length > 300) match.log.shift(); io.emit('log', { msg }); }
@@ -660,9 +643,9 @@ function endMinigame(winnerId) {
 
   // "보상은 승자가 직접 고르는 구조로" — 이제 라운드 시작 전 보상이 미리 하나로 고정되지 않고,
   // 미니게임 승자가 후보 중 하나를 스스로 골라야 종류(type)가 정해진다. 단, 종류별로 이미
-  // rewardUseLimitFor(t)번을 다 쓴 종류는 후보에서 빠진다 — 한 종류만 무한정 우려먹지 못하게.
+  // CONFIG.REWARD_USE_LIMIT번을 다 쓴 종류는 후보에서 빠진다 — 한 종류만 무한정 우려먹지 못하게.
   const winner = match.players[winnerId];
-  let availableTypes = REWARD_TYPES.filter((t) => (winner.rewardUses[t] || 0) < rewardUseLimitFor(t));
+  let availableTypes = REWARD_TYPES.filter((t) => (winner.rewardUses[t] || 0) < CONFIG.REWARD_USE_LIMIT);
   // 네 종류를 전부 다 써버린 극단적인 경우(이론상 라운드 수가 아주 많아야 가능)에는 선택지가
   // 텅 비는 것보다는, 그냥 모든 종류를 다시 후보로 열어주는 쪽이 안전하다.
   if (availableTypes.length === 0) availableTypes = REWARD_TYPES.slice();
@@ -961,10 +944,6 @@ function doAction(id, kind, payload) {
 
 function resolveOpen(id, player, row, col, cell) {
   cell.opened = true;
-  // 이 칸에 상대가 남겨둔 협박 표식이 있었다면, 더 이상 "안 연 칸"이 아니므로 표식도 함께 지운다.
-  if (player.threatMarks && player.threatMarks.length) {
-    player.threatMarks = player.threatMarks.filter((m) => !(m.row === row && m.col === col));
-  }
   const t = cell.type;
   actionLog(player, `술잔 고르기 → (${row + 1},${col + 1}) = ${CELL_NAMES[t]}`);
   if (t === 'P') {
@@ -1122,27 +1101,6 @@ function handleRewardUse(id, payload) {
     broadcastState();
     return;
   }
-  // 협박 표식(MARK) — 다른 4종과 반대로 "내 처소"가 아니라 상대 처소의 아직 안 연 칸 하나를
-  // 겨냥한다. 공격자도 그 칸의 실제 정체는 전혀 모른 채(기억이나 짐작으로만) 찍는 것이라 진짜
-  // 경고일 수도, 순전한 허세일 수도 있다 — 그래서 cell.type은 절대 건드리지 않고 opp.threatMarks
-  // 에만 좌표를 추가한다(실제 정체 유출 없음).
-  if (pr.type === 'MARK') {
-    const row = Number(payload.row), col = Number(payload.col);
-    if (!Number.isInteger(row) || !Number.isInteger(col) || row < 0 || row >= CONFIG.ROWS_TOTAL || col < 0 || col >= CONFIG.GRID) return;
-    const targetCell = opp.room[row] && opp.room[row][col];
-    if (!targetCell || targetCell.locked || targetCell.opened) return;
-    if (!opp.threatMarks) opp.threatMarks = [];
-    if (opp.threatMarks.some((m) => m.row === row && m.col === col)) return; // 이미 표식이 있는 칸은 중복 금지
-    pr.used = true;
-    player.rewardUses.MARK = (player.rewardUses.MARK || 0) + 1;
-    opp.threatMarks.push({ row, col });
-    actionLog(player, `보상 사용 — 상대 처소 (${row + 1},${col + 1})에 협박 표식을 남겼습니다.`);
-    io.to(id).emit('rewardResult', { kind: 'MARK', row, col });
-    const oppId = otherId(id);
-    if (oppId) io.to(oppId).emit('popup', { text: '😨 누군가 내 처소 어딘가에 표식을 남겼다...', tone: 'warn' });
-    broadcastState();
-    return;
-  }
 }
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
@@ -1277,14 +1235,12 @@ function buildClientState(forId) {
   const me = match.players[forId];
   const oppId = otherId(forId);
   const opp = oppId ? match.players[oppId] : null;
-  const sanitizeRoom = (ownerPlayer, revealAll) =>
-    ownerPlayer.room.map((row, r) => row.map((cell, c) => ({
+  const sanitizeRoom = (room, revealAll) =>
+    room.map((row) => row.map((cell) => ({
       opened: cell.opened,
       locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
-      // 상대가 남긴 협박 표식 — 실제 정체(type)는 전혀 안 알려주고, "표식이 있다"는 사실만.
-      marked: !cell.opened && (ownerPlayer.threatMarks || []).some((m) => m.row === r && m.col === c),
       // 같은 보석의 조각끼리 묶어서 보여주기 위한 id — 실제로 공개된 보석 칸일 때만 내려준다.
       gemId: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemId : null,
       // 이 칸이 보석 전체에서 어느 조각(위/아래, 좌상/좌하/우상/우하 등)인지 — 옛 "가문의 문장"
@@ -1323,7 +1279,7 @@ function buildClientState(forId) {
       used: pr.used,
       choices: pr.type ? null : pr.choices.map((t) => ({
         type: t, name: REWARD_NAMES[t],
-        usesLeft: rewardUseLimitFor(t) - (me.rewardUses[t] || 0),
+        usesLeft: CONFIG.REWARD_USE_LIMIT - (me.rewardUses[t] || 0),
       })),
     } : null,
     oppHasReward: !!(pr && pr.winnerId !== forId && !pr.used),
@@ -1339,13 +1295,6 @@ function buildClientState(forId) {
     // 넘긴 경우를 "다 열었음"과 구분해서 보여주기 위한 플래그.
     myActionForfeited: !!match.actionForfeited[forId],
     oppActionForfeited: oppId ? !!match.actionForfeited[oppId] : false,
-    // 협박 표식(MARK) 보상을 고른 뒤, 아직 어느 칸을 찍을지 안 정했을 때만 내려준다 — 상대 처소의
-    // "찍을 수 있는 칸"(안 잠기고, 안 열리고, 아직 표식도 없는 칸) 마스크만 알려주고 내용물은
-    // 전혀 알려주지 않는다(공격자도 모른 채 찍는 것이 이 보상의 핵심).
-    markTargets: (pr && pr.winnerId === forId && pr.type === 'MARK' && !pr.used && opp)
-      ? opp.room.map((row, r) => row.map((cell, c) =>
-          !cell.locked && !cell.opened && !(opp.threatMarks || []).some((m) => m.row === r && m.col === c)))
-      : null,
     // 세트 구조(3세트x4조각) 자체는 이제 공개 정보지만, 어느 칸에 무슨 조각이 있는지는 여전히
     // 비공개다. 독도 마찬가지로, 총 개수(poison)는 계속 보여주지만 1차/2차 내역(poisonInitial/
     // poisonMid — 어느 쪽이 얼마나 더 아픈지)은 게임이 끝나야만 공개한다(몇 차 독인지가 드러나면 안 되므로).
@@ -1357,7 +1306,7 @@ function buildClientState(forId) {
       gemsFound: gemSummary(me).piecesFound,
       gemsCompleted: gemSummary(me).completed,
       gemsTotal: CONFIG.GEM_PIECES_TOTAL,
-      room: sanitizeRoom(me, match.phase === 'END'),
+      room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
     // 상대의 독/해독제/처소는 게임이 끝나기 전까지 서버도 클라이언트에 내려주지 않는다
@@ -1369,7 +1318,7 @@ function buildClientState(forId) {
     // 단, 점수(score)는 상단 점수판 요청에 따라 예외적으로 실시간 공개한다 — 독/해독제/처소
     // 내용은 여전히 비공개이므로 "패를 읽는" 추리 재미 자체는 유지된다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, gems: gemSummary(opp).gems, gemsFound: gemSummary(opp).piecesFound, gemsCompleted: gemSummary(opp).completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL, connected: opp.connected, room: sanitizeRoom(opp, true) }
+      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, gems: gemSummary(opp).gems, gemsFound: gemSummary(opp).piecesFound, gemsCompleted: gemSummary(opp).completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null, score: opp.score }),
     oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     // 상대 처소에서 "이미 뭔가 있어(독/보석/해독제) 중반 독 추가 대상이 될 수 없는 칸"까지 함께
@@ -1507,7 +1456,6 @@ function buildAdminState() {
         poison: poisonTotal(p), poisonInitial: p.poisonInitial, poisonMid: p.poisonMid, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
         gems: gs.gems, gemsFound: gs.piecesFound, gemsCompleted: gs.completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL,
         opens: match.actionOpens[id] || 0,
-        threatMarks: p.threatMarks || [],
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
         room: p.room.map((row) => row.map((cell) => ({

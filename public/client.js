@@ -196,7 +196,6 @@ function cellIconSVG(type) {
 const GEM_IMAGES = {
   SOLO: { src: '/gems/gem_size1.png', w: 390, h: 388 }, // 동그란 보석 — 조각 없이 통째로
   PAIR: { src: '/gems/gem_size2.png', w: 258, h: 696 }, // 세로로 긴 보석 — 위/아래로 나눠 쓴다
-  BLOCK: { src: '/gems/gem_size4.png', w: 429, h: 469 }, // 네모난(2x2) 보석 — 사분면으로 나눠 쓴다
 };
 // preserveAspectRatio="none"으로 뷰박스를 칸(정사각형) 전체에 강제로 늘려 채운다 — 기본값인
 // "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 PAIR 조각) 여백이 생겨서
@@ -210,17 +209,9 @@ function gemFragmentSVG(gemPiece) {
       <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
     </svg>`;
   }
-  if (gemPiece === 'TOP' || gemPiece === 'BOTTOM') {
-    const { src, w, h } = GEM_IMAGES.PAIR;
-    const half = h / 2;
-    const vb = gemPiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
-    return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
-      <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
-    </svg>`;
-  }
-  const { src, w, h } = GEM_IMAGES.BLOCK;
-  const hw = w / 2, hh = h / 2;
-  const vb = { TL: `0 0 ${hw} ${hh}`, TR: `${hw} 0 ${hw} ${hh}`, BL: `0 ${hh} ${hw} ${hh}`, BR: `${hw} ${hh} ${hw} ${hh}` }[gemPiece];
+  const { src, w, h } = GEM_IMAGES.PAIR;
+  const half = h / 2;
+  const vb = gemPiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
   return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
     <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
@@ -437,12 +428,6 @@ socket.on('rewardResult', (payload) => {
     const catName = (lastState && lastState.clueCatNames && lastState.clueCatNames[payload.targetType]) || payload.targetType;
     const breakdown = payload.counts.map((c, i) => `${i + 1}번 ${c}개`).join(' · ');
     const text = `🔎 정찰 결과: 내 처소 각 ${axisLabel}의 ${catName} 개수 — ${breakdown}`;
-    addLog(text);
-    lastRewardResult = text;
-    lastRewardResultRound = lastState ? lastState.round : null;
-  }
-  if (payload.kind === 'MARK') {
-    const text = `😨 협박 표식 — 상대 처소 (${payload.row + 1},${payload.col + 1})에 표식을 남겼습니다.`;
     addLog(text);
     lastRewardResult = text;
     lastRewardResultRound = lastState ? lastState.round : null;
@@ -1268,11 +1253,6 @@ function buildRoomGrid(room, opts) {
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
         cell.classList.add('peekLit', opts.peekCell.type);
         cell.innerHTML = opts.peekCell.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(opts.peekCell.type);
-      } else if (data.marked) {
-        // 상대가 남긴 협박 표식 — 실제 정체는 전혀 모른 채, "누군가 여길 노려봤다"는 불안감만
-        // 보여준다(statDangerPulse로 계속 붉게 박동).
-        cell.classList.add('threatMark');
-        cell.innerHTML = '<span class="threatMarkIcon">❗</span>';
       } else {
         cell.textContent = '';
       }
@@ -1723,22 +1703,6 @@ function renderRewardPanel(state) {
       typeRow.appendChild(b);
     });
     box.appendChild(typeRow);
-  } else if (r.type === 'MARK') {
-    // 다른 세 보상과 반대로 "상대 처소"를 겨냥한다 — 어느 칸이 뭔지는 나도 전혀 모른다(기억이나
-    // 감으로 찍는 것). state.markTargets는 서버가 내려주는 "찍을 수 있는 칸" 마스크일 뿐,
-    // 내용물 정보는 전혀 들어있지 않다.
-    box.appendChild(el('div', 'desc', '😨 협박 표식 — 상대 처소의 아직 안 연 칸 하나를 찍으세요. 그 칸이 뭔지는 당신도 모릅니다 — 순전한 심리전입니다.'));
-    const grid = el('div', 'grid6 pickerGrid');
-    const targets = state.markTargets || [];
-    for (let rr = 0; rr < targets.length; rr++) {
-      for (let cc = 0; cc < (targets[rr] || []).length; cc++) {
-        const pickable = !!targets[rr][cc];
-        const cell = el('div', 'cell' + (pickable ? ' pickable' : ' lockedSpot'));
-        if (pickable) cell.onclick = () => socket.emit('reward:use', { row: rr, col: cc });
-        grid.appendChild(cell);
-      }
-    }
-    box.appendChild(grid);
   }
   p.appendChild(box);
   return p;

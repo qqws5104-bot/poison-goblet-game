@@ -1,11 +1,12 @@
 // 자동 스모크 테스트: 두 개의 소켓 클라이언트로 전반 셋업(6×4) + 8라운드 + 중반 재설치
 // (독 추가 2칸 + 6×6 확장) + 후반 7라운드, 총 15라운드를 진행시켜 서버 로직이 예외 없이
-// 동작하는지, 9종 미니게임과 보상 시스템(철가방/한칸/가로줄/세로줄 정찰 + 협박 표식)이 모두
+// 동작하는지, 9종 미니게임과 보상 시스템(섬광/한칸/가로줄/세로줄 정찰, 4종)이 모두
 // 정상 동작하는지 확인한다.
 // [2026-10-01] "암살 긴장감을 더 줘야 한다"는 피드백으로 독배와 무관한 가문의 문장 슬라이딩
 // 퍼즐을 완전히 삭제하면서, 이 테스트의 퍼즐 봇 로직(puzzleAdjFor/bfsNextMove/playPoisonPuzzle
-// 등)도 함께 제거했다 — 대신 신규 보상 "협박 표식"(MARK)을 자동으로 고르고 사용해보는 로직을
-// 추가했다.
+// 등)도 함께 제거했다. 이후 "협박 표식"(MARK) 보상을 추가했다가, "컨셉에 안 어울린다"는
+// 피드백에 따라 다시 완전히 삭제하고 보상 4종 체제로 복귀했다. 보석 아이템도 1/2/4조각 3종에서
+// 1/2조각 2종으로 단순화되고 개수가 줄었다(서버 CONFIG.FIRST_HALF_GEM_SIZES/SECOND_HALF_GEM_SIZES).
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
@@ -127,7 +128,7 @@ function onState(label, socket, s) {
     // 미니게임이 10종이고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 10종이 전부
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
     console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9, max possible per match = min(9,ROUNDS_TOTAL))`);
-    console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/5)`);
+    console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
     console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, gemsFound: s.me.gemsFound, gemsCompleted: s.me.gemsCompleted, gemsTotal: s.me.gemsTotal });
     setTimeout(() => process.exit(0), 200);
   }
@@ -155,20 +156,6 @@ function useReward(label, socket, s) {
     const cats = Object.keys(s.clueCatNames);
     const cat = cats[Math.floor(Math.random() * cats.length)];
     return socket.emit('reward:use', { targetType: cat });
-  }
-  if (r.type === 'MARK') {
-    // 협박 표식 — 상대 처소에서 서버가 내려주는 markTargets(찍을 수 있는 칸) 중 무작위로 하나 고른다.
-    const targets = s.markTargets;
-    if (!targets) return;
-    const candidates = [];
-    for (let rr = 0; rr < targets.length; rr++) {
-      for (let cc = 0; cc < targets[rr].length; cc++) {
-        if (targets[rr][cc]) candidates.push({ row: rr, col: cc });
-      }
-    }
-    if (!candidates.length) return; // 찍을 수 있는 칸이 하나도 없으면(거의 다 열렸거나 이미 다 표식됨) 포기
-    const pick = candidates[Math.floor(Math.random() * candidates.length)];
-    return socket.emit('reward:use', { row: pick.row, col: pick.col });
   }
 }
 
