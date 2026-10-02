@@ -11,20 +11,24 @@ const CONFIG = {
   GRID: 6,                // 가로(열) 칸 수는 항상 6
   ROWS_FIRST_HALF: 4,     // 전반전에 활성화된 줄 수 — 6×4 = 24칸
   ROWS_TOTAL: 6,          // 후반전에 확장된 뒤의 전체 줄 수 — 6×6 = 36칸
-  // 보석찾기 — 동그란 보석(1칸, 즉시 완성) · 긴 보석(세로로 붙은 2칸) 두 가지 모양이 처소 안에
-  // 무작위로 흩뿌려진다. 조각을 "발견"(칸을 여는 순간)하면 그 즉시 +GEM_PIECE_PTS를 받고, 같은
-  // 보석의 나머지 조각까지 전부 다 찾아 완성하면 조각 점수와는 별개로 크기 ×
-  // GEM_COMPLETE_BONUS_PER_PIECE 만큼 추가 보너스를 더 받는다(예: 2조각 보석을 완성하면 조각당
-  // +1씩 2점 + 완성 보너스 2점 = 총 4점). 2칸짜리 보석의 첫 조각을 찾으면 나머지 조각이 어느
-  // 방향(위/아래/좌/우)에 붙어 있는지 즉시 알려준다.
-  // [2026-10-01] "보석 개수도 너무 많고 크기도 너무 많다"는 피드백으로, 가장 크고 복잡한
-  // 네모난 보석(2x2, 4칸)을 없애고 전체 개수도 줄였다(전반 6개→4개, 후반 3개→2개) — 독배
-  // 암투에 집중하도록 "보물찾기" 비중을 낮추는 방향.
-  GEM_PIECE_PTS: 1,
-  GEM_COMPLETE_BONUS_PER_PIECE: 1,
-  FIRST_HALF_GEM_SIZES: [2, 2, 1, 1], // 전반(6x4) 보석 구성 — 2조각 2개, 1조각 2개
-  FIRST_HALF_ANTIDOTE_COUNT: 5, // 전반에서 보석을 뺀 나머지 칸 중 해독제로 채울 개수(나머지는 빈 칸)
-  SECOND_HALF_GEM_SIZES: [2, 1], // 후반 확장분(2x6=12칸) 보석 구성 — 2조각 1개, 1조각 1개
+  // 왕가의 보물 — "왕관"·"칼"·"도장" 세 가지 고유한 보물이 한 세트당 딱 하나씩만 존재한다(칼은
+  // 세로로 붙은 2칸, 왕관/도장은 각각 1칸). 전반 셋업 때 한 번에 전부 묻히고, 칸을 열어
+  // "발견"할 때마다 즉시 +TREASURE_FIND_PTS를 받는다. 두 선수 중 누구든 먼저 발견한 보물 칸 수가
+  // TREASURE_RACE_COUNT에 도달하면 그 즉시 +TREASURE_RACE_BONUS_PTS 보너스를 한 번만 받는다
+  // (match.treasureRaceWonBy로 중복 지급을 막는다). 칼의 첫 조각을 찾으면 나머지 조각이 어느
+  // 방향(위/아래/좌/우)에 있는지 즉시 알려준다.
+  // 금술잔 — 왕가의 보물과는 별개로, 발견하면 그 자리에서 +GOLDCUP_PTS만 주는 단순한 홑칸
+  // 아이템. 전반에 FIRST_HALF_GOLDCUP_COUNT개, 후반 확장분에 SECOND_HALF_GOLDCUP_COUNT개가 묻힌다.
+  // [2026-10-02] 기존 "보석(GEM)" 개념은 완전히 제거하고, 왕가의 보물(왕관/칼/도장 고유 세트)과
+  // 금술잔(단순 반복 아이템) 두 가지로 분리했다 — 가로줄/세로줄 정찰(ROW_COUNT/COL_COUNT) 보상에서
+  // 두 종류를 서로 다른 정찰 대상으로 따로 고를 수 있게 하기 위함이기도 하다.
+  TREASURE_FIND_PTS: 1,
+  TREASURE_RACE_COUNT: 3,
+  TREASURE_RACE_BONUS_PTS: 3,
+  FIRST_HALF_ANTIDOTE_COUNT: 5, // 전반에서 왕가의 보물·금술잔을 뺀 나머지 칸 중 해독제로 채울 개수(나머지는 빈 칸)
+  GOLDCUP_PTS: 2,
+  FIRST_HALF_GOLDCUP_COUNT: 2, // 금술잔 3잔 중 전반에 묻는 개수
+  SECOND_HALF_GOLDCUP_COUNT: 1, // 나머지 1잔은 후반 확장분(2x6=12칸)에 묻는다
   SECOND_HALF_ANTIDOTE_COUNT: 1,
   ANTIDOTE_NEED: 2,       // 해독제 2개 = 독 1개 무효화
   // [2026-10-01] "암살 긴장감을 더 올려야 한다"는 피드백으로 독배 감점을 올렸다(2→3 / 3→5) —
@@ -62,6 +66,8 @@ const CONFIG = {
   // 처리되고(아래 armXxxTimer들 참고), 패배 자체가 유일한 페널티다.
   DICE_CYCLE_MS: 100, // 주사위 누르기 — 스페이스바를 누르고 있는 동안 이 간격(ms)마다 눈금이 1~6으로 순환하며, 뗀 시점의 경과시간으로 서버가 눈을 확정한다(220→100, "눈이 더 빠르게 흘러가게" 피드백)
   DICE_MAX_TIE_REPLAYS: 2, // 동점이면 이 횟수만큼 다시 굴린다 — 그래도 계속 동점이면 더 먼저 주사위를 놓은(release가 빠른) 쪽이 승리
+  RPS_MAX_TIE_REPLAYS: 2, // 가위바위보 — 비기면 이 횟수만큼 다시 낸다 — 그래도 계속 비기면 무작위로 승부를 정한다
+  ODDEVEN_NUMBER_MIN: 1, ODDEVEN_NUMBER_MAX: 9, // 홀짝 맞히기 — 숨기는 사람이 고를 수 있는 숫자 범위
   BANK_TIMER_MS: 45000, // 금고 번호 맞추기는 여러 번 시도해야 하는 퍼즐이라 더 긴 여유를 준다
   ROUND_ACTION_TIMER_MS: 40000, // 본행동(칸 열기) — 라운드당 행동 예산을 다 쓸 시간
   // [2026-10-01] "독배로 암살한다는 긴장감을 더 줘야 한다"는 피드백으로, 독배와 무관하게 따로
@@ -69,9 +75,15 @@ const CONFIG = {
   // "협박 표식"(상대 처소에 직접 흔적을 남기는 기만 보상)을 한때 추가했으나 "어울리지 않는다"는
   // 피드백으로 다시 뺐다 — 보상은 기존 4종(철가방/한칸/가로줄/세로줄 정찰)으로 되돌아간다.
 };
-// 매치 전체에서 나올 보석 조각 총 개수(전반+후반 고정 구성의 합) — 화면에 분모로 보여주는 용도.
-CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
-  + CONFIG.SECOND_HALF_GEM_SIZES.reduce((a, b) => a + b, 0);
+// 왕가의 보물 세트 고정 구성 — 세트당 딱 한 번씩만 등장한다(칼은 세로로 붙은 2칸, 왕관/도장은
+// 각각 1칸). 전부 전반 셋업 때 함께 묻힌다.
+const TREASURE_SHAPES = [
+  { id: 'CROWN', name: '왕관', size: 1 },
+  { id: 'SWORD', name: '칼', size: 2 },
+  { id: 'SEAL', name: '도장', size: 1 },
+];
+CONFIG.TREASURE_CELLS_TOTAL = TREASURE_SHAPES.reduce((a, t) => a + t.size, 0);
+const TREASURE_NAMES = TREASURE_SHAPES.reduce((acc, t) => { acc[t.id] = t.name; return acc; }, {});
 
 // 배짱 대결(SHOWDOWN)은 "너무 단순한 게임"이라는 피드백으로 제외.
 // "심리싸움 하는 느낌이 살면 좋겠다"는 피드백에 따라 운/대박 요소는 유지하면서도 상대를 읽어야
@@ -91,12 +103,17 @@ CONFIG.GEM_PIECES_TOTAL = CONFIG.FIRST_HALF_GEM_SIZES.reduce((a, b) => a + b, 0)
 // 교체했다(설명 텍스트가 거의 필요 없다는 게 장점). 확정된 눈은 둘 다에게 공개된다.
 // 숫자 패 대결(CARD_DUEL, 1·2·3을 세 자리에 몰래 배치해 겨루는 방식)도 한때 있었으나
 // "너무 생각해야 한다"는 피드백으로 제외했다.
-const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'DICE'];
+// [2026-10-02] "가위바위보"와 "한 사람이 숫자를 고르면 다른 사람이 홀/짝을 맞히는" 홀짝 게임
+// 두 종류를 추가했다 — 무작위로 섞어 채우는 기존 구조(buildMinigameOrder)는 그대로 두되, 그
+// 구조 자체가 이미 MINIGAME_SEQUENCE 길이가 ROUNDS_TOTAL(15) 이하이기만 하면 모든 종류가 한
+// 매치에 최소 한 번은 나오게 보장한다(11종 ≤ 15라운드이므로 그대로 유지됨).
+const MINIGAME_SEQUENCE = ['NIM', 'HAND', 'REFLEX', 'BOMB', 'PIN', 'SIGIL', 'GUESS_COUNT', 'BANK', 'DICE', 'RPS', 'ODDEVEN'];
 const MINIGAME_NAMES = {
   NIM: '독배 채우기', HAND: '독 든 손 맞히기', REFLEX: '잔 낚아채기',
   BOMB: '폭탄 눈치 넘기기', PIN: '안전핀 뽑기 배팅',
   SIGIL: '금은동 쟁탈전', GUESS_COUNT: '탁자 위 술잔 개수 세기',
   BANK: '금고 번호 맞추기', DICE: '주사위 누르기',
+  RPS: '가위바위보', ODDEVEN: '홀짝 맞히기',
 };
 function buildMinigameOrder() {
   const order = shuffle(MINIGAME_SEQUENCE).slice(0, CONFIG.ROUNDS_TOTAL);
@@ -116,13 +133,13 @@ function buildMinigameOrder() {
 // (패널티 없음). 자기 몫의 금 술잔을 전부 다 누른 뒤에야 은, 그다음 동 순서로 넘어가고,
 // 셋을 모두 순서대로 먼저 다 끝낸 사람이 그 자리에서 즉시 승리한다.
 const MEDAL_ORDER = ['GOLD', 'SILVER', 'BRONZE'];
-// 보석(GEM)은 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸 중에서 매치마다 무작위 위치로
-// 배치되고(finalizeSetup/startMidSetup에서 실제 배치), 본인도 어디 있는지 모른 채 칸을 열다가
-// 우연히 발견한다. 모양(동그라미=1칸/긴 것=세로 2칸)에 따라 여러 칸에 걸쳐 나뉘어 있을 수 있고,
-// 그 조각들은 gemId로 서로 묶인다(placeOneGem 참고).
-const CELL_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제', E: '빈 칸' };
-const CLUE_CATS = ['P', 'GEM', 'A'];
-const CLUE_CAT_NAMES = { P: '독 술잔', GEM: '보석', A: '해독제' };
+// 왕가의 보물(TREASURE)과 금술잔(GOLDCUP)은 고정된 좌표에 놓이지 않는다 — 독을 심고 남은 칸
+// 중에서 매치마다 무작위 위치로 배치되고(finalizeSetup/startMidSetup에서 실제 배치), 본인도
+// 어디 있는지 모른 채 칸을 열다가 우연히 발견한다. 칼(SWORD)은 세로로 붙은 2칸에 걸쳐 있고,
+// 그 조각들은 treasureId로 서로 묶인다(placeTreasures 참고).
+const CELL_NAMES = { P: '독 술잔', TREASURE: '왕가의 보물', GOLDCUP: '금술잔', A: '해독제', E: '빈 칸' };
+const CLUE_CATS = ['P', 'TREASURE', 'GOLDCUP', 'A'];
+const CLUE_CAT_NAMES = { P: '독 술잔', TREASURE: '왕가의 보물', GOLDCUP: '금술잔', A: '해독제' };
 
 const REWARD_TYPES = ['FLASH_ALL', 'PEEK_CELL', 'ROW_COUNT', 'COL_COUNT'];
 const REWARD_NAMES = {
@@ -174,7 +191,7 @@ function makeRoom() {
   const cells = [];
   for (let r = 0; r < CONFIG.ROWS_TOTAL; r++) {
     const row = [];
-    for (let c = 0; c < CONFIG.GRID; c++) row.push({ type: null, opened: false, locked: r >= CONFIG.ROWS_FIRST_HALF, cluedType: null, cluedNote: null, gemId: null });
+    for (let c = 0; c < CONFIG.GRID; c++) row.push({ type: null, opened: false, locked: r >= CONFIG.ROWS_FIRST_HALF, cluedType: null, cluedNote: null, treasureId: null, treasurePiece: null });
     cells.push(row);
   }
   return cells;
@@ -188,23 +205,23 @@ function newPlayer(id, name) {
     // 해독해서 poisonInitial/poisonMid가 줄어들어도 이 값은 절대 줄지 않는다 — "독을 마신 적이
     // 있었는지"(생환 보너스 자격)를 끝까지 판별하기 위한 누적 카운터. endMatchByScore 참고.
     poisonEverFound: 0,
-    // 보석 registry — gemId → { size, cells: [{row,col}] }. 완성 여부/찾은 조각 수는 필요할 때마다
-    // room의 opened 상태를 기준으로 바로 계산한다(따로 들고 다니지 않아도 항상 정확하다).
-    gems: {},
-    nextGemId: 1,
+    // 왕가의 보물 registry — treasureId('CROWN'/'SWORD'/'SEAL') → { size, cells: [{row,col}] }.
+    // placeTreasures()가 셋업 때 채워 넣고, 칼처럼 여러 칸짜리 보물의 "나머지 조각 방향" 힌트를
+    // 계산할 때 참조한다.
+    treasures: {},
+    treasureFound: 0, // 지금까지 발견한 "왕가의 보물" 칸 수(레이스 보너스 판정 기준)
+    goldcupFound: 0, // 지금까지 발견한 금술잔 개수
     connected: true,
     // 보상 종류별로 "실제로 사용(발동)한" 횟수 — 각 종류 최대 REWARD_USE_LIMIT(3)번까지만 쓸 수
     // 있고, 다 쓴 종류는 이후 보상 후보에서 제외된다(무한정 우려먹지 못하게).
     rewardUses: { FLASH_ALL: 0, PEEK_CELL: 0, ROW_COUNT: 0, COL_COUNT: 0 },
   };
 }
-// 보석 하나(size=1|2)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
-// 정해지지 않은(null) 칸들 중에서 찾아 실제로 배치한다 — 1칸(동그라미)은 아무 빈 칸,
-// 2칸(긴 것)은 세로로 붙은 빈 칸 한 쌍을 찾는다. 자리가 전혀 없으면(이 칸 수로는 사실상
-// 발생하지 않음) 조용히 포기한다.
-// [2026-10-01] 가장 크고 복잡했던 네모난 보석(2x2, 4칸)은 "보석 종류가 너무 많다"는 피드백으로
-// 삭제했다 — 1칸/2칸 두 모양만 남긴다.
-function placeOneGem(player, room, rowStart, rowEnd, size) {
+// 왕가의 보물 하나(size=1|2)를 놓을 수 있는 자리를 rowStart~rowEnd(미포함) 구간의, 아직 타입이
+// 정해지지 않은(null) 칸들 중에서 찾아 실제로 배치한다 — 1칸(왕관/도장)은 아무 빈 칸, 2칸(칼)은
+// 세로로 붙은 빈 칸 한 쌍을 찾는다. 자리가 전혀 없으면(이 칸 수로는 사실상 발생하지 않음) 조용히
+// 포기한다.
+function placeOneTreasure(player, room, rowStart, rowEnd, id, size) {
   const cols = CONFIG.GRID;
   const isFree = (r, c) => r >= rowStart && r < rowEnd && c >= 0 && c < cols && room[r][c].type === null;
   let shapeCells = null;
@@ -220,17 +237,25 @@ function placeOneGem(player, room, rowStart, rowEnd, size) {
     if (candidates.length) shapeCells = shuffle(candidates)[0];
   }
   if (!shapeCells) return; // 자리가 없으면 포기
-  const gemId = player.nextGemId++;
-  // 조각 위치 라벨 — 칸을 열면 전체 보석의 "반쪽/한 조각"만 보이게 하기 위한 것. size1(동그라미)은
-  // 조각이 하나뿐이라 라벨이 필요 없고, size2(긴 것)는 세로로 위/아래 라벨을 쓴다.
+  // 조각 위치 라벨 — 칸을 열면 전체 보물의 "한 조각"만 보이게 하기 위한 것. size1(왕관/도장)은
+  // 조각이 하나뿐이라 라벨이 필요 없고, size2(칼)는 세로로 위/아래 라벨을 쓴다.
   const pieceLabels = size === 1 ? ['SOLO'] : ['TOP', 'BOTTOM'];
-  shapeCells.forEach(({ row, col }, i) => { room[row][col].type = 'GEM'; room[row][col].gemId = gemId; room[row][col].gemPiece = pieceLabels[i]; });
-  player.gems[gemId] = { size, cells: shapeCells };
+  shapeCells.forEach(({ row, col }, i) => { room[row][col].type = 'TREASURE'; room[row][col].treasureId = id; room[row][col].treasurePiece = pieceLabels[i]; });
+  player.treasures[id] = { size, cells: shapeCells };
 }
-function placeGemsInRegion(player, room, rowStart, rowEnd, sizes) {
-  for (const size of sizes) placeOneGem(player, room, rowStart, rowEnd, size);
+// 왕가의 보물 세트(왕관/칼/도장, TREASURE_SHAPES) 전체를 한 번에 배치한다 — 세트당 종류별로
+// 딱 한 번씩만 존재하므로 전반 셋업 때 한 번만 호출하면 된다.
+function placeTreasures(player, room, rowStart, rowEnd) {
+  for (const shape of TREASURE_SHAPES) placeOneTreasure(player, room, rowStart, rowEnd, shape.id, shape.size);
 }
-// 보석을 다 놓고 남은(아직 null인) 칸 중 일부를 해독제로, 나머지를 빈 칸으로 채운다.
+// 금술잔 count개를 rowStart~rowEnd 구간의 남은 빈 칸 중 무작위로 흩뿌린다 — 왕가의 보물과 달리
+// 조각/모양 개념이 없는 단순 홑칸 아이템이다.
+function placeGoldcups(player, room, rowStart, rowEnd, count) {
+  const cells = [];
+  for (let r = rowStart; r < rowEnd; r++) for (let c = 0; c < CONFIG.GRID; c++) if (room[r][c].type === null) cells.push({ row: r, col: c });
+  shuffle(cells).slice(0, count).forEach(({ row, col }) => { room[row][col].type = 'GOLDCUP'; });
+}
+// 왕가의 보물·금술잔을 다 놓고 남은(아직 null인) 칸 중 일부를 해독제로, 나머지를 빈 칸으로 채운다.
 function fillAntidoteAndEmpty(room, rowStart, rowEnd, antidoteCount) {
   const cells = [];
   for (let r = rowStart; r < rowEnd; r++) for (let c = 0; c < CONFIG.GRID; c++) if (room[r][c].type === null) cells.push({ row: r, col: c });
@@ -260,9 +285,8 @@ function freshMatch() {
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
     rematchReady: {},
     log: [], winner: null, endReason: null,
-    // 라운드가 끝날 때마다(advanceAfterRoundAction) 한 줄씩 쌓는 요약 기록 — 게임 종료 화면에서
-    // "라운드별로 누가 뭘 먹었는지" 표로 보여주기 위한 용도. recordRoundHistory() 참고.
-    roundHistory: [],
+    // 왕가의 보물 "레이스" 보너스를 이미 누가 가져갔는지 — 한 매치에 한 번만 지급되도록 막는 플래그.
+    treasureRaceWonBy: null,
     // 4대 분리 모드(/game/A, /pick/A, /game/B, /pick/B로 접속) 여부 — 이 모드일 때만 처소 열기
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
@@ -310,12 +334,14 @@ function finalizeSetup() {
     const room = match.players[victim].room;
     for (const { row, col } of poisonCells) { room[row][col].type = 'P'; room[row][col].poisonWave = 1; }
   }
-  // 2) 보석 배치 — 독이 아닌 전반 24칸 중, 정해진 모양·개수(FIRST_HALF_GEM_SIZES)만큼 흩뿌린다.
+  // 2) 왕가의 보물 배치 — 독이 아닌 전반 24칸 중, 왕관/칼/도장 세트(TREASURE_SHAPES) 전부를
+  // 한 번에(세트당 딱 한 번씩만) 흩뿌린다.
   for (const id of match.order) {
     const player = match.players[id];
-    placeGemsInRegion(player, player.room, 0, CONFIG.ROWS_FIRST_HALF, CONFIG.FIRST_HALF_GEM_SIZES);
+    placeTreasures(player, player.room, 0, CONFIG.ROWS_FIRST_HALF);
+    placeGoldcups(player, player.room, 0, CONFIG.ROWS_FIRST_HALF, CONFIG.FIRST_HALF_GOLDCUP_COUNT);
   }
-  // 3) 나머지 전반 칸(독·보석을 뺀 칸)을 해독제/빈칸으로 채운다.
+  // 3) 나머지 전반 칸(독·왕가의 보물·금술잔을 뺀 칸)을 해독제/빈칸으로 채운다.
   for (const id of match.order) {
     fillAntidoteAndEmpty(match.players[id].room, 0, CONFIG.ROWS_FIRST_HALF, CONFIG.FIRST_HALF_ANTIDOTE_COUNT);
   }
@@ -337,10 +363,11 @@ function finalizeSetup() {
 
 // ------------------------------ 중반 재설치(처소 확장) ------------------------
 // 전반(8라운드)이 끝나면 처소가 6×4(24칸)에서 6×6(36칸)으로 확장되고, 서로의 처소에 독을
-// 2개씩 추가로 몰래 심는다. 확장되는 12칸(2×6)의 보석/해독제는 독을 고르기 "전에" 먼저
-// 흩뿌려둔다 — 그래야 이미 뭔가 있는 칸을 엑스자로 막아서 보여줄 수 있고(더 이상 독을 몰래
-// 심다가 보석을 실수로 덮어버리는 일이 없다), 독 추가 대상은 옛 24칸의 남은 빈 칸(E)과 새
-// 12칸의 빈 칸(E)뿐이다.
+// 2개씩 추가로 몰래 심는다. 왕가의 보물(왕관/칼/도장)은 세트당 한 번뿐이라 이미 전반에 전부
+// 배치되어 있으므로 여기서는 금술잔 나머지 1잔만 더 묻는다. 확장되는 12칸(2×6)의 금술잔/해독제는
+// 독을 고르기 "전에" 먼저 흩뿌려둔다 — 그래야 이미 뭔가 있는 칸을 엑스자로 막아서 보여줄 수 있고
+// (더 이상 독을 몰래 심다가 금술잔을 실수로 덮어버리는 일이 없다), 독 추가 대상은 옛 24칸의 남은
+// 빈 칸(E)과 새 12칸의 빈 칸(E)뿐이다.
 function startMidSetup() {
   match.phase = 'MID_SETUP';
   match.midSetupSelections = {};
@@ -350,7 +377,7 @@ function startMidSetup() {
     for (let r = CONFIG.ROWS_FIRST_HALF; r < CONFIG.ROWS_TOTAL; r++) {
       for (let c = 0; c < CONFIG.GRID; c++) room[r][c].locked = false;
     }
-    placeGemsInRegion(player, room, CONFIG.ROWS_FIRST_HALF, CONFIG.ROWS_TOTAL, CONFIG.SECOND_HALF_GEM_SIZES);
+    placeGoldcups(player, room, CONFIG.ROWS_FIRST_HALF, CONFIG.ROWS_TOTAL, CONFIG.SECOND_HALF_GOLDCUP_COUNT);
     fillAntidoteAndEmpty(room, CONFIG.ROWS_FIRST_HALF, CONFIG.ROWS_TOTAL, CONFIG.SECOND_HALF_ANTIDOTE_COUNT);
   }
   log(`전반 종료 — 처소가 6×${CONFIG.ROWS_TOTAL}으로 확장됩니다. 상대 왕자의 아직 열리지 않은 빈 칸 중 ${CONFIG.POISON_MID}곳에 독을 추가로 몰래 지정하세요.`);
@@ -447,6 +474,35 @@ function armHandTimer(mg) {
       log(`${match.players[mg.guesser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
       endMinigame(mg.hider);
     }
+  });
+}
+// 홀짝 맞히기(ODDEVEN) — HAND(독 든 손 맞히기)와 똑같은 숨기는사람/맞히는사람 구조. 숨기는사람이
+// 먼저 숫자를 하나 고르고(hiderNumber), 맞히는사람이 그 숫자가 홀수인지 짝수인지(guesserPick:
+// 'ODD'|'EVEN')를 고른다.
+function armOddEvenTimer(mg) {
+  armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
+    if (mg.hiderNumber == null) {
+      log(`${match.players[mg.hider].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+      endMinigame(mg.guesser);
+    } else if (mg.guesserPick == null) {
+      log(`${match.players[mg.guesser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+      endMinigame(mg.hider);
+    }
+  });
+}
+// 가위바위보(RPS) — 양쪽이 동시에 독립적으로 낸다(역할 구분 없음). 비기면 CONFIG.RPS_MAX_TIE_REPLAYS
+// 번까지 다시 내고, 그래도 계속 비기면 무작위로 승부를 정한다(handleRps 참고).
+function armRpsTimer(mg) {
+  armDecisionTimer(mg, CONFIG.DECISION_TIMER_MS, () => {
+    const [a, b] = match.order;
+    const aDone = mg.picks[a] != null, bDone = mg.picks[b] != null;
+    if (!aDone && !bDone) {
+      log('둘 다 시간 안에 가위바위보를 내지 못해 무승부로 처리합니다.');
+      return endMinigameDraw();
+    }
+    const loser = aDone ? b : a; // 아직 안 낸 쪽이 패배
+    log(`${match.players[loser].name}이(가) 너무 오래 고민해 시간 초과로 즉시 패배합니다.`);
+    endMinigame(otherId(loser));
   });
 }
 function armSigilTimer(mg) {
@@ -632,6 +688,16 @@ function initMinigame(type, roundNo) {
     armDiceTimer(mgDice);
     return mgDice;
   }
+  if (type === 'RPS') {
+    const mgRps = { ...base, picks: {}, tieRound: 0 };
+    armRpsTimer(mgRps);
+    return mgRps;
+  }
+  if (type === 'ODDEVEN') {
+    const mgOddEven = { ...base, hider: firstIsA ? a : b, guesser: firstIsA ? b : a, hiderNumber: null, guesserPick: null };
+    armOddEvenTimer(mgOddEven);
+    return mgOddEven;
+  }
   return base;
 }
 
@@ -712,6 +778,8 @@ function handleMinigameMove(id, payload) {
   if (mg.type === 'GUESS_COUNT') return handleGuessCount(id, payload, mg);
   if (mg.type === 'BANK') return handleBank(id, payload, mg);
   if (mg.type === 'DICE') return handleDice(id, payload, mg);
+  if (mg.type === 'RPS') return handleRps(id, payload, mg);
+  if (mg.type === 'ODDEVEN') return handleOddEven(id, payload, mg);
 }
 
 // 1) 독배 채우기 — Nim류 (번갈아 1~3 더하기, 한도 도달/초과시키면 패배). 정보 완전공개(계산형)
@@ -743,6 +811,29 @@ function handleHand(id, payload, mg) {
   if (mg.hiderPick != null && mg.guesserPick != null) {
     const correct = mg.hiderPick === mg.guesserPick;
     log(`정답 공개: 독은 ${mg.hiderPick === 'L' ? '왼손' : '오른손'}에 있었습니다. (${correct ? '맞힘' : '틀림'})`);
+    endMinigame(correct ? mg.guesser : mg.hider);
+  }
+}
+
+// 홀짝 맞히기 — 숨기는 사람이 먼저 숫자를 하나 고르고(공개하지 않음), 맞히는 사람이 그 숫자가
+// 홀수인지 짝수인지 고른다. HAND(독 든 손 맞히기)와 완전히 같은 진행 순서를 쓴다.
+function handleOddEven(id, payload, mg) {
+  if (id === mg.hider && mg.hiderNumber == null) {
+    const n = Number(payload.number);
+    if (!Number.isInteger(n) || n < CONFIG.ODDEVEN_NUMBER_MIN || n > CONFIG.ODDEVEN_NUMBER_MAX) return;
+    mg.hiderNumber = n;
+    log(`${match.players[mg.hider].name}이 숫자를 숨겼습니다.`);
+  } else if (id === mg.guesser && mg.guesserPick == null) {
+    if (!['ODD', 'EVEN'].includes(payload.pick)) return;
+    mg.guesserPick = payload.pick;
+    log(`${match.players[mg.guesser].name}이 ${payload.pick === 'ODD' ? '홀수' : '짝수'}를 지목했습니다.`);
+  }
+  if (mg.hiderNumber != null && mg.guesserPick == null) armOddEvenTimer(mg); // 이제 지목하는 사람 차례로 데드라인 갱신
+  broadcastState();
+  if (mg.hiderNumber != null && mg.guesserPick != null) {
+    const actual = mg.hiderNumber % 2 === 0 ? 'EVEN' : 'ODD';
+    const correct = actual === mg.guesserPick;
+    log(`정답 공개: 숨긴 숫자는 ${mg.hiderNumber}(${actual === 'ODD' ? '홀수' : '짝수'})였습니다. (${correct ? '맞힘' : '틀림'})`);
     endMinigame(correct ? mg.guesser : mg.hider);
   }
 }
@@ -921,6 +1012,38 @@ function handleDice(id, payload, mg) {
   }
 }
 
+// 가위바위보 — 역할 구분 없이 양쪽이 동시에 독립적으로 낸다. 둘 다 내면 그 자리에서 바로
+// 승부를 가린다. 비기면 CONFIG.RPS_MAX_TIE_REPLAYS번까지 그대로 다시 내고(선택 기록 초기화),
+// 그래도 계속 비기면 더 이상 반복하지 않고 무작위로 승부를 정한다.
+const RPS_BEATS = { ROCK: 'SCISSORS', SCISSORS: 'PAPER', PAPER: 'ROCK' };
+function handleRps(id, payload, mg) {
+  if (mg.picks[id]) return; // 이미 냄 — 뒤늦게 오는 메시지 무시
+  const hand = payload && payload.hand;
+  if (!['ROCK', 'PAPER', 'SCISSORS'].includes(hand)) return;
+  mg.picks[id] = hand;
+  log(`${match.players[id].name}이 가위바위보를 냈습니다.`);
+  broadcastState();
+  const [a, b] = match.order;
+  if (!mg.picks[a] || !mg.picks[b]) return;
+  const pa = mg.picks[a], pb = mg.picks[b];
+  if (pa === pb) {
+    if (mg.tieRound >= CONFIG.RPS_MAX_TIE_REPLAYS) {
+      const winner = shuffle([a, b])[0];
+      log(`계속 비겨서(${mg.tieRound}회) 더 이상 다시 내지 않고 무작위로 승부를 정합니다 — ${match.players[winner].name} 승리.`);
+      return endMinigame(winner);
+    }
+    mg.tieRound += 1;
+    mg.picks = {};
+    log(`비겼습니다! (둘 다 ${pa}) — 다시 냅니다. (재대결 ${mg.tieRound}/${CONFIG.RPS_MAX_TIE_REPLAYS})`);
+    armRpsTimer(mg);
+    broadcastState();
+    return;
+  }
+  const winner = RPS_BEATS[pa] === pb ? a : b;
+  log(`가위바위보 결과 공개: ${match.players[a].name}=${pa}, ${match.players[b].name}=${pb}`);
+  endMinigame(winner);
+}
+
 // ------------------------------ 본행동(액션) ---------------------------------
 // 본행동: 라운드마다 CONFIG.OPENS_PER_TURN(기본 2)번의 행동 예산만큼 내 처소의 칸을 연다.
 function doAction(id, kind, payload) {
@@ -958,38 +1081,47 @@ function resolveOpen(id, player, row, col, cell) {
     actionLog(player, '독배를 마셨습니다... (해독하지 못하면 게임 종료 시 감점 — 몇 점인지는 종료 후 공개)');
     notifyPoisonDrink(id);
     checkNeutralize(id, player);
-  } else if (t === 'GEM') {
-    resolveGemOpen(player, row, col, cell);
+  } else if (t === 'TREASURE') {
+    resolveTreasureOpen(id, player, row, col, cell);
+  } else if (t === 'GOLDCUP') {
+    player.goldcupFound += 1;
+    player.score += CONFIG.GOLDCUP_PTS;
+    actionLog(player, `금술잔을 발견했습니다! (+${CONFIG.GOLDCUP_PTS}점)`);
   } else if (t === 'A') {
     player.antidote += 1;
     checkNeutralize(id, player);
   }
 }
 
-// 보석 조각 하나를 발견했을 때: 조각당 +GEM_PIECE_PTS는 항상 즉시 받는다. 이 보석이 여러 칸짜리
-// (긴 것=2칸/네모=4칸)이고 이번이 그 보석의 "첫 조각"이라면, 아직 안 연 나머지 조각이 방금 연
-// 칸을 기준으로 어느 방향에 있는지 바로 알려준다(자기 처소 안 정보라 숨길 이유가 없다). 남은
-// 조각이 하나도 없다면(=이번 조각으로 완성) 조각 점수와는 별개로 크기만큼 추가 보너스를 준다.
-function resolveGemOpen(player, row, col, cell) {
-  const gem = player.gems[cell.gemId];
-  player.score += CONFIG.GEM_PIECE_PTS;
-  if (!gem) return; // 안전장치 — 있을 수 없는 상태
-  const remaining = gem.cells.filter((c) => !player.room[c.row][c.col].opened);
-  const foundSoFar = gem.size - remaining.length;
-  if (gem.size === 1) {
-    actionLog(player, `보석을 발견했습니다! (+${CONFIG.GEM_PIECE_PTS}점)`);
-  } else if (foundSoFar === 1) {
-    const dirLabel = ({ '-1,0': '위', '1,0': '아래', '0,-1': '왼쪽', '0,1': '오른쪽' });
-    const dirs = remaining.map((c) => dirLabel[`${c.row - row},${c.col - col}`] || '근처').join('/');
-    actionLog(player, `보석 조각을 발견했습니다! (+${CONFIG.GEM_PIECE_PTS}점, 1/${gem.size}) — 나머지 조각이 이 칸 ${dirs} 방향에 있습니다.`);
+// 왕가의 보물 칸 하나를 발견했을 때: 칸마다 +TREASURE_FIND_PTS를 항상 즉시 받는다. 칼(SWORD)처럼
+// 2칸짜리 보물이고 이번이 그 보물의 "첫 조각"이라면, 아직 안 연 나머지 조각이 방금 연 칸을
+// 기준으로 어느 방향에 있는지 바로 알려준다(자기 처소 안 정보라 숨길 이유가 없다). 두 선수 중
+// 누구든 "발견한 왕가의 보물 칸 수"가 처음으로 TREASURE_RACE_COUNT에 도달하면 그 즉시 레이스
+// 보너스를 한 번만 받는다.
+function resolveTreasureOpen(id, player, row, col, cell) {
+  const treasure = player.treasures[cell.treasureId];
+  player.treasureFound += 1;
+  player.score += CONFIG.TREASURE_FIND_PTS;
+  const treasureName = TREASURE_NAMES[cell.treasureId] || '보물';
+  if (!treasure || treasure.size === 1) {
+    actionLog(player, `왕가의 보물 — ${treasureName}을(를) 발견했습니다! (+${CONFIG.TREASURE_FIND_PTS}점)`);
   } else {
-    actionLog(player, `보석 조각을 발견했습니다! (+${CONFIG.GEM_PIECE_PTS}점, ${foundSoFar}/${gem.size})`);
+    const remaining = treasure.cells.filter((c) => !player.room[c.row][c.col].opened);
+    const foundSoFar = treasure.size - remaining.length;
+    if (foundSoFar === 1) {
+      const dirLabel = ({ '-1,0': '위', '1,0': '아래', '0,-1': '왼쪽', '0,1': '오른쪽' });
+      const dirs = remaining.map((c) => dirLabel[`${c.row - row},${c.col - col}`] || '근처').join('/');
+      actionLog(player, `왕가의 보물 — ${treasureName}의 한 조각을 발견했습니다! (+${CONFIG.TREASURE_FIND_PTS}점) — 나머지 조각이 이 칸 ${dirs} 방향에 있습니다.`);
+    } else {
+      actionLog(player, `왕가의 보물 — ${treasureName}을(를) 완성했습니다! (+${CONFIG.TREASURE_FIND_PTS}점)`);
+      log(`${player.name}이(가) 왕가의 보물 — ${treasureName}을(를) 완성했습니다!`);
+    }
   }
-  if (remaining.length === 0) {
-    const bonus = gem.size * CONFIG.GEM_COMPLETE_BONUS_PER_PIECE;
-    player.score += bonus;
-    actionLog(player, `보석을 완성했습니다! 추가 보너스 +${bonus}점!`);
-    log(`${player.name}이(가) 보석(${gem.size}조각)을 완성했습니다!`);
+  if (!match.treasureRaceWonBy && player.treasureFound >= CONFIG.TREASURE_RACE_COUNT) {
+    match.treasureRaceWonBy = id;
+    player.score += CONFIG.TREASURE_RACE_BONUS_PTS;
+    actionLog(player, `왕가의 보물을 가장 먼저 ${CONFIG.TREASURE_RACE_COUNT}개 발견해 레이스 보너스 +${CONFIG.TREASURE_RACE_BONUS_PTS}점을 얻었습니다!`);
+    log(`${player.name}이(가) 왕가의 보물을 가장 먼저 ${CONFIG.TREASURE_RACE_COUNT}개 발견해 레이스 보너스를 가져갔습니다!`);
   }
 }
 
@@ -1008,7 +1140,7 @@ function checkNeutralize(id, player) {
 // "지금 상황이 계속 팝업으로 떴으면 좋겠다"는 피드백 — 독배를 마시거나 해독하는 순간을 양쪽
 // 모두에게 즉시 알려준다. 주의: 이건 기존에 지켜오던 "상대 상태는 게임이 끝나기 전까지 모른다"는
 // 히든정보 설계를 일부러 깨는 것이라고 사전에 알렸고, 그래도 실시간 공개를 원한다는 답을 받아
-// 반영한 것이다 — GEM/문장 발견처럼 다른 이벤트까지 전부 공개하는 건 아니고 독배/해독제로 범위를
+// 반영한 것이다 — 왕가의 보물/문장 발견처럼 다른 이벤트까지 전부 공개하는 건 아니고 독배/해독제로 범위를
 // 좁혔다.
 function notifyPoisonDrink(id) {
   const player = match.players[id];
@@ -1118,33 +1250,10 @@ function checkRoundActionDone() {
   if (allDone) advanceAfterRoundAction();
 }
 
-// 이번 라운드가 끝나는 시점(advanceAfterRoundAction 맨 처음)에 한 줄 요약을 기록해둔다 —
-// 종료 화면에서 "라운드별로 누가 뭘 먹었는지" 표로 보여주기 위함. 이 시점엔 이번 라운드
-// 미니게임(match.minigame)과 보상(match.pendingReward)이 아직 다음 라운드로 넘어가기 전이라
-// 그대로 남아있고, 본행동(칸 열기)으로 인한 점수 변화도 이미 반영된 뒤다.
-function recordRoundHistory() {
-  const mg = match.minigame;
-  const pr = match.pendingReward;
-  const [a, b] = match.order;
-  const drawn = !!(mg && mg.result === 'DRAW');
-  const winnerId = (mg && mg.result && !drawn) ? mg.result : null;
-  match.roundHistory.push({
-    round: match.round,
-    minigameType: mg ? mg.type : null,
-    minigameName: mg ? MINIGAME_NAMES[mg.type] : null,
-    winnerId,
-    drawn,
-    rewardType: pr ? pr.type : null,
-    rewardName: pr && pr.type ? REWARD_NAMES[pr.type] : null,
-    scores: { [a]: match.players[a].score, [b]: match.players[b].score },
-  });
-}
-
 // 본행동(ROUND_ACTION) 타이머가 끝나는 시점에만 호출된다 — 이 시점엔 armActionTimer()가 못 다
 // 연 나머지를 전부 "포기(forfeit)" 처리해둔 뒤이므로, 두 사람 다 항상 "마쳤거나 포기함" 상태다.
 function advanceAfterRoundAction() {
   if (match.phase !== 'ROUND_ACTION') return;
-  recordRoundHistory();
   if (match.round >= CONFIG.ROUNDS_TOTAL) return endMatchByScore();
   // 전반 마지막 라운드가 끝나면 다음 라운드로 바로 넘어가지 않고, 처소 확장 + 중반 독 추가
   // 설치(MID_SETUP)를 먼저 거친다.
@@ -1164,7 +1273,7 @@ function advanceAfterRoundAction() {
 }
 
 // 동점 처리 순서 — 1) 최종 점수, 2) (동점이면) 독을 더 적게 먹은 쪽, 3) (그마저 같으면) 해독을
-// 더 많이 한 쪽, 4) (그마저 같으면) 완성한 보석 개수가 더 많은 쪽. 그래도 완전히 같으면 무승부.
+// 더 많이 한 쪽, 4) (그마저 같으면) 발견한 왕가의 보물 개수가 더 많은 쪽. 그래도 완전히 같으면 무승부.
 function endMatchByScore() {
   const [a, b] = match.order;
   const pa = match.players[a], pb = match.players[b];
@@ -1194,12 +1303,12 @@ function endMatchByScore() {
     winner = (pa.antidote || 0) > (pb.antidote || 0) ? a : b;
     reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독 동률, 해독제 개수로 승부 판정`;
   } else {
-    const gemsA = gemSummary(pa).completed, gemsB = gemSummary(pb).completed;
-    if (gemsA !== gemsB) {
-      winner = gemsA > gemsB ? a : b;
-      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독 동률, 완성한 보석 개수로 승부 판정`;
+    const treasureA = pa.treasureFound || 0, treasureB = pb.treasureFound || 0;
+    if (treasureA !== treasureB) {
+      winner = treasureA > treasureB ? a : b;
+      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독 동률, 발견한 왕가의 보물 개수로 승부 판정`;
     } else {
-      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독·보석 완전 동률(무승부)`;
+      reason = `${CONFIG.ROUNDS_TOTAL}라운드 종료 — 점수·독·해독·왕가의 보물 완전 동률(무승부)`;
     }
   }
   endMatch(reason, winner);
@@ -1242,20 +1351,16 @@ function resetForRematch() {
   startSetup();
 }
 
-// 보석 현황 요약 — gemId별로 { size, foundCount, completed }. 아직 하나도 못 찾은 보석은
-// 존재 자체가 스포일러이므로 목록에서 아예 뺀다. buildClientState와 buildAdminState가 함께
-// 쓰므로 모듈 스코프에 둔다.
-function gemSummary(player) {
+// 왕가의 보물 현황 요약 — treasureId별로 { size, name, foundCount, completed }. 아직 하나도 못
+// 찾은 보물은 존재 자체가 스포일러이므로 목록에서 아예 뺀다. buildClientState와 buildAdminState가
+// 함께 쓰므로 모듈 스코프에 둔다.
+function treasureSummary(player) {
   const out = {};
-  let piecesFound = 0, completed = 0;
-  for (const [gemId, gem] of Object.entries(player.gems)) {
-    const foundCount = gem.cells.filter((c) => player.room[c.row][c.col].opened).length;
-    piecesFound += foundCount;
-    const isDone = foundCount === gem.size;
-    if (isDone) completed += 1;
-    if (foundCount > 0) out[gemId] = { size: gem.size, foundCount, completed: isDone };
+  for (const [treasureId, treasure] of Object.entries(player.treasures)) {
+    const foundCount = treasure.cells.filter((c) => player.room[c.row][c.col].opened).length;
+    if (foundCount > 0) out[treasureId] = { size: treasure.size, name: TREASURE_NAMES[treasureId], foundCount, completed: foundCount === treasure.size };
   }
-  return { gems: out, piecesFound, completed };
+  return out;
 }
 
 // ------------------------------ 소켓 -----------------------------------------
@@ -1269,11 +1374,11 @@ function buildClientState(forId) {
       locked: cell.locked,
       type: cell.opened || revealAll ? cell.type : (cell.cluedType || null),
       note: cell.cluedNote || null,
-      // 같은 보석의 조각끼리 묶어서 보여주기 위한 id — 실제로 공개된 보석 칸일 때만 내려준다.
-      gemId: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemId : null,
-      // 이 칸이 보석 전체에서 어느 조각(위/아래, 좌상/좌하/우상/우하 등)인지 — 옛 "가문의 문장"
-      // 조각 이미지처럼 칸마다 보석의 한 조각만 보이게 그리기 위한 라벨.
-      gemPiece: (cell.opened || revealAll) && cell.type === 'GEM' ? cell.gemPiece : null,
+      // 칼처럼 여러 칸짜리 보물의 조각끼리 묶어서 보여주기 위한 id — 실제로 공개된 보물 칸일 때만 내려준다.
+      treasureId: (cell.opened || revealAll) && cell.type === 'TREASURE' ? cell.treasureId : null,
+      // 이 칸이 보물 전체에서 어느 조각(위/아래)인지 — 칸마다 보물의 한 조각(또는 전체)만 보이게
+      // 그리기 위한 라벨.
+      treasurePiece: (cell.opened || revealAll) && cell.type === 'TREASURE' ? cell.treasurePiece : null,
     })));
 
   const pr = match.pendingReward;
@@ -1330,10 +1435,11 @@ function buildClientState(forId) {
       name: me.name, poison: poisonTotal(me), antidote: me.antidote, score: me.score, finalScore: me.finalScore,
       poisonInitial: match.phase === 'END' ? me.poisonInitial : null,
       poisonMid: match.phase === 'END' ? me.poisonMid : null,
-      gems: gemSummary(me).gems,
-      gemsFound: gemSummary(me).piecesFound,
-      gemsCompleted: gemSummary(me).completed,
-      gemsTotal: CONFIG.GEM_PIECES_TOTAL,
+      treasures: treasureSummary(me),
+      treasureFound: me.treasureFound,
+      treasureRaceCount: CONFIG.TREASURE_RACE_COUNT,
+      treasureRaceWon: match.treasureRaceWonBy === forId,
+      goldcupFound: me.goldcupFound,
       room: sanitizeRoom(me.room, match.phase === 'END'),
       history: me.history || [],
     },
@@ -1346,7 +1452,7 @@ function buildClientState(forId) {
     // 단, 점수(score)는 상단 점수판 요청에 따라 예외적으로 실시간 공개한다 — 독/해독제/처소
     // 내용은 여전히 비공개이므로 "패를 읽는" 추리 재미 자체는 유지된다.
     opp: opp && (match.phase === 'END'
-      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, gems: gemSummary(opp).gems, gemsFound: gemSummary(opp).piecesFound, gemsCompleted: gemSummary(opp).completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
+      ? { name: opp.name, poison: poisonTotal(opp), poisonInitial: opp.poisonInitial, poisonMid: opp.poisonMid, antidote: opp.antidote, score: opp.score, finalScore: opp.finalScore, treasures: treasureSummary(opp), treasureFound: opp.treasureFound, goldcupFound: opp.goldcupFound, connected: opp.connected, room: sanitizeRoom(opp.room, true) }
       : { name: opp.name, connected: opp.connected, room: null, score: opp.score }),
     oppOpenedMask: (match.phase === 'MID_SETUP' && opp) ? opp.room.map((row) => row.map((cell) => cell.opened)) : null,
     // 상대 처소에서 "이미 뭔가 있어(독/보석/해독제) 중반 독 추가 대상이 될 수 없는 칸"까지 함께
@@ -1360,18 +1466,6 @@ function buildClientState(forId) {
     config: CONFIG,
     clueCatNames: CLUE_CAT_NAMES,
     playersConnected: match.order.length,
-    // 라운드별 요약(미니게임 승자/보상/그 시점 누적 점수) — 보는 사람 기준(me/opp)으로 바꿔서 내려준다.
-    // 안에 담긴 정보(누가 미니게임을 이겼는지, 무슨 보상을 골랐는지, 점수)는 전부 이미 실시간
-    // 로그/점수판으로 공개돼온 것들이라 숨길 이유가 없다 — 그걸 라운드 단위 표로 정리해줄 뿐이다.
-    roundHistory: match.roundHistory.map((h) => ({
-      round: h.round,
-      minigameName: h.minigameName,
-      winner: h.drawn ? 'draw' : (h.winnerId == null ? null : (h.winnerId === forId ? 'me' : 'opp')),
-      rewardName: h.rewardName,
-      rewardOwner: h.drawn ? null : (h.winnerId == null ? null : (h.winnerId === forId ? 'me' : 'opp')),
-      myScore: h.scores[forId],
-      oppScore: oppId ? h.scores[oppId] : null,
-    })),
   };
 }
 
@@ -1427,6 +1521,26 @@ function publicMinigameView(mg, forId) {
       deadlineAt: mg.deadlineAt || null,
     };
   }
+  if (mg.type === 'RPS') {
+    const oppId = otherId(forId);
+    return {
+      myPicked: mg.picks[forId] != null, oppPicked: mg.picks[oppId] != null,
+      // 둘 다 낸 순간(그 라운드가 비겨서 다시 내는 경우 포함)에만 실제 손모양을 공개한다.
+      revealed: (mg.picks[forId] != null && mg.picks[oppId] != null) ? { my: mg.picks[forId], opp: mg.picks[oppId] } : null,
+      tieRound: mg.tieRound, maxTieReplays: CONFIG.RPS_MAX_TIE_REPLAYS,
+      deadlineAt: mg.deadlineAt || null,
+    };
+  }
+  if (mg.type === 'ODDEVEN') {
+    const role = mine(mg.hider) ? 'hider' : mine(mg.guesser) ? 'guesser' : null;
+    return {
+      role,
+      waitingForMe: (role === 'hider' && mg.hiderNumber == null) || (role === 'guesser' && mg.hiderNumber != null && mg.guesserPick == null),
+      hiderDone: mg.hiderNumber != null,
+      numberMin: CONFIG.ODDEVEN_NUMBER_MIN, numberMax: CONFIG.ODDEVEN_NUMBER_MAX,
+      deadlineAt: mg.deadlineAt || null,
+    };
+  }
   return {};
 }
 
@@ -1460,6 +1574,8 @@ function buildAdminMinigameSummary(mg) {
     시도횟수: byName(mg.history, (v) => v.length),
   };
   if (type === 'DICE') return { 누른상태: byName(mg.pressAt, (v) => (v != null ? '누르는 중' : '뗌')), 확정된눈: byName(mg.results) };
+  if (type === 'RPS') return { 낸것: byName(mg.picks), 재대결횟수: mg.tieRound };
+  if (type === 'ODDEVEN') return { 숨기는사람: nameOf(mg.hider), 맞히는사람: nameOf(mg.guesser), 숨긴숫자: mg.hiderNumber, 지목: mg.guesserPick };
   return {};
 }
 
@@ -1489,19 +1605,19 @@ function buildAdminState() {
     })) : null,
     players: match.order.map((id) => {
       const p = match.players[id];
-      const gs = gemSummary(p);
+      const ts = treasureSummary(p);
       return {
         name: p.name,
         connected: p.connected,
         poison: poisonTotal(p), poisonInitial: p.poisonInitial, poisonMid: p.poisonMid, antidote: p.antidote, score: p.score, finalScore: p.finalScore,
-        gems: gs.gems, gemsFound: gs.piecesFound, gemsCompleted: gs.completed, gemsTotal: CONFIG.GEM_PIECES_TOTAL,
+        treasures: ts, treasureFound: p.treasureFound, treasureTotal: CONFIG.TREASURE_CELLS_TOTAL, goldcupFound: p.goldcupFound,
         opens: match.actionOpens[id] || 0,
         // 관리자 화면의 목적은 "서로 어떤 걸 선택하고 있는지"만 보여주는 것 — 아직 열지 않은 칸의
         // 정체까지 미리 다 보여주면 그 취지를 벗어나므로, 실제로 연(선택한) 칸만 종류를 공개한다.
         room: p.room.map((row) => row.map((cell) => ({
           type: cell.opened ? cell.type : null, opened: cell.opened, locked: cell.locked,
-          gemId: cell.opened && cell.type === 'GEM' ? cell.gemId : null,
-          gemPiece: cell.opened && cell.type === 'GEM' ? cell.gemPiece : null,
+          treasureId: cell.opened && cell.type === 'TREASURE' ? cell.treasureId : null,
+          treasurePiece: cell.opened && cell.type === 'TREASURE' ? cell.treasurePiece : null,
         }))),
       };
     }),

@@ -242,25 +242,27 @@ button { font-family: inherit; cursor: pointer; }
 .cellIcon-P .drip { stroke: none; }
 .cellIcon-P { filter: drop-shadow(0 0 3px rgba(209,66,90,0.9)) drop-shadow(0 0 7px rgba(209,66,90,0.55)); }
 
-.cellIcon-GEM .rim, .cellIcon-GEM .bowl, .cellIcon-GEM .stem, .cellIcon-GEM .base { stroke: var(--gold); }
-.cellIcon-GEM .glyph { fill: var(--gold); }
+.cellIcon-TREASURE .rim, .cellIcon-TREASURE .bowl, .cellIcon-TREASURE .stem, .cellIcon-TREASURE .base { stroke: var(--gold); }
+.cellIcon-TREASURE .glyph { fill: var(--gold); }
 /* overflow: hidden로 부모(.cellIcon)의 overflow: visible을 덮어써야 한다 — 그렇지 않으면
    viewBox로 잘라낸 조각 바깥의 원본 이미지 전체가 칸 바깥으로 그대로 새어나와 옆 칸까지
    침범해 보인다(실측 확인됨). 다른 아이콘(독/해독제 등)은 도형이 자기 viewBox 안에 다
-   들어가 있어 overflow: visible이어도 문제 없지만, 보석 조각은 일부러 큰 이미지의 일부만
-   보이게 자르는 것이라 반드시 잘려야 한다.
-   또한 "보석이 이어지게 보이도록" — 기존엔 다른 아이콘과 똑같이 26x26 고정 크기로 칸 한가운데
-   작게 떠 있어서, 인접한 두 칸에 걸친 조각(TOP/BOTTOM, 2x2 사분면)이 서로 수십 px씩 떨어져
-   보였다(칸 자체는 훨씬 크므로). 칸 전체(100%)를 꽉 채우도록 절대배치로 바꾸면 인접한 칸의
-   조각들이 경계에서 서로 맞닿아 하나의 큰 그림처럼 이어져 보인다. */
+   들어가 있어 overflow: visible이어도 문제 없지만, 칼(왕가의 보물)의 위/아래 조각은 일부러
+   큰 이미지의 일부만 보이게 자르는 것이라 반드시 잘려야 한다.
+   또한 "보물이 이어지게 보이도록" — 기존엔 다른 아이콘과 똑같이 26x26 고정 크기로 칸 한가운데
+   작게 떠 있어서, 인접한 두 칸에 걸친 조각(TOP/BOTTOM)이 서로 수십 px씩 떨어져 보였다(칸
+   자체는 훨씬 크므로). 칸 전체(100%)를 꽉 채우도록 절대배치로 바꾸면 인접한 칸의 조각들이
+   경계에서 서로 맞닿아 하나의 큰 그림처럼 이어져 보인다. */
 /* .cell 안에서만 꽉 채워 이어붙인다 — 라운드 종료 요약 배지(.roundOpenSummaryIcon)도
-   같은 cellIcon-GEM 클래스를 재사용하는데, 거기에도 이 규칙이 적용되면(예전 버그) 절대배치가
+   같은 cellIcon-TREASURE 클래스를 재사용하는데, 거기에도 이 규칙이 적용되면(예전 버그) 절대배치가
    가장 가까운 position 조상(보통 body/뷰포트)을 기준으로 튀어나가 화면 구석에 조그맣게
    따로 떠 보인다 — 반드시 .cell 안에서만 적용되도록 스코프를 좁힌다. */
-.cell .cellIcon-GEM {
+.cell .cellIcon-TREASURE {
   width: 100%; height: 100%; position: absolute; inset: 0;
   overflow: hidden;
 }
+
+.cellIcon-GOLDCUP { filter: drop-shadow(0 0 3px rgba(240,201,117,0.9)) drop-shadow(0 0 7px rgba(240,201,117,0.55)); }
 
 .cellIcon-C .bowl { fill: none; stroke: #b98be0; stroke-width: 1.6; stroke-linejoin: round; }
 .cellIcon-C .glyph { fill: #b98be0; }
@@ -287,8 +289,8 @@ button { font-family: inherit; cursor: pointer; }
 .stat.poison .v { color: var(--crimson-bright); }
 .stat.antidote .v { color: var(--jade); }
 .stat.score .v { color: var(--gold); }
-.stat.gem .v { color: #b98be0; font-size: 17px; }
-.stat.gemSet .v { color: #b98be0; }
+.stat.treasure .v { color: #b98be0; font-size: 17px; }
+.stat.goldcup .v { color: var(--gold); }
 
 /* 처소 그리드(왼쪽) + 보석 발견 현황(오른쪽) 좌우 배치. 세로로 쌓아 스크롤이 생기던 것을
    가로로 펼쳐 한 화면에 다 보이게 한다. 화면이 넉넉히 넓을 때는 그리드가 원래 크기(420px)로
@@ -310,16 +312,16 @@ button { font-family: inherit; cursor: pointer; }
   background: #150c10; color: var(--muted);
 }
 
-/* 보석 발견 현황 — 읽기 전용 배지 목록. 하나도 못 찾은 보석은 서버가 애초에 안 내려주므로
-   여기엔 최소 한 조각이라도 찾은 보석만 나온다. */
-.gemStatusWrap { margin-top: 14px; }
-.gemStatusWrap h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: normal; }
-.gemStatusRow { display: flex; flex-wrap: wrap; gap: 6px; }
-.gemStatusBadge {
+/* 왕가의 보물 발견 현황 — 읽기 전용 배지 목록. 하나도 못 찾은 보물은 서버가 애초에 안 내려주므로
+   여기엔 최소 한 조각이라도 찾은 보물만 나온다. */
+.treasureStatusWrap { margin-top: 14px; }
+.treasureStatusWrap h3 { font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: normal; }
+.treasureStatusRow { display: flex; flex-wrap: wrap; gap: 6px; }
+.treasureStatusBadge {
   font-size: 12px; padding: 5px 9px; border-radius: 3px; border: 1px solid var(--border);
   background: #150c10; color: var(--muted);
 }
-.gemStatusBadge.complete { border-color: #b98be0; color: #d8b6f2; background: #241a30; }
+.treasureStatusBadge.complete { border-color: #b98be0; color: #d8b6f2; background: #241a30; }
 
 /* 아직 후반부가 열리지 않아 잠겨 있는 칸 — 6x4에서 6x6으로 확장되기 전까지 표시된다 */
 .cell.lockedSpot { background: #100a0d; border-style: dashed; cursor: not-allowed; opacity: 0.55; }
@@ -464,15 +466,6 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .endBanner.win h2 { color: var(--gold); }
 .endBanner.lose h2 { color: var(--crimson-bright); }
 .endBanner.draw h2 { color: var(--muted); }
-
-.roundHistoryTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 6px; }
-.roundHistoryTable th, .roundHistoryTable td { padding: 7px 8px; text-align: center; border-bottom: 1px solid rgba(240,201,117,0.14); }
-.roundHistoryTable th { color: var(--gold); font-weight: 600; font-size: 12px; }
-.roundHistoryTable td.scoreCell { font-variant-numeric: tabular-nums; font-weight: 600; }
-.roundHistoryTable .rewardOwnerTag { color: var(--muted); font-size: 11px; }
-.leadBadge { display:inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-.leadBadge.me { background: rgba(240,201,117,0.18); color: var(--gold); }
-.leadBadge.opp { background: rgba(209,66,90,0.18); color: var(--crimson-bright); }
 
 .historyPanel { min-height: 160px; }
 .historyList { display:flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }

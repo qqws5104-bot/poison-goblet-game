@@ -1,12 +1,10 @@
 // 자동 스모크 테스트: 두 개의 소켓 클라이언트로 전반 셋업(6×4) + 8라운드 + 중반 재설치
 // (독 추가 2칸 + 6×6 확장) + 후반 7라운드, 총 15라운드를 진행시켜 서버 로직이 예외 없이
-// 동작하는지, 9종 미니게임과 보상 시스템(섬광/한칸/가로줄/세로줄 정찰, 4종)이 모두
+// 동작하는지, 11종 미니게임과 보상 시스템(섬광/한칸/가로줄/세로줄 정찰, 4종)이 모두
 // 정상 동작하는지 확인한다.
-// [2026-10-01] "암살 긴장감을 더 줘야 한다"는 피드백으로 독배와 무관한 가문의 문장 슬라이딩
-// 퍼즐을 완전히 삭제하면서, 이 테스트의 퍼즐 봇 로직(puzzleAdjFor/bfsNextMove/playPoisonPuzzle
-// 등)도 함께 제거했다. 이후 "협박 표식"(MARK) 보상을 추가했다가, "컨셉에 안 어울린다"는
-// 피드백에 따라 다시 완전히 삭제하고 보상 4종 체제로 복귀했다. 보석 아이템도 1/2/4조각 3종에서
-// 1/2조각 2종으로 단순화되고 개수가 줄었다(서버 CONFIG.FIRST_HALF_GEM_SIZES/SECOND_HALF_GEM_SIZES).
+// [2026-10-02] "보석(GEM)" 개념을 완전히 제거하고 왕가의 보물(왕관/칼/도장, 세트당 한 번씩만)
+// + 금술잔(단순 반복 아이템, 3개) 두 가지로 분리했다. 가위바위보(RPS)와 홀짝 맞히기(ODDEVEN)
+// 두 미니게임도 새로 추가했다(총 9종 → 11종).
 const { io } = require('socket.io-client');
 
 const URL = 'http://localhost:3000';
@@ -125,11 +123,11 @@ function onState(label, socket, s) {
   if (s.phase === 'END' && !done) {
     done = true;
     console.log('=== GAME END ===', 'winner:', s.winner, 'reason:', s.endReason);
-    // 미니게임이 10종이고 ROUNDS_TOTAL도 15로 늘었으므로, 이론상 한 매치에 10종이 전부
+    // 미니게임이 11종이고 ROUNDS_TOTAL도 15이므로, 이론상 한 매치에 11종이 전부
     // 나올 수 있다(라운드 수가 미니게임 종류 수보다 많음).
-    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/9, max possible per match = min(9,ROUNDS_TOTAL))`);
+    console.log('minigame types seen:', [...minigamesSeen], `(${minigamesSeen.size}/11, max possible per match = min(11,ROUNDS_TOTAL))`);
     console.log('reward types seen:', [...rewardsSeen], `(${rewardsSeen.size}/4)`);
-    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, gemsFound: s.me.gemsFound, gemsCompleted: s.me.gemsCompleted, gemsTotal: s.me.gemsTotal });
+    console.log('final me(' + label + '):', { score: s.me.score, poison: s.me.poison, finalScore: s.me.finalScore, treasureFound: s.me.treasureFound, treasures: s.me.treasures, goldcupFound: s.me.goldcupFound });
     setTimeout(() => process.exit(0), 200);
   }
 }
@@ -213,6 +211,19 @@ function playMinigame(label, socket, s) {
     if (type === 'DICE' && mg.myResult == null && !mg.myPressed) {
       socket.emit('minigame:move', { action: 'PRESS' });
       setTimeout(() => socket.emit('minigame:move', { action: 'RELEASE' }), 150 + Math.random() * 500);
+    }
+    if (type === 'RPS' && !mg.myPicked) {
+      const hands = ['ROCK', 'PAPER', 'SCISSORS'];
+      socket.emit('minigame:move', { hand: hands[Math.floor(Math.random() * hands.length)] });
+    }
+    if (type === 'ODDEVEN') {
+      if (mg.role === 'hider' && mg.waitingForMe) {
+        const n = mg.numberMin + Math.floor(Math.random() * (mg.numberMax - mg.numberMin + 1));
+        socket.emit('minigame:move', { number: n });
+      }
+      if (mg.role === 'guesser' && mg.waitingForMe) {
+        socket.emit('minigame:move', { pick: Math.random() < 0.5 ? 'ODD' : 'EVEN' });
+      }
     }
     // BOMB는 정해진 횟수가 아니라 시간(최대 60초)이 다 될 때까지 계속 넘겨야 하므로, 다른
     // 미니게임과 같은 20~80ms 간격으로 스팸처럼 넘기면 초당 십수 번씩 왕복 메시지가 오가며

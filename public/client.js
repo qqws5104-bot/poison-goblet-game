@@ -120,6 +120,12 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       socket.emit('minigame:move', { n });
     }
+  } else if (type === 'ODDEVEN' && mg.role === 'hider' && mg.waitingForMe) {
+    const n = Number(e.key);
+    if (Number.isInteger(n) && n >= mg.numberMin && n <= mg.numberMax) {
+      e.preventDefault();
+      socket.emit('minigame:move', { number: n });
+    }
   }
 });
 // 스페이스바를 뗀 순간 주사위 결과를 확정한다 — keydown과 분리된 keyup 이벤트라 별도 리스너로 둔다.
@@ -161,94 +167,88 @@ function impactFor(kind) {
   else if (kind === 'treasure') { flashScreen('gold'); }
 }
 
-const CELL_NAME = { P: '독', GEM: '보석', A: '해독', E: '' };
-const CELL_EMOJI = { P: '☠️', GEM: '💎', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
+const CELL_NAME = { P: '독', TREASURE: '왕가의 보물', GOLDCUP: '금술잔', A: '해독', E: '빈 칸' };
+const CELL_EMOJI = { P: '☠️', TREASURE: '👑', GOLDCUP: '🏆', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
 
-// 독배/해독제/빈 칸은 실사 이미지(public/icons/*.png)를 그대로 보여주는 발광 아이콘.
+// 독배/해독제/금술잔은 실사 이미지(public/icons/*.png)를 그대로 보여주는 발광 아이콘.
 // 그리드 칸(및 종료 화면 공개칸)에서 이모지 대신 실제 DOM에 그려 넣는다.
 // 절대경로(/icons/..., /gems/...)로 써야 한다 — 이 화면은 /game/A, /pick/B 등 다양한 경로에서
 // 열리므로, 상대경로를 쓰면 현재 주소 기준으로 잘못 풀려 이미지가 깨진다.
 const ITEM_IMAGES = {
   P: { src: '/icons/poison.png', w: 438, h: 512 }, // 독배 — 해골이 떠오른 붉은 잔
   A: { src: '/icons/potion.png', w: 418, h: 483 }, // 해독제 — 초록 약병
+  GOLDCUP: { src: '/icons/gold_cup.png', w: 409, h: 498 }, // 금술잔 — 단순 발견형 아이템(조각 없음)
 };
-// 빈 칸(E)도 "이미 열어본 술잔"답게 금잔/은잔 두 가지를 칸 좌표로 번갈아 보여준다(한쪽으로만
-// 쏠리지 않도록 단순 홀짝 대신 좌표를 섞어서 분산). 빈 칸은 아무 정보가 없는 칸이라 어느 잔을
-// 보여주는지는 순수 장식일 뿐 의미는 없다.
-const EMPTY_CUP_IMAGES = [
-  { src: '/icons/gold_cup.png', w: 409, h: 498 },
-  { src: '/icons/silver_cup.png', w: 379, h: 475 },
-];
-function emptyCupVariant(seed) {
-  const n = Number(seed) || 0;
-  return EMPTY_CUP_IMAGES[Math.abs(n * 2654435761 >> 0) % EMPTY_CUP_IMAGES.length];
-}
 function imageIconSVG(type, src, w, h) {
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-${type}" aria-hidden="true">
     <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
 }
-function cellIconSVG(type, seed) {
+// 빈 칸(E)은 "아무것도 없었다"는 사실 외에 다른 정보나 장식이 전혀 없는 칸이다 — 괜히 금잔/은잔
+// 같은 이미지를 보여주면 실제 금술잔(이제 별도의 진짜 아이템)과 헷갈릴 수 있으므로, 그냥 "X"
+// 표시 하나만 보여준다.
+function emptyMarkHTML() {
+  return `<span class="emptyMark">X</span>`;
+}
+function cellIconSVG(type) {
   if (!type) return '';
-  if (type === 'E') {
-    const { src, w, h } = emptyCupVariant(seed);
-    return imageIconSVG('E', src, w, h);
-  }
+  if (type === 'E') return emptyMarkHTML();
   if (ITEM_IMAGES[type]) {
     const { src, w, h } = ITEM_IMAGES[type];
     return imageIconSVG(type, src, w, h);
   }
   return '';
 }
-// 보석은 실사 이미지(public/gems/*.png)를 쓴다. 옛 "가문의 문장" 조각 방식과 같은 원리로,
-// 칸을 열면 보석 전체가 아니라 그 칸에 해당하는 "한 조각/반쪽"만 보이게 한다 — 큰 이미지 하나를
-// 같은 좌표계(viewBox)로 잘라서 보여주는 방식이라, 인접한 칸들을 나란히 열면 자연스럽게 하나의
-// 그림처럼 이어져 보인다. 1조각 보석(SOLO)은 왕관/인장 중 하나를 통째로 보여주고(같은 보석이면
-// 항상 같은 쪽으로 — gemId로 고정), 2조각 보석(TOP/BOTTOM)은 검 이미지를 위/아래로 나눠 쓴다.
-const GEM_IMAGES = {
-  CROWN: { src: '/gems/crown.png', w: 475, h: 551 }, // 1조각 보석 — 왕관
-  SEAL: { src: '/gems/seal.png', w: 438, h: 547 },   // 1조각 보석 — 인장
-  SWORD: { src: '/gems/sword.png', w: 512, h: 839 }, // 2조각 보석 — 검(위: 손잡이, 아래: 칼날)
+// 왕가의 보물(왕관/칼/도장)은 실사 이미지(public/gems/*.png)를 쓴다. 왕관·도장은 1칸짜리라
+// 이미지 전체를 그대로 보여주고, 칼(SWORD)만 2칸짜리라 칸을 열면 전체가 아니라 그 칸에 해당하는
+// "위쪽/아래쪽 절반"만 보이게 한다 — 큰 이미지 하나를 같은 좌표계(viewBox)로 잘라서 보여주는
+// 방식이라, 인접한 두 칸을 나란히 열면 자연스럽게 하나의 그림처럼 이어져 보인다.
+const TREASURE_IMAGES = {
+  CROWN: { src: '/gems/crown.png', w: 475, h: 551 }, // 왕관 — 1칸
+  SEAL: { src: '/gems/seal.png', w: 438, h: 547 },   // 도장 — 1칸
+  SWORD: { src: '/gems/sword.png', w: 512, h: 839 }, // 칼 — 2칸(위: 손잡이, 아래: 칼날)
 };
 // preserveAspectRatio="none"으로 뷰박스를 칸(정사각형) 전체에 강제로 늘려 채운다 — 기본값인
-// "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 검 조각) 여백이 생겨서
+// "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 칼 조각) 여백이 생겨서
 // 인접한 칸의 조각과 딱 맞붙지 않고 틈이 남는다. "none"으로 늘리면 같은 원본에서 나온 두 조각이
 // 항상 같은 비율로 늘어나므로(가로/세로 늘어난 비율이 조각마다 동일) 약간의 비율 왜곡은 있어도
 // 이어붙는 경계선은 항상 정확히 맞아떨어진다 — 이어져 보이는 것이 실제 비율 유지보다 우선.
-function gemFragmentSVG(gemPiece, gemId) {
-  if (!gemPiece || gemPiece === 'SOLO') {
-    const variant = (Math.abs(Number(gemId) || 0) % 2 === 0) ? GEM_IMAGES.CROWN : GEM_IMAGES.SEAL;
-    const { src, w, h } = variant;
-    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
+function treasureFragmentSVG(treasureId, treasurePiece) {
+  const img = TREASURE_IMAGES[treasureId] || TREASURE_IMAGES.CROWN;
+  if (treasureId !== 'SWORD' || !treasurePiece || treasurePiece === 'SOLO') {
+    const { src, w, h } = img;
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-TREASURE" aria-hidden="true">
       <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
     </svg>`;
   }
-  const { src, w, h } = GEM_IMAGES.SWORD;
+  const { src, w, h } = img;
   const half = h / 2;
-  const vb = gemPiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
-  return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
+  const vb = treasurePiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
+  return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-TREASURE" aria-hidden="true">
     <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
 }
-function cellVisualHTML(type, gemPiece, gemId) {
-  if (type === 'GEM') return gemFragmentSVG(gemPiece, gemId);
-  return cellIconSVG(type, gemId);
+function cellVisualHTML(type, treasureId, treasurePiece) {
+  if (type === 'TREASURE') return treasureFragmentSVG(treasureId, treasurePiece);
+  return cellIconSVG(type);
 }
-// 처소 패널 안에 "보석 발견 현황"을 보여주는 위젯. 조립/드래그 없이 순수 읽기 전용 —
-// 조각을 몇 개 찾았는지, 완성됐는지만 배지로 보여준다. 하나도 못 찾은 보석은 존재 자체가
-// 스포일러이므로 서버가 애초에 내려주지 않는다(gemSummary가 foundCount>0인 것만 담아 보냄).
-function gemStatusWidget(state) {
+// 처소 패널 안에 "왕가의 보물 발견 현황"을 보여주는 위젯. 조립/드래그 없이 순수 읽기 전용 —
+// 왕관/칼/도장 중 무엇을 찾았는지, 칼처럼 여러 칸짜리는 완성됐는지만 배지로 보여준다. 하나도
+// 못 찾은 보물은 존재 자체가 스포일러이므로 서버가 애초에 내려주지 않는다
+// (treasureSummary가 foundCount>0인 것만 담아 보냄).
+function treasureStatusWidget(state) {
   const me = state.me;
-  const gems = me.gems || {};
-  const gemIds = Object.keys(gems);
-  if (gemIds.length === 0) return null;
-  const wrap = el('div', 'gemStatusWrap');
-  wrap.appendChild(el('h3', null, `보석 발견 현황 (${me.gemsFound || 0} / ${me.gemsTotal || '?'}조각, 완성 ${me.gemsCompleted || 0}개)`));
-  const row = el('div', 'gemStatusRow');
-  gemIds.forEach((gemId) => {
-    const g = gems[gemId];
-    const badge = el('div', 'gemStatusBadge' + (g.completed ? ' complete' : ''),
-      `${g.size}조각 보석: ${g.foundCount}/${g.size}${g.completed ? ' ✓' : ''}`);
+  const treasures = me.treasures || {};
+  const treasureIds = Object.keys(treasures);
+  if (treasureIds.length === 0) return null;
+  const wrap = el('div', 'treasureStatusWrap');
+  const raceWon = me.treasureRaceWon ? ' — 레이스 보너스 획득!' : '';
+  wrap.appendChild(el('h3', null, `왕가의 보물 발견 현황 (${me.treasureFound || 0}/${me.treasureRaceCount || '?'}개${raceWon})`));
+  const row = el('div', 'treasureStatusRow');
+  treasureIds.forEach((treasureId) => {
+    const t = treasures[treasureId];
+    const badge = el('div', 'treasureStatusBadge' + (t.completed ? ' complete' : ''),
+      `${t.name}: ${t.foundCount}/${t.size}${t.completed ? ' ✓' : ''}`);
     row.appendChild(badge);
   });
   wrap.appendChild(row);
@@ -463,7 +463,7 @@ function detectImpacts(prev, next) {
     else if (nextResult === 'draw') impactFor('draw');
   }
   if (prev.me && next.me && Array.isArray(prev.me.room) && Array.isArray(next.me.room)) {
-    let revealed = null; // 우선순위: 독 > 해독제 > 보석
+    let revealed = null; // 우선순위: 독 > 해독제 > 왕가의 보물/금술잔
     for (let r = 0; r < next.me.room.length; r++) {
       for (let c = 0; c < next.me.room[r].length; c++) {
         const before = prev.me.room[r] && prev.me.room[r][c];
@@ -471,17 +471,17 @@ function detectImpacts(prev, next) {
         if (before && !before.opened && after.opened) {
           if (after.type === 'P') revealed = 'P';
           else if (after.type === 'A' && revealed !== 'P') revealed = 'A';
-          else if (after.type === 'GEM' && !revealed) revealed = 'GEM';
+          else if ((after.type === 'TREASURE' || after.type === 'GOLDCUP') && !revealed) revealed = after.type;
           // "칸을 열자마자 바로 다음으로 넘어가 뭘 열었는지 놓친다"는 피드백 — 이번 라운드에
           // 새로 연 칸을 전부 기록해뒀다가, ROUND_DONE(5초 대기) 화면에서 한눈에 보여준다.
           if (next.round !== roundOpenSummaryRound) { roundOpenSummary = []; roundOpenSummaryRound = next.round; }
-          roundOpenSummary.push({ row: r, col: c, type: after.type, gemId: after.gemId || null, gemPiece: after.gemPiece || null });
+          roundOpenSummary.push({ row: r, col: c, type: after.type, treasureId: after.treasureId || null, treasurePiece: after.treasurePiece || null });
         }
       }
     }
     if (revealed === 'P') impactFor('poison');
     else if (revealed === 'A') impactFor('antidote');
-    else if (revealed === 'GEM') impactFor('treasure');
+    else if (revealed === 'TREASURE' || revealed === 'GOLDCUP') impactFor('treasure');
   }
 }
 
@@ -838,7 +838,7 @@ function renderSetupDone(state) {
 
 // 매 라운드 양쪽 다 칸을 다 연 직후에도 SETUP_DONE과 같은 이유로 같은 방식의 완료 안내를 보여준다 —
 // "칸을 열자마자 바로 다음 라운드로 넘어가서 상황 인지가 어렵다"는 피드백. 여기서 한 발 더 나아가,
-// 방금 이번 라운드에 내가 연 칸이 각각 뭐였는지(문장/보석/독/해독제/빈칸)를 5초 동안 직접 보여줘서
+// 방금 이번 라운드에 내가 연 칸이 각각 뭐였는지(왕가의 보물/금술잔/독/해독제/빈칸)를 5초 동안 직접 보여줘서
 // "마지막 선택 후 그게 뭔지 확인할 시간 없이 바로 다음으로 넘어간다"는 문제를 해결한다.
 function renderRoundDone(state) {
   const p = el('section', 'panel center countdownPanel');
@@ -847,12 +847,12 @@ function renderRoundDone(state) {
   if (summary.length) {
     p.appendChild(el('p', 'hint', '이번 라운드에 내가 연 칸:'));
     const row = el('div', 'roundOpenSummaryRow');
-    summary.forEach(({ row: r, col: c, type, gemId, gemPiece }) => {
+    summary.forEach(({ row: r, col: c, type, treasureId, treasurePiece }) => {
       const item = el('div', 'roundOpenSummaryItem');
       const icon = el('div', 'roundOpenSummaryIcon' + (type === 'E' ? '' : ' cellIcon-' + type));
-      icon.innerHTML = cellVisualHTML(type, gemPiece, gemId != null ? gemId : r * 6 + c);
+      icon.innerHTML = cellVisualHTML(type, treasureId, treasurePiece);
       item.appendChild(icon);
-      item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${type === 'E' ? '빈 칸' : CELL_NAME[type]}`));
+      item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${CELL_NAME[type]}`));
       row.appendChild(item);
     });
     p.appendChild(row);
@@ -899,7 +899,10 @@ function renderFlashOverlay(room) {
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
-      grid.appendChild(el('div', 'cell opened ' + room[r][c], cellVisualHTML(room[r][c], 'SOLO', r * 6 + c)));
+      // 철가방 정찰은 타입(cell.type)만 알려주고 어느 보물인지(treasureId)는 안 내려주므로,
+      // 왕가의 보물 칸은 좌표 홀짝으로 왕관/도장 중 하나를 대충 보여준다(장식일 뿐 의미는 없다).
+      const seed = r * 6 + c;
+      grid.appendChild(el('div', 'cell opened ' + room[r][c], cellVisualHTML(room[r][c], seed % 2 === 0 ? 'CROWN' : 'SEAL', 'SOLO')));
     }
   }
   p.appendChild(grid);
@@ -1215,12 +1218,12 @@ function statGrid(p, config) {
   g.appendChild(statBox('poison', p.poison, '독 (종료 시 감점 — 2차 독이 더 아픔)', p.poison >= 2));
   g.appendChild(statBox('antidote', p.antidote, '해독제'));
   g.appendChild(statBox('score', p.score, '점수'));
-  if (p.gemsFound != null) {
-    const total = (config && config.GEM_PIECES_TOTAL) || p.gemsTotal || '?';
-    g.appendChild(statBox('gem', `${p.gemsFound} / ${total}`, '보석 조각'));
+  if (p.treasureFound != null) {
+    const total = (config && config.TREASURE_CELLS_TOTAL) || '?';
+    g.appendChild(statBox('treasure', `${p.treasureFound} / ${total}`, '왕가의 보물'));
   }
-  if (p.gemsCompleted != null) {
-    g.appendChild(statBox('gemSet', p.gemsCompleted, '완성한 보석'));
+  if (p.goldcupFound != null) {
+    g.appendChild(statBox('goldcup', p.goldcupFound, '금술잔'));
   }
   return g;
 }
@@ -1260,13 +1263,14 @@ function buildRoomGrid(room, opts) {
         cell.innerHTML = '<span class="lockedMark">🔒</span>';
       } else if (data.opened) {
         cell.classList.add('opened', data.type);
-        // 빈 칸(E)도 이제 금잔/은잔 이미지로 "이미 열어봤음"을 보여준다(칸 좌표로 변형 고정).
-        cell.innerHTML = cellVisualHTML(data.type, data.gemPiece, data.gemId != null ? data.gemId : r * 6 + c);
+        cell.innerHTML = cellVisualHTML(data.type, data.treasureId, data.treasurePiece);
       } else if (opts.peekCell && opts.peekCell.row === r && opts.peekCell.col === c) {
         // 한 칸 정찰 보상: 실제로 연 것은 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
+        // PEEK_CELL은 type만 알려주고 어느 보물인지는 안 알려주므로, 왕가의 보물이면 좌표
+        // 홀짝으로 왕관/도장 중 하나를 대충 보여준다(장식일 뿐 의미는 없다).
         cell.classList.add('peekLit', opts.peekCell.type);
-        cell.innerHTML = cellVisualHTML(opts.peekCell.type, 'SOLO', r * 6 + c);
+        cell.innerHTML = cellVisualHTML(opts.peekCell.type, (r * 6 + c) % 2 === 0 ? 'CROWN' : 'SEAL', 'SOLO');
       } else {
         cell.textContent = '';
       }
@@ -1314,8 +1318,8 @@ function renderMyRoomPanel(state) {
 
   const right = el('div', 'roomCrestRight');
   appendRewardPanels(right, state);
-  const gemWidget = gemStatusWidget(state);
-  if (gemWidget) right.appendChild(gemWidget);
+  const treasureWidget = treasureStatusWidget(state);
+  if (treasureWidget) right.appendChild(treasureWidget);
   if (right.children.length) split.appendChild(right);
 
   p.appendChild(split);
@@ -1371,8 +1375,8 @@ function renderPickView(state) {
 
   const right = el('div', 'roomCrestRight');
   appendRewardPanels(right, state);
-  const gemWidget = gemStatusWidget(state);
-  if (gemWidget) right.appendChild(gemWidget);
+  const treasureWidget = treasureStatusWidget(state);
+  if (treasureWidget) right.appendChild(treasureWidget);
   if (right.children.length) split.appendChild(right);
 
   mine.appendChild(split);
@@ -1633,6 +1637,48 @@ function renderMinigamePanel(state) {
     } else if (already) {
       box.appendChild(el('div', 'hint', '상대의 결과를 기다리는 중...'));
     }
+  } else if (type === 'RPS') {
+    const HAND_LABEL = { ROCK: '✊ 바위', PAPER: '✋ 보', SCISSORS: '✌️ 가위' };
+    box.appendChild(el('div', 'desc', '가위바위보 — 동시에 냅니다. 비기면 다시 냅니다.'));
+    if (!mg.revealed) {
+      const row = el('div', 'btnRow');
+      ['ROCK', 'PAPER', 'SCISSORS'].forEach((hand) => {
+        const b = el('button', 'action', HAND_LABEL[hand]);
+        b.disabled = !!mg.myPicked;
+        b.onclick = () => socket.emit('minigame:move', { hand });
+        row.appendChild(b);
+      });
+      box.appendChild(row);
+      if (mg.myPicked) box.appendChild(el('div', 'hint', mg.oppPicked ? '결과를 확인하는 중...' : '상대가 내는 중을 기다리는 중...'));
+    } else {
+      const revealRow = el('div', 'diceRevealRow');
+      revealRow.innerHTML = `${HAND_LABEL[mg.revealed.my]}<span class="diceVs">VS</span>${HAND_LABEL[mg.revealed.opp]}`;
+      box.appendChild(revealRow);
+      if (mg.revealed.my === mg.revealed.opp) box.appendChild(el('div', 'hint', `비겼습니다 — 다시 냅니다. (재대결 ${mg.tieRound}/${mg.maxTieReplays})`));
+    }
+  } else if (type === 'ODDEVEN') {
+    box.appendChild(el('div', 'desc', '한 명이 숫자를 숨기고, 상대가 홀수인지 짝수인지 맞힙니다.'));
+    if (mg.role === 'hider') {
+      box.appendChild(el('div', 'desc', mg.waitingForMe ? '숨길 숫자를 하나 고르세요.' : '상대가 맞히는 중입니다...'));
+      const row = el('div', 'btnRow');
+      for (let n = mg.numberMin; n <= mg.numberMax; n++) {
+        const b = el('button', 'action', String(n));
+        b.disabled = !mg.waitingForMe;
+        b.onclick = () => socket.emit('minigame:move', { number: n });
+        row.appendChild(b);
+      }
+      box.appendChild(row);
+    } else {
+      box.appendChild(el('div', 'desc', mg.hiderDone ? '숨긴 숫자가 홀수일지 짝수일지 고르세요.' : '상대가 숫자를 숨기는 중입니다...'));
+      const row = el('div', 'btnRow');
+      [['ODD', '홀수'], ['EVEN', '짝수']].forEach(([pick, label]) => {
+        const b = el('button', 'action', label);
+        b.disabled = !mg.waitingForMe;
+        b.onclick = () => socket.emit('minigame:move', { pick });
+        row.appendChild(b);
+      });
+      box.appendChild(row);
+    }
   }
   // "장고 금지" 타이머 — REFLEX/BOMB은 이미 각자의 실시간 연출(신호/폭탄 퓨즈)이 있으므로 제외하고,
   // 나머지 타입은 전부 mg.deadlineAt을 공통으로 받으므로 한 곳에서 배지 하나로 통일해서 보여준다.
@@ -1723,53 +1769,6 @@ function renderRewardPanel(state) {
 }
 
 // ---------------------------- END ----------------------------
-// 라운드별 요약 표 — 라운드마다 미니게임 승자/받은 보상/그 시점 누적 점수를 보여주고,
-// 점수 선두(앞서가는 쪽)가 라운드별로 어떻게 바뀌었는지("선점")까지 함께 표시한다.
-function buildRoundHistoryPanel(state) {
-  const hist = state.roundHistory || [];
-  if (!hist.length) return null;
-  const panel = el('div', 'panel');
-  panel.appendChild(el('h3', null, '📜 라운드별 요약'));
-  const oppName = state.opp ? state.opp.name : '상대';
-  let leadOwner = null; // 지금까지(이 라운드까지) 앞서고 있는 쪽 — 'me' | 'opp' | null(동점)
-  let leadChanges = 0;
-  let firstLead = null;
-  const rows = hist.map((h) => {
-    const cur = h.myScore === h.oppScore ? null : (h.myScore > h.oppScore ? 'me' : 'opp');
-    let leadBadge = '';
-    if (cur && cur !== leadOwner) {
-      leadChanges += 1;
-      if (!firstLead) firstLead = cur;
-      leadOwner = cur;
-      leadBadge = `<span class="leadBadge ${cur}">${cur === 'me' ? '내가 선두' : `${oppName} 선두`}</span>`;
-    }
-    const winnerLabel = h.winner === 'draw' ? '무승부'
-      : h.winner === 'me' ? `나 (${state.me.name})`
-      : h.winner === 'opp' ? oppName
-      : '-';
-    const rewardLabel = h.rewardName
-      ? `${h.rewardName} <span class="rewardOwnerTag">(${h.rewardOwner === 'me' ? '나' : oppName})</span>`
-      : '-';
-    return `<tr>
-      <td>${h.round}</td>
-      <td>${h.minigameName || '-'}</td>
-      <td>${winnerLabel}</td>
-      <td>${rewardLabel}</td>
-      <td class="scoreCell">${h.myScore} : ${h.oppScore}</td>
-      <td>${leadBadge}</td>
-    </tr>`;
-  }).join('');
-  const table = el('table', 'roundHistoryTable', `
-    <thead><tr><th>R</th><th>미니게임</th><th>승자</th><th>보상</th><th>점수(나:상대)</th><th>선점</th></tr></thead>
-    <tbody>${rows}</tbody>
-  `);
-  panel.appendChild(table);
-  panel.appendChild(el('p', 'hint', leadChanges > 0
-    ? `경기 중 선두가 총 ${leadChanges}번 바뀌었습니다 (처음 앞서간 쪽: ${firstLead === 'me' ? '나' : oppName}).`
-    : '경기 내내 선두가 한 번도 바뀌지 않았습니다.'));
-  return panel;
-}
-
 function renderEnd(state) {
   const cls = state.winner === 'me' ? 'win' : state.winner === 'opp' ? 'lose' : 'draw';
   const title = state.winner === 'me' ? '👑 왕위를 차지했습니다' : state.winner === 'opp' ? '⚰️ 왕위를 넘겨주었습니다' : '무승부 — 두 왕자의 점수가 같습니다';
@@ -1778,9 +1777,6 @@ function renderEnd(state) {
   banner.appendChild(el('h2', null, title));
   banner.appendChild(el('p', null, state.endReason || ''));
   p.appendChild(banner);
-
-  const historyPanel = buildRoundHistoryPanel(state);
-  if (historyPanel) p.appendChild(historyPanel);
 
   const cols = el('div', 'cols');
   const mine = el('div', 'col');
@@ -1824,7 +1820,7 @@ function buildRevealGrid(room) {
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
-      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.gemPiece, data.gemId != null ? data.gemId : r * 6 + c));
+      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.treasureId, data.treasurePiece));
       grid.appendChild(cell);
     }
   }
