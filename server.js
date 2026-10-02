@@ -260,6 +260,9 @@ function freshMatch() {
     streak: { winnerId: null, count: 0 }, // 미니게임 연승 스트릭 — 무승부나 승자가 바뀌면 끊긴다
     rematchReady: {},
     log: [], winner: null, endReason: null,
+    // 라운드가 끝날 때마다(advanceAfterRoundAction) 한 줄씩 쌓는 요약 기록 — 게임 종료 화면에서
+    // "라운드별로 누가 뭘 먹었는지" 표로 보여주기 위한 용도. recordRoundHistory() 참고.
+    roundHistory: [],
     // 4대 분리 모드(/game/A, /pick/A, /game/B, /pick/B로 접속) 여부 — 이 모드일 때만 처소 열기
     // 결과가 상대에게도 실시간 공개된다. 기존 방식(주소 하나로 2명이 접속)은 이 값이 계속 false로
     // 남아 있어 히든정보 규칙이 그대로 유지된다.
@@ -511,10 +514,9 @@ function armBankTimer(mg) {
 // 다음으로 진행되게 한다(그래야 한쪽이 고르지 않아도 상대가 계속 묶여 있지 않는다). 철가방
 // 정찰(FLASH_ALL)을 고르고도 아직 터뜨리지 않은 상태라면, doAction()이 칸 열기 자체를 막고
 // 있으므로 그것만은 예외적으로 대신 터뜨려준다(안 그러면 그 라운드 내내 아예 못 열게 됨).
-// [2026-10-01] "둘 다 칸 열기를 마쳐도, 문장 퍼즐 시간이 남았으면 화면이 안 바뀌었으면 해" —
-// 이제 이 타이머가 유일하게 ROUND_ACTION을 끝내는 지점이다(checkRoundActionDone()은 더 이상
-// 둘 다 마쳤다고 먼저 다음 단계로 넘기지 않음). 그래서 매 라운드는 둘 다 칸을 금방 다 열어도
-// 항상 이 타이머(= 문장 퍼즐 타이머와 공유하는 시각)가 다 될 때까지 유지된다.
+// [2026-10-02] "둘 다 술잔을 고르면 바로바로 넘어가게 해달라"는 피드백으로, 이제 둘 다 미리
+// 다 열어버리면 checkRoundActionDone()이 이 타이머를 기다리지 않고 먼저 다음 단계로 넘긴다 —
+// 이 타이머는 "시간 안에 다 못 고른 쪽이 있을 때"의 안전망으로만 남는다.
 function armActionTimer() {
   const roundAtArm = match.round;
   match.actionDeadlineAt = Date.now() + CONFIG.ROUND_ACTION_TIMER_MS;
@@ -1105,18 +1107,44 @@ function handleRewardUse(id, payload) {
 
 // ------------------------------ 라운드 진행/종료 -----------------------------
 // 처소 열기는 두 사람이 각자 동시에 진행하므로, 한 명이 칸을 열 때마다 이 함수로 상태를 갱신한다.
-// [2026-10-01] "둘 다 칸 열기를 마쳐도 문장 퍼즐 시간이 남았으면 화면이 안 바뀌었으면 해" 피드백
-// 으로, 더 이상 여기서 "둘 다 마쳤으니 바로 다음 단계로" 넘기지 않는다 — 다음 단계로의 전환은
-// armActionTimer()의 타이머가 끝나는 시점(advanceAfterRoundAction())에서만 일어난다. 그래서 이제
-// 매 라운드는 둘 다 금방 다 열어도 본행동 타이머(=문장 퍼즐 타이머)가 끝날 때까지 항상 유지된다.
+// [2026-10-02] "둘 다 술잔을 고르면 바로바로 넘어가게 해달라"는 피드백으로, 둘 다 이번 라운드
+// 몫(OPENS_PER_TURN)을 다 열었거나 포기 처리된 상태라면 본행동 타이머를 기다리지 않고 그 즉시
+// 다음 단계로 넘어간다. armActionTimer()의 타이머는 그대로 남아있다가, 이미 라운드가 넘어간
+// 뒤 뒤늦게 울리면 advanceAfterRoundAction()이 phase 체크에서 조용히 무시한다.
 function checkRoundActionDone() {
   broadcastState();
+  if (match.phase !== 'ROUND_ACTION') return;
+  const allDone = match.order.every((id) => (match.actionOpens[id] || 0) >= CONFIG.OPENS_PER_TURN || match.actionForfeited[id]);
+  if (allDone) advanceAfterRoundAction();
+}
+
+// 이번 라운드가 끝나는 시점(advanceAfterRoundAction 맨 처음)에 한 줄 요약을 기록해둔다 —
+// 종료 화면에서 "라운드별로 누가 뭘 먹었는지" 표로 보여주기 위함. 이 시점엔 이번 라운드
+// 미니게임(match.minigame)과 보상(match.pendingReward)이 아직 다음 라운드로 넘어가기 전이라
+// 그대로 남아있고, 본행동(칸 열기)으로 인한 점수 변화도 이미 반영된 뒤다.
+function recordRoundHistory() {
+  const mg = match.minigame;
+  const pr = match.pendingReward;
+  const [a, b] = match.order;
+  const drawn = !!(mg && mg.result === 'DRAW');
+  const winnerId = (mg && mg.result && !drawn) ? mg.result : null;
+  match.roundHistory.push({
+    round: match.round,
+    minigameType: mg ? mg.type : null,
+    minigameName: mg ? MINIGAME_NAMES[mg.type] : null,
+    winnerId,
+    drawn,
+    rewardType: pr ? pr.type : null,
+    rewardName: pr && pr.type ? REWARD_NAMES[pr.type] : null,
+    scores: { [a]: match.players[a].score, [b]: match.players[b].score },
+  });
 }
 
 // 본행동(ROUND_ACTION) 타이머가 끝나는 시점에만 호출된다 — 이 시점엔 armActionTimer()가 못 다
 // 연 나머지를 전부 "포기(forfeit)" 처리해둔 뒤이므로, 두 사람 다 항상 "마쳤거나 포기함" 상태다.
 function advanceAfterRoundAction() {
   if (match.phase !== 'ROUND_ACTION') return;
+  recordRoundHistory();
   if (match.round >= CONFIG.ROUNDS_TOTAL) return endMatchByScore();
   // 전반 마지막 라운드가 끝나면 다음 라운드로 바로 넘어가지 않고, 처소 확장 + 중반 독 추가
   // 설치(MID_SETUP)를 먼저 거친다.
@@ -1332,6 +1360,18 @@ function buildClientState(forId) {
     config: CONFIG,
     clueCatNames: CLUE_CAT_NAMES,
     playersConnected: match.order.length,
+    // 라운드별 요약(미니게임 승자/보상/그 시점 누적 점수) — 보는 사람 기준(me/opp)으로 바꿔서 내려준다.
+    // 안에 담긴 정보(누가 미니게임을 이겼는지, 무슨 보상을 골랐는지, 점수)는 전부 이미 실시간
+    // 로그/점수판으로 공개돼온 것들이라 숨길 이유가 없다 — 그걸 라운드 단위 표로 정리해줄 뿐이다.
+    roundHistory: match.roundHistory.map((h) => ({
+      round: h.round,
+      minigameName: h.minigameName,
+      winner: h.drawn ? 'draw' : (h.winnerId == null ? null : (h.winnerId === forId ? 'me' : 'opp')),
+      rewardName: h.rewardName,
+      rewardOwner: h.drawn ? null : (h.winnerId == null ? null : (h.winnerId === forId ? 'me' : 'opp')),
+      myScore: h.scores[forId],
+      oppScore: oppId ? h.scores[oppId] : null,
+    })),
   };
 }
 

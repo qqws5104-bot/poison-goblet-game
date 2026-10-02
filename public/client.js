@@ -84,9 +84,11 @@ window.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
   if (!lastState || lastState.phase !== 'ROUND_ACTION') return;
   const r = lastState.myReward;
-  if (!r || r.type !== 'FLASH_ALL' || r.used) return;
-  e.preventDefault();
-  socket.emit('reward:use', {});
+  if (r && r.type === 'FLASH_ALL' && !r.used) {
+    e.preventDefault();
+    socket.emit('reward:use', {});
+    return;
+  }
 });
 
 // 미니게임 키보드 단축키 — 버튼 하나만 누르면 되는 미니게임(폭탄 넘기기/잔 낚아채기)은
@@ -162,63 +164,75 @@ function impactFor(kind) {
 const CELL_NAME = { P: '독', GEM: '보석', A: '해독', E: '' };
 const CELL_EMOJI = { P: '☠️', GEM: '💎', A: '💊', E: '' }; // 로그 등 순수 텍스트 자리에서만 사용
 
-// 독/금/은 술잔은 잔 모양 + 안쪽 표식, 해독제는 병 모양으로 그리는 발광 SVG 아이콘.
+// 독배/해독제/빈 칸은 실사 이미지(public/icons/*.png)를 그대로 보여주는 발광 아이콘.
 // 그리드 칸(및 종료 화면 공개칸)에서 이모지 대신 실제 DOM에 그려 넣는다.
-function cellIconSVG(type) {
-  if (!type || type === 'E') return '';
-  if (type === 'A') {
-    return `<svg viewBox="0 0 32 32" class="cellIcon cellIcon-A" aria-hidden="true">
-      <rect class="cork" x="12.5" y="1.5" width="7" height="4" rx="1.5"/>
-      <rect class="neck" x="13.5" y="5" width="5" height="4.5"/>
-      <path class="bowl" d="M9,10 C9,9 11,9.2 13,9.2 L19,9.2 C21,9.2 23,9 23,10 L24,20.5 C24,25.5 20.2,28.5 16,28.5 C11.8,28.5 8,25.5 8,20.5 Z"/>
-      <path class="leaf" d="M16,13.2 C13.2,14.2 13.2,18.6 16,20 C18.8,18.6 18.8,14.2 16,13.2 Z M16,13.4 L16,19.8"/>
-    </svg>`;
-  }
-  const inner = type === 'P'
-    ? `<circle class="glyph" cx="16" cy="14" r="3.3"/><ellipse class="cut" cx="14.4" cy="13.2" rx="0.8" ry="1"/><ellipse class="cut" cx="17.6" cy="13.2" rx="0.8" ry="1"/><rect class="cut" x="14.7" y="15.5" width="2.6" height="0.9" rx="0.3"/>`
-    : `<path class="glyph" d="M16,10.2 L17.1,13.4 L20.4,14 L17.1,14.6 L16,17.8 L14.9,14.6 L11.6,14 L14.9,13.4 Z"/>`;
-  const drip = type === 'P' ? '<path class="drip" d="M6.4,15 C5.4,17 5.5,18.8 6.6,18.8 C7.7,18.8 7.4,17 6.4,15 Z"/>' : '';
-  return `<svg viewBox="0 0 32 32" class="cellIcon cellIcon-${type}" aria-hidden="true">
-    <ellipse class="rim" cx="16" cy="8" rx="11.6" ry="2.2"/>
-    <path class="bowl" d="M4.4,8.4 L27.6,8.4 L18.2,22 L13.8,22 Z"/>
-    <path class="stem" d="M16,22 L16,26.8"/>
-    <ellipse class="base" cx="16" cy="27.6" rx="6.2" ry="1.6"/>
-    ${drip}
-    ${inner}
+// 절대경로(/icons/..., /gems/...)로 써야 한다 — 이 화면은 /game/A, /pick/B 등 다양한 경로에서
+// 열리므로, 상대경로를 쓰면 현재 주소 기준으로 잘못 풀려 이미지가 깨진다.
+const ITEM_IMAGES = {
+  P: { src: '/icons/poison.png', w: 438, h: 512 }, // 독배 — 해골이 떠오른 붉은 잔
+  A: { src: '/icons/potion.png', w: 418, h: 483 }, // 해독제 — 초록 약병
+};
+// 빈 칸(E)도 "이미 열어본 술잔"답게 금잔/은잔 두 가지를 칸 좌표로 번갈아 보여준다(한쪽으로만
+// 쏠리지 않도록 단순 홀짝 대신 좌표를 섞어서 분산). 빈 칸은 아무 정보가 없는 칸이라 어느 잔을
+// 보여주는지는 순수 장식일 뿐 의미는 없다.
+const EMPTY_CUP_IMAGES = [
+  { src: '/icons/gold_cup.png', w: 409, h: 498 },
+  { src: '/icons/silver_cup.png', w: 379, h: 475 },
+];
+function emptyCupVariant(seed) {
+  const n = Number(seed) || 0;
+  return EMPTY_CUP_IMAGES[Math.abs(n * 2654435761 >> 0) % EMPTY_CUP_IMAGES.length];
+}
+function imageIconSVG(type, src, w, h) {
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-${type}" aria-hidden="true">
+    <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
 }
-// 보석은 실사 보석 이미지(public/gems/*.png)를 쓴다. 옛 "가문의 문장" 조각 방식과 같은 원리로,
+function cellIconSVG(type, seed) {
+  if (!type) return '';
+  if (type === 'E') {
+    const { src, w, h } = emptyCupVariant(seed);
+    return imageIconSVG('E', src, w, h);
+  }
+  if (ITEM_IMAGES[type]) {
+    const { src, w, h } = ITEM_IMAGES[type];
+    return imageIconSVG(type, src, w, h);
+  }
+  return '';
+}
+// 보석은 실사 이미지(public/gems/*.png)를 쓴다. 옛 "가문의 문장" 조각 방식과 같은 원리로,
 // 칸을 열면 보석 전체가 아니라 그 칸에 해당하는 "한 조각/반쪽"만 보이게 한다 — 큰 이미지 하나를
 // 같은 좌표계(viewBox)로 잘라서 보여주는 방식이라, 인접한 칸들을 나란히 열면 자연스럽게 하나의
-// 보석 그림처럼 이어져 보인다. 조각이 없는(size 1) 보석은 원형 보석 이미지를 통째로 보여준다.
-// 절대경로(/gems/...)로 써야 한다 — 이 화면은 /game/A, /pick/B 등 다양한 경로에서 열리므로,
-// 상대경로를 쓰면 현재 주소 기준으로 잘못 풀려(예: /game/gems/...) 이미지가 깨진다.
+// 그림처럼 이어져 보인다. 1조각 보석(SOLO)은 왕관/인장 중 하나를 통째로 보여주고(같은 보석이면
+// 항상 같은 쪽으로 — gemId로 고정), 2조각 보석(TOP/BOTTOM)은 검 이미지를 위/아래로 나눠 쓴다.
 const GEM_IMAGES = {
-  SOLO: { src: '/gems/gem_size1.png', w: 390, h: 388 }, // 동그란 보석 — 조각 없이 통째로
-  PAIR: { src: '/gems/gem_size2.png', w: 258, h: 696 }, // 세로로 긴 보석 — 위/아래로 나눠 쓴다
+  CROWN: { src: '/gems/crown.png', w: 475, h: 551 }, // 1조각 보석 — 왕관
+  SEAL: { src: '/gems/seal.png', w: 438, h: 547 },   // 1조각 보석 — 인장
+  SWORD: { src: '/gems/sword.png', w: 512, h: 839 }, // 2조각 보석 — 검(위: 손잡이, 아래: 칼날)
 };
 // preserveAspectRatio="none"으로 뷰박스를 칸(정사각형) 전체에 강제로 늘려 채운다 — 기본값인
-// "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 PAIR 조각) 여백이 생겨서
+// "meet"을 쓰면 뷰박스와 칸의 가로세로 비율이 달라(특히 세로로 긴 검 조각) 여백이 생겨서
 // 인접한 칸의 조각과 딱 맞붙지 않고 틈이 남는다. "none"으로 늘리면 같은 원본에서 나온 두 조각이
 // 항상 같은 비율로 늘어나므로(가로/세로 늘어난 비율이 조각마다 동일) 약간의 비율 왜곡은 있어도
 // 이어붙는 경계선은 항상 정확히 맞아떨어진다 — 이어져 보이는 것이 실제 비율 유지보다 우선.
-function gemFragmentSVG(gemPiece) {
+function gemFragmentSVG(gemPiece, gemId) {
   if (!gemPiece || gemPiece === 'SOLO') {
-    const { src, w, h } = GEM_IMAGES.SOLO;
+    const variant = (Math.abs(Number(gemId) || 0) % 2 === 0) ? GEM_IMAGES.CROWN : GEM_IMAGES.SEAL;
+    const { src, w, h } = variant;
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
       <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
     </svg>`;
   }
-  const { src, w, h } = GEM_IMAGES.PAIR;
+  const { src, w, h } = GEM_IMAGES.SWORD;
   const half = h / 2;
   const vb = gemPiece === 'TOP' ? `0 0 ${w} ${half}` : `0 ${half} ${w} ${half}`;
   return `<svg viewBox="${vb}" preserveAspectRatio="none" class="cellIcon cellIcon-GEM" aria-hidden="true">
     <image href="${src}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none"/>
   </svg>`;
 }
-function cellVisualHTML(type, gemPiece) {
-  if (type === 'GEM') return gemFragmentSVG(gemPiece);
-  return cellIconSVG(type);
+function cellVisualHTML(type, gemPiece, gemId) {
+  if (type === 'GEM') return gemFragmentSVG(gemPiece, gemId);
+  return cellIconSVG(type, gemId);
 }
 // 처소 패널 안에 "보석 발견 현황"을 보여주는 위젯. 조립/드래그 없이 순수 읽기 전용 —
 // 조각을 몇 개 찾았는지, 완성됐는지만 배지로 보여준다. 하나도 못 찾은 보석은 존재 자체가
@@ -833,10 +847,10 @@ function renderRoundDone(state) {
   if (summary.length) {
     p.appendChild(el('p', 'hint', '이번 라운드에 내가 연 칸:'));
     const row = el('div', 'roundOpenSummaryRow');
-    summary.forEach(({ row: r, col: c, type, gemPiece }) => {
+    summary.forEach(({ row: r, col: c, type, gemId, gemPiece }) => {
       const item = el('div', 'roundOpenSummaryItem');
       const icon = el('div', 'roundOpenSummaryIcon' + (type === 'E' ? '' : ' cellIcon-' + type));
-      icon.innerHTML = type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(type, gemPiece);
+      icon.innerHTML = cellVisualHTML(type, gemPiece, gemId != null ? gemId : r * 6 + c);
       item.appendChild(icon);
       item.appendChild(el('div', 'roundOpenSummaryLabel', `(${r + 1},${c + 1}) ${type === 'E' ? '빈 칸' : CELL_NAME[type]}`));
       row.appendChild(item);
@@ -885,7 +899,7 @@ function renderFlashOverlay(room) {
   const grid = el('div', 'grid6');
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
-      grid.appendChild(el('div', 'cell opened ' + room[r][c], cellIconSVG(room[r][c])));
+      grid.appendChild(el('div', 'cell opened ' + room[r][c], cellVisualHTML(room[r][c], 'SOLO', r * 6 + c)));
     }
   }
   p.appendChild(grid);
@@ -1246,13 +1260,13 @@ function buildRoomGrid(room, opts) {
         cell.innerHTML = '<span class="lockedMark">🔒</span>';
       } else if (data.opened) {
         cell.classList.add('opened', data.type);
-        // 빈 칸(E)은 아이콘이 없어 안 연 칸과 헷갈릴 수 있으므로, 큰 X로 "이미 열어봤음"을 표시한다.
-        cell.innerHTML = data.type === 'E' ? '<span class="emptyMark">✕</span>' : cellVisualHTML(data.type, data.gemPiece);
+        // 빈 칸(E)도 이제 금잔/은잔 이미지로 "이미 열어봤음"을 보여준다(칸 좌표로 변형 고정).
+        cell.innerHTML = cellVisualHTML(data.type, data.gemPiece, data.gemId != null ? data.gemId : r * 6 + c);
       } else if (opts.peekCell && opts.peekCell.row === r && opts.peekCell.col === c) {
         // 한 칸 정찰 보상: 실제로 연 것은 아니지만, 잠깐 불이 들어와 정체가 보였다가 저절로
         // 꺼지는 느낌을 준다 — CSS 애니메이션이 밝게 켜진 상태에서 원래의 어두운 모습으로 페이드된다.
         cell.classList.add('peekLit', opts.peekCell.type);
-        cell.innerHTML = opts.peekCell.type === 'E' ? '<span class="emptyMark">✕</span>' : cellIconSVG(opts.peekCell.type);
+        cell.innerHTML = cellVisualHTML(opts.peekCell.type, 'SOLO', r * 6 + c);
       } else {
         cell.textContent = '';
       }
@@ -1709,6 +1723,53 @@ function renderRewardPanel(state) {
 }
 
 // ---------------------------- END ----------------------------
+// 라운드별 요약 표 — 라운드마다 미니게임 승자/받은 보상/그 시점 누적 점수를 보여주고,
+// 점수 선두(앞서가는 쪽)가 라운드별로 어떻게 바뀌었는지("선점")까지 함께 표시한다.
+function buildRoundHistoryPanel(state) {
+  const hist = state.roundHistory || [];
+  if (!hist.length) return null;
+  const panel = el('div', 'panel');
+  panel.appendChild(el('h3', null, '📜 라운드별 요약'));
+  const oppName = state.opp ? state.opp.name : '상대';
+  let leadOwner = null; // 지금까지(이 라운드까지) 앞서고 있는 쪽 — 'me' | 'opp' | null(동점)
+  let leadChanges = 0;
+  let firstLead = null;
+  const rows = hist.map((h) => {
+    const cur = h.myScore === h.oppScore ? null : (h.myScore > h.oppScore ? 'me' : 'opp');
+    let leadBadge = '';
+    if (cur && cur !== leadOwner) {
+      leadChanges += 1;
+      if (!firstLead) firstLead = cur;
+      leadOwner = cur;
+      leadBadge = `<span class="leadBadge ${cur}">${cur === 'me' ? '내가 선두' : `${oppName} 선두`}</span>`;
+    }
+    const winnerLabel = h.winner === 'draw' ? '무승부'
+      : h.winner === 'me' ? `나 (${state.me.name})`
+      : h.winner === 'opp' ? oppName
+      : '-';
+    const rewardLabel = h.rewardName
+      ? `${h.rewardName} <span class="rewardOwnerTag">(${h.rewardOwner === 'me' ? '나' : oppName})</span>`
+      : '-';
+    return `<tr>
+      <td>${h.round}</td>
+      <td>${h.minigameName || '-'}</td>
+      <td>${winnerLabel}</td>
+      <td>${rewardLabel}</td>
+      <td class="scoreCell">${h.myScore} : ${h.oppScore}</td>
+      <td>${leadBadge}</td>
+    </tr>`;
+  }).join('');
+  const table = el('table', 'roundHistoryTable', `
+    <thead><tr><th>R</th><th>미니게임</th><th>승자</th><th>보상</th><th>점수(나:상대)</th><th>선점</th></tr></thead>
+    <tbody>${rows}</tbody>
+  `);
+  panel.appendChild(table);
+  panel.appendChild(el('p', 'hint', leadChanges > 0
+    ? `경기 중 선두가 총 ${leadChanges}번 바뀌었습니다 (처음 앞서간 쪽: ${firstLead === 'me' ? '나' : oppName}).`
+    : '경기 내내 선두가 한 번도 바뀌지 않았습니다.'));
+  return panel;
+}
+
 function renderEnd(state) {
   const cls = state.winner === 'me' ? 'win' : state.winner === 'opp' ? 'lose' : 'draw';
   const title = state.winner === 'me' ? '👑 왕위를 차지했습니다' : state.winner === 'opp' ? '⚰️ 왕위를 넘겨주었습니다' : '무승부 — 두 왕자의 점수가 같습니다';
@@ -1717,6 +1778,9 @@ function renderEnd(state) {
   banner.appendChild(el('h2', null, title));
   banner.appendChild(el('p', null, state.endReason || ''));
   p.appendChild(banner);
+
+  const historyPanel = buildRoundHistoryPanel(state);
+  if (historyPanel) p.appendChild(historyPanel);
 
   const cols = el('div', 'cols');
   const mine = el('div', 'col');
@@ -1760,7 +1824,7 @@ function buildRevealGrid(room) {
   for (let r = 0; r < room.length; r++) {
     for (let c = 0; c < room[r].length; c++) {
       const data = room[r][c];
-      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.gemPiece));
+      const cell = el('div', 'cell opened ' + data.type, cellVisualHTML(data.type, data.gemPiece, data.gemId != null ? data.gemId : r * 6 + c));
       grid.appendChild(cell);
     }
   }

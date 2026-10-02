@@ -465,6 +465,15 @@ button.ghost:hover { color: var(--gold); border-color: var(--gold); }
 .endBanner.lose h2 { color: var(--crimson-bright); }
 .endBanner.draw h2 { color: var(--muted); }
 
+.roundHistoryTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 6px; }
+.roundHistoryTable th, .roundHistoryTable td { padding: 7px 8px; text-align: center; border-bottom: 1px solid rgba(240,201,117,0.14); }
+.roundHistoryTable th { color: var(--gold); font-weight: 600; font-size: 12px; }
+.roundHistoryTable td.scoreCell { font-variant-numeric: tabular-nums; font-weight: 600; }
+.roundHistoryTable .rewardOwnerTag { color: var(--muted); font-size: 11px; }
+.leadBadge { display:inline-block; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.leadBadge.me { background: rgba(240,201,117,0.18); color: var(--gold); }
+.leadBadge.opp { background: rgba(209,66,90,0.18); color: var(--crimson-bright); }
+
 .historyPanel { min-height: 160px; }
 .historyList { display:flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
 .historyItem {
